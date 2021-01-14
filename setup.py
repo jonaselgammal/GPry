@@ -13,7 +13,7 @@ setup(
     author='Jonas El Gammal',
     author_email='jonas.el.gammal@rwth-aachen.de',
     license='MIT',
-    keywords='TTK GaussianProcesses',
+    keywords='Gaussian Processes',
     url='...',
     project_urls={
         'Documentation':
