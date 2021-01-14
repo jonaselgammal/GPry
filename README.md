@@ -1,11 +1,15 @@
 # GPry
 ### A Package for Bayesian inference of expensive likelihoods with Gaussian Processes.
 
+## This package is still under heavy development and not ready for use...
+
+[Documentation on Read the Docs](https://gpry.readthedocs.io/en/latest/)
+
 This package is designed to be used with any kind of Likelihood/Posterior but the main
 focus is on cosmological likelihoods for now.
 
 GPry was developed as a result of my master thesis and and can be seen as an alternative to MCMC.
-It is targeted at a specific class of likelihood functions which frequently appear in cosmology 
+It is targeted at a specific class of likelihood functions which frequently appear in cosmology
 (but also in other scientific fields). The requirements that have to be fulfilled in order for this
 algorithm to be efficient and give correct results are as follows:
 
