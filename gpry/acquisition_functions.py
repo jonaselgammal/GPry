@@ -2,7 +2,7 @@
 This module contains the implementation of an "Aquisition Function" class with a structure similar to the one
 provided by the Kernels module of sklearn. Additionally to some internally provided base AF's
 this module also overwrites arithmetic operators for AF's in order to enable the construction of composite
-AF's. 
+AF's.
 
 .. note::
 
@@ -18,7 +18,7 @@ AF's.
 
 Base Class
 ==========
-All acquisition functions are derived from this class. If you want to define your own 
+All acquisition functions are derived from this class. If you want to define your own
 acquisition functions it needs to inherit from this class. A tutorial on how to define such
 a class is given in :class:`.Acquisition_Function`
 
@@ -50,7 +50,7 @@ If you want to define your own acquisition function please refer to :class:`acqu
 Additional things
 =================
 
-The things listed here are tools and similar things which in normal operation should not be needed. 
+The things listed here are tools and similar things which in normal operation should not be needed.
 
 .. autosummary::
      :toctree: stubs
@@ -102,14 +102,14 @@ class Acquisition_Function(metaclass=ABCMeta):
                 ...
                 self.fixed=fixed
                 self.hasgradient = True/False
-                
+
             @property
             def hyperparameter_param_1(self):
                 # Returns the type of hyperparameter and whether it is
                 # fixed or not. This method needs to exist for every hyper-
                 # parameter.
                 return Hyperparameter(
-                    "param_1", "numeric", fixed=self.fixed) 
+                    "param_1", "numeric", fixed=self.fixed)
 
             def __call__(self, X, gp, eval_gradient=False):
                 # * 'X': The value(s) at which the acquisition function is
@@ -122,8 +122,8 @@ class Acquisition_Function(metaclass=ABCMeta):
                 # and optionally their gradient(s)
 
     Once the Acquisition function is defined in this way it can be used with the
-    same operators as the inbuilt acquisition functions. 
-    
+    same operators as the inbuilt acquisition functions.
+
      .. note::
 
         If one of the
@@ -234,7 +234,7 @@ class Acquisition_Function(metaclass=ABCMeta):
         cloned = clone(self)
         cloned.theta = theta
         return cloned
-    
+
     def check_X(self, X):
         """Internal method to check the dimensionality of any input X
         provided to an AF when called. Checks the correct type and turns X into
@@ -325,14 +325,14 @@ class Acquisition_Function(metaclass=ABCMeta):
                              " Should be %d; given are %d"
                              % (i, len(theta)))
         self.set_params(**params)
-    
+
     @property
     def hasgradient(self):
         """Specifies whether a certain acquisition function can return
         gradients or not.
         """
         return self._hasgradient
-    
+
     @hasgradient.setter
     def hasgradient(self, hasgradient):
         if isinstance(hasgradient, bool):
@@ -417,7 +417,7 @@ class ConstantAcqFunc(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -478,7 +478,7 @@ class Mu(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -547,7 +547,7 @@ class Exponential_mu(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -611,7 +611,7 @@ class Std(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -679,7 +679,7 @@ class Exponential_std(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -751,7 +751,7 @@ class Expected_improvement(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -780,9 +780,9 @@ class Expected_improvement(Acquisition_Function):
 
             else:
                 mu, std = gp.predict(X, return_std=True)
-            
+
             y_opt = np.max(gp._y_train_)
-    
+
         values = np.zeros_like(mu)
         mask = std > 0
         improve = mu[mask] - y_opt - self.xi
@@ -831,8 +831,8 @@ class Log_exp(Acquisition_Function):
 
     .. note::
         :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the GP regressor
-        which follows the **log**-probability distribution. 
-    
+        which follows the **log**-probability distribution.
+
     Parameters
     ----------
     zeta : float, default=1
@@ -844,9 +844,9 @@ class Log_exp(Acquisition_Function):
         .. math::
 
             \zeta = \exp(-N_0/N)
-        
+
         where :math:`N_0\geq 0` is a "decay constant" and :math:`N` the number of training points
-        in the GP. 
+        in the GP.
 
     sigma_n : float, default=None
         The (constant) noise level of the data. If set to ``None`` the square-root of alpha of the
@@ -878,7 +878,7 @@ class Log_exp(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.
@@ -909,10 +909,9 @@ class Log_exp(Acquisition_Function):
                 mu, std = gp.predict(X, return_std=True)
 
         if self.sigma_n is None:
-            sigma_n = gp.alpha
+            sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                sigma_n = np.mean(sigma_n)
-            sigma_n = np.sqrt(sigma_n)
+                sigma_n = np.mean(noise_level)
         else:
             sigma_n = self.sigma_n
 
@@ -922,7 +921,7 @@ class Log_exp(Acquisition_Function):
         values = np.zeros_like(std)
         values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
         values[~mask] = - np.inf
-        if eval_gradient: 
+        if eval_gradient:
             if np.array(std_grad).ndim > 1:
                 grad = np.zeros_like(std)
                 grad[mask] = np.array(std_grad)[:, mask]/(std[mask]-sigma_n) + 2*zeta*np.array(mu_grad)[:, mask]
@@ -949,7 +948,7 @@ def is_acquisition_function(acq_func):
     ----------
     acq_func: Any
         The object which shall be examined
-    
+
     Returns
     -------
     is_acquisition_function: bool
@@ -966,7 +965,7 @@ class Hyperparameter(namedtuple('Hyperparameter',
      .. note::
 
         The current code does not support optimization of any hyperparameters of the acquisition
-        functions. This might be added in the future (which is why the ``fixed`` parameter exists). 
+        functions. This might be added in the future (which is why the ``fixed`` parameter exists).
 
     Attributes
     ----------
@@ -1008,7 +1007,7 @@ class Hyperparameter(namedtuple('Hyperparameter',
                 self.value_type == other.value_type and
                 self.n_elements == other.n_elements and
                 self.fixed == other.fixed)
-    
+
     # DONE
 
 class Acquisition_Function_Operator(Acquisition_Function):
@@ -1139,7 +1138,7 @@ class Exponentiation(Acquisition_Function):
     .. warning::
         An AF can only be exponentiated with a number and not
         with another AF::
-            
+
             new_af = old_af ** number
 
     """
@@ -1215,7 +1214,7 @@ class Exponentiation(Acquisition_Function):
         ----------
         X : array-like of shape (n_samples_X, n_features) or list of object
             X-Value at which the Acquisition function shall be evaluated
-        
+
         gp : SKLearn GaussianProcessRegressor
             The GPRegressor (surrogate model) from which to evaluate
             GP(X) and optionally X_train and Y_train.

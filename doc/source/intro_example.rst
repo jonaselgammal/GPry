@@ -5,8 +5,8 @@ Introductory example to using GPry
 The Function
 ============
 
-Let's start with a very simple example where we want to characterize a 2d-Gaussian Likelihood
-with the PDF
+Let's start with a very simple example where we want to characterize a 2d-Gaussian Posterior
+with the PDF and a uniform prior square in :math:`[-10, 10]`
 
 .. math::
     y(x) \sim \mathcal{N}(x|\boldsymbol{\mu},\Sigma)
@@ -14,8 +14,8 @@ with the PDF
 with :math:`\boldsymbol{\mu}=\pmatrix{3\\ 2},\ \Sigma=\pmatrix{0.5 & 0.4 \\ 0.4 & 1.5}`.
 
 Since `Cobaya` works with log-likelihoods we work with this.
-Furthermore we make it negative to make all values positive
-(easier for plotting).
+Furthermore there are some numerical reasons why this is more
+convenient
 
 The code to build this function looks like this::
 
@@ -25,9 +25,10 @@ The code to build this function looks like this::
     rv = multivariate_normal([3,2],[[0.5, 0.4],[0.4, 1.5]])
 
     def f(x):
-        return -1 * np.log(rv.pdf(X))
+        return np.log(rv.pdf(X))
 
-Let's see for reference how our function looks like::
+Let's see for reference how our function looks like (We plot the negative
+log-posterior because of the log-scale)::
 
     a = np.linspace(-10., 10., 200)
     b = np.linspace(-10., 10., 200)
@@ -37,7 +38,7 @@ Let's see for reference how our function looks like::
     x = np.stack((A,B),axis=-1)
     xdim = x.shape
     x = x.reshape(-1,2)
-    Y = f(x)
+    Y = -1 * f(x)
     Y = Y.reshape(xdim[:-1])
 
     import matplotlib.pyplot as plt
@@ -64,45 +65,49 @@ The choices we need to make for this are:
     * Which acquisition function should we use?
     * Which training parameters should we choose for training?
 
-In our case we will go with a very simple model::
+In our case we will go with a very simple model consisting of an
+anisotropic RBF kernel multiplied with a Constant kernel and
+the Log-exp acquisition function with standard parameters 
+(:math:`\zeta=1`)::
 
     from gpry.gpr import GaussianProcessRegressor
     from gpry.kernels import RBF, ConstantKernel as C
     from gpry.gp_acquisition import GP_Acquisition
     from gpry.acquisition_functions import Expected_improvement
 
-    kernel = C(1.0, (1e-3, 1e3)) * RBF(1.0, (1e-5, 1e5))
-    gp = GaussianProcessRegressor(kernel=kernel,
-                             n_restarts_optimizer=30)
-    af = Expected_improvement(xi=1e-5)
+	kernel = C(1.0, (1e-3, 1e3)) * RBF([1.0]*2, [[1e-5, 1e5]*2])
+	gp = GaussianProcessRegressor(kernel=kernel,
+		                     n_restarts_optimizer=20)
+	af = Log_exp()
 
 In case you wonder what these mean please refer to the :mod:`kernels`
 and :mod:`acquisition_functions` modules.
 
 Then it is time for the actual GP Acquisition. For this we need to
-build our instance of the :class:`gp_acquisition.GP_Acquisition` class::
+build our instance of the :class:`gp_acquisition.GP_Acquisition` class.
+In our case we need some prior bounds (for our uniform prior)::
 
     bnds = np.array([[-10.,10.], [-10.,10.]])
     acquire = GP_Acquisition(bnds,
-                 surrogate_model=gp,
-                 acq_func=af,
-                 acq_optimizer="sampling",
-                 optimize_direction="maximize",
-                 n_restarts_optimizer=20)
+    			      acq_func=af,
+                             n_restarts_optimizer=20)
+
+Preprocessing the data for the GP regressor and the acquisition 
+module will be discussed in the advanced example
 
 .. note::
-    The training parameters of the model (like ``n_restarts_optimizer``)
-    are chosen somewhat arbitrarily. Maybe there is a chance to automatically
-    select this in the future.
+    In our example we set ``n_restarts_optimizer`` to quite a high value.
+    In most applications it wouldn't have to be set this high, thus saving
+    a lot of computation time.
 
 Training 
 ========
 
-We start by random-generating 5 initial points from which to start
+We start by random-generating 3 initial points from which to start
 our exploration of the function::
 
-    init_1 = np.random.uniform(bnds[0,0], bnds[0,1], 5)
-    init_2 = np.random.uniform(bnds[1,0], bnds[1,1], 5)
+    init_1 = np.random.uniform(bnds[0,0], bnds[0,1], 3)
+    init_2 = np.random.uniform(bnds[1,0], bnds[1,1], 3)
 
 
     init_X = np.stack((init_1, init_2), axis=1)
@@ -118,8 +123,8 @@ Now it is time to train our model. We will do this manually with
 a loop::
 
     n_points = 2
-    for _ in range(20):
-        new_X, new_func = acquire.multi_optimization(n_points=n_points)
+    for _ in range(5):
+        new_X, y_lies, acq_vals = acquire.multi_optimization(n_points=n_points)
         new_y = f(new_X)
         acquire.surrogate_model.append_to_data(new_X, new_y)
 
@@ -127,7 +132,7 @@ Let us look at this step by step:
 
     * First we specify how many points shall be
       acquired per step (here it's 2)
-    * We want to do 20 acquisition runs (therefore the ``range(20)``)
+    * We want to do 5 acquisition runs (therefore the ``range(5)``)
     * The :meth:`acquire.multi_optimization` method optimizes the 
       acquisition function and returns the 2 points to query ``new_X``
       as well as the "fake" values of the surrogate model at these points.
@@ -135,14 +140,15 @@ Let us look at this step by step:
     * These new values are appended to the training points of the model
       nested inside the :class:`gp_acquisition.GP_Acquisition` object.
 
-Let us now see how the model has performed by plotting the GP prediction::
+Let us now see how the model has performed by plotting the GP prediction
+(again we plot the negative prediction because of the log-scale)::
 
     # Getting the prediction
     gp = acquire.surrogate_model
     x_gp = gp.X_train_[:,0]
     y_gp = gp.X_train_[:,1]
     y_fit, std_fit = gp.predict(x, return_std=True)
-    y_fit = y_fit.reshape(xdim[:-1])
+    y_fit = -1 * y_fit.reshape(xdim[:-1])
 
     # Plot surrogate
     fig = plt.figure()
@@ -181,11 +187,11 @@ Let us now compare triangle plots generated by Cobaya with
 ******************
 
 Since the true function (and thus also the surrogate model) are defined
-on the **negative** log-likelihood we need to first take the negative of
-the function. Everything else is basically just copied from the Cobaya examples::
+on the log-likelihood we can just go ahead and define a function which Cobaya
+understands. This means basically just copying from the Cobaya examples::
 
     def true_func(x,y):
-        return -1 * f(np.array([[x,y]]))
+        return f(np.array([[x,y]]))
 
     info = {"likelihood": {"true_func": true_func}}
     info["params"] = {
@@ -196,12 +202,17 @@ the function. Everything else is basically just copied from the Cobaya examples:
 
     updated_info, sampler = run(info)
 
-    gdsamples = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    gdsamples_mcmc = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples, ["x", "y"], filled=True)
+    gdplot.triangle_plot(gdsamples_mcmc, ["x", "y"], filled=True)
 
 .. image:: images/Ground_truth_triangle.png
    :width: 600  
+   
+.. note::
+   
+    We set the precision parameters (specifically ``Rminus1_stop``) to be very
+    accurate. In most examples a value of 0.005-0.01 would be enough.
 
 2. Surrogate model
 ******************
@@ -210,7 +221,7 @@ For comparison we produce a triangle plot of the surrogate model
 (Again with Cobaya)::
 
     def callonmodel(x,y):
-        return -1 * gp.predict(np.array([[x,y]]))
+        return gp.predict(np.array([[x,y]]))
 
     info = {"likelihood": {"gpsurrogate": callonmodel}}
     info["params"] = {
@@ -221,14 +232,23 @@ For comparison we produce a triangle plot of the surrogate model
 
     updated_info, sampler = run(info)
 
-    gdsamples = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples, ["x", "y"], filled=True)
+    gdplot.triangle_plot(gdsamples_gp, ["x", "y"], filled=True)
 
 .. image:: images/Surrogate_triangle.png
    :width: 600
 
-Although the plots look somewhat different we can clearly see that the concept works
-in principle.
+Now we can compare the two to see if our GP finds the same contours as the MCMC::
+
+    gdplot = gdplt.get_subplot_plotter(width_inch=5)
+    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=True,
+        legend_labels=['MCMC', 'GP'])
+
+.. image:: images/Comparison_triangle.png
+   :width: 600
+   
+As you can see the two agree almost perfectly! And we achieved this with just 13
+evaluations of the Posterior distribution!
 
 The code for the example is available at :download:`../../examples/simple_example.py`

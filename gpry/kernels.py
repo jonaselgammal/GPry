@@ -67,7 +67,6 @@ class Kernel(sk_Kernel):
         """
         raise NotImplementedError
 
-
 class RBF(Kernel, sk_RBF):
     def gradient_x(self, x, X_train):
         # diff = (x - X) / length_scale
