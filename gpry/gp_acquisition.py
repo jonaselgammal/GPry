@@ -112,7 +112,6 @@ class GP_Acquisition(object):
     """
 
     def __init__(self, bounds,
-                 surrogate_model=None,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
@@ -178,7 +177,7 @@ class GP_Acquisition(object):
         surrogate_model : SKLearn Gaussian Process Regressor
             The GP Regressor which is used as surrogate model.
 
-        n_points : int, optional(default=1)
+        n_points : int, optional (default=1)
             Number of points returned by the optimize method
             If the value is 1, a single point to evaluate is returned.
 
@@ -232,22 +231,23 @@ class GP_Acquisition(object):
 
         for i in range(n_points):
             # Optimize the acquisition function to get the next proposal point
-            X_opt, acq_val = self.optimize_acq_func(surrogate_model, n_cores=n_cores)
+            X_opt, acq_val = self.optimize_acq_func(surrogate_model,
+                n_cores=n_cores, fit_preprocessor=False)
 
             # Get the "lie" (prediction of the GP at X)
-            y_lie = surrogate_model.predict([X_opt])
+            y_lie = surrogate_model.predict(X_opt)
 
             # Take the mean of errors as supposed measurement error
             if np.iterable(surrogate_model.noise_level):
                 lie_noise_level = np.array([np.mean(surrogate_model.noise_level)])
-                surrogate_model.append_to_data(np.array([X_opt]),
+                surrogate_model.append_to_data(X_opt,
                     y_lie, noise_level=lie_noise_level, fit=False)
             else:
-                surrogate_model.append_to_data(np.array([X_opt]),
+                surrogate_model.append_to_data(X_opt,
                     y_lie, fit=False)
             # Append the points found to the array
-            X_opts[i] = X_opt
-            y_lies[i] = y_lie
+            X_opts[i] = X_opt[0]
+            y_lies[i] = y_lie[0]
             acq_vals[i]  = acq_val
 
         return X_opts, y_lies, acq_vals
@@ -343,6 +343,7 @@ class GP_Acquisition(object):
         optima_X[0], optima_acq_func[0] = \
             self._constrained_optimization(obj_func, x0,
                                             transformed_bounds)
+        optima_acq_func[0] = np.inf
 
         # Additional runs are performed from uniform chosen initial X's
         if self.n_restarts_optimizer > 0:
@@ -350,11 +351,14 @@ class GP_Acquisition(object):
             # to start the optimizer from there
             n_points = 5000
             X_initial = \
-                np.random.uniform(transformed_bounds[:, 0],
-                    transformed_bounds[:, 1],
-                    size=(n_points, len(transformed_bounds[:,0])) )
+                np.random.uniform(self.bounds[:, 0],
+                    self.bounds[:, 1],
+                    size=(n_points, len(self.bounds[:,0])) )
             values = self.acq_func(X_initial, self.surrogate_model_)
             x0 = X_initial[np.argsort(values)[-self.n_restarts_optimizer:]]
+            if self.preprocessing_X is not None:
+                x0 = self.preprocessing_X.transform(x0)
+
             for i, x_i in enumerate(x0):
                 optima_X[i+1], optima_acq_func[i+1] = \
                     self._constrained_optimization(obj_func, x_i,
@@ -369,121 +373,12 @@ class GP_Acquisition(object):
 
             # Get the value of the acquisition function at the optimum value
             acq_val = -1 * optima_acq_func[max_pos]
-
+            X_opt = np.array([X_opt])
             return X_opt, acq_val
 
         X_opt = optima_X[0]
         acq_val = optima_acq_func[0]
-        return X_opt, acq_val
-
-    def kl_divergence(self):
-        """Calculate the Kullback-Liebler (KL) divergence between different
-        steps of the GP acquisition. Here the KL divergence is used as a
-        convergence criterion for the GP. The KL-Divergence assumes a
-        multivariate normal distribution as underlying likelihood. Thus it may
-        perform strangely when applied to some sort of weird likelihood.
-
-        This function approximates the KL divergence by using the training
-        samples weighted by their Likelihood values to get an estimate for the
-        mean and covariance matrix along each dimension. The training data is
-        taken internally from the surrogate model.
-
-        ..note::
-            The KL divergence is the difference between the evaluations of the
-            last call of this function and the current data.
-
-        Returns
-        -------
-
-        KL_divergence : The value of the KL divergence
-        """
-        # Raise exception for all warnings to catch them.
-        with warnings.catch_warnings():
-            warnings.filterwarnings('error')
-
-            # First try to calculate the mean and covariance matrix
-            try:
-                # Save mean and cov for KL divergence
-                last_mean = np.copy(self.mean_)
-                last_cov = np.copy(self.cov)
-
-                # Get training data from surrogate and preprocess if neccessary
-                X_train = self.surrogate_model_.X_train
-                y_train = self.surrogate_model_.predict(X_train)
-                # Turn into unnormalized probability
-                y_train = np.exp(y_train - np.max(y_train))
-
-                # Calculate mean and cov for KL div and to fit the transformation
-                self.mean_ = np.average(X_train, axis=0, weights=y_train)
-                self.cov = np.cov(X_train.T, aweights=y_train)
-                last_cov_inv = np.linalg.inv(last_cov)
-                kl = 0.5 * (np.log(det(last_cov)) - np.log(det(self.cov)) \
-                    - X_train.shape[-1] + tr(last_cov_inv@self.cov) \
-                    + (last_mean-self.mean_).T @ last_cov_inv \
-                    @ (last_mean-self.mean_))
-                # self.cov=np.atleast_2d([self.cov])
-
-            except Exception as e:
-                print("KL divergence can't be calculated because:")
-                print(e)
-                kl = np.nan
-
-            return kl
-
-    def kl_divergence_alternative(self, n_points = 5000):
-        """Calculate the Kullback-Liebler (KL) divergence between different
-        steps of the GP acquisition. Here the KL divergence is used as a
-        convergence criterion for the GP. The KL-Divergence assumes a
-        multivariate normal distribution as underlying likelihood. Thus it may
-        perform strangely when applied to some sort of weird likelihood.
-
-        This function approximates the KL divergence by drawing n samples and
-        calculating the cov from this.
-
-        ..note::
-            The KL divergence is the difference between the evaluations of the
-            last call of this function and the current data.
-
-        Returns
-        -------
-
-        KL_divergence : The value of the KL divergence
-        """
-
-        # Raise exception for all warnings to catch them.
-        with warnings.catch_warnings():
-            warnings.filterwarnings('error')
-
-            # First try to calculate the mean and covariance matrix
-            try:
-                # Save mean and cov for KL divergence
-                last_mean = np.copy(self.mean_)
-                last_cov = np.copy(self.cov)
-
-                # Get training data from surrogate and preprocess if neccessary
-                X_train = np.random.uniform(self.bounds[:,0], self.bounds[:,1],
-                                        (n_points,len(self.bounds[:,0])))
-                y_train = self.surrogate_model_.predict(X_train)
-                # Turn into unnormalized probability
-                y_train = np.exp(y_train - np.max(y_train))
-                y_train = y_train / np.mean(y_train)
-
-                # Calculate mean and cov for KL div and to fit the transformation
-                self.mean_ = np.average(X_train, axis=0, weights=y_train)
-                self.cov = np.cov(X_train.T, aweights=y_train)
-                last_cov_inv = np.linalg.inv(last_cov)
-                kl = 0.5 * (np.log(det(last_cov)) - np.log(det(self.cov)) \
-                    - X_train.shape[-1] + tr(last_cov_inv@self.cov)\
-                    + (last_mean-self.mean_).T @ last_cov_inv \
-                    @ (last_mean-self.mean_))
-                # self.cov=np.atleast_2d([self.cov])
-
-            except Exception as e:
-                print("KL divergence can't be calculated because:")
-                print(e)
-                kl = np.nan
-
-            return kl
+        return np.atleast_2d(X_opt), acq_val
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 

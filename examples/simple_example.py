@@ -4,6 +4,7 @@ Example code for a simple GP Characterization of a likelihood.
 
 ######## Imports ########
 import os # To make directories
+from copy import deepcopy # Needed to copy our GP instance
 
 # numpy and scipy
 from scipy.stats import multivariate_normal
@@ -17,6 +18,8 @@ from matplotlib.colors import LogNorm
 from gpry.acquisition_functions import Log_exp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
+from gpry.preprocessing import Normalize_y, Normalize_bounds
+from gpry.convergence import KL_divergence
 from gpry.gp_acquisition import GP_Acquisition
 
 rv = multivariate_normal([3,2],[[0.5, 0.4],[0.4, 1.5]])
@@ -26,11 +29,6 @@ def f(X):
 
 #############################################################
 # Modelling part
-
-kernel = C(1.0, (1e-3, 1e5)) * RBF([1.0]*2, np.array([[1e-3, 1e5]]*2))
-gp = GaussianProcessRegressor(kernel=kernel,
-                             n_restarts_optimizer=20)
-af = Log_exp()
 
 a = np.linspace(-10., 10., 200)
 b = np.linspace(-10., 10., 200)
@@ -56,6 +54,14 @@ plt.close()
 #############################################################
 # Training part
 bnds = np.array([[-10.,10.], [-10.,10.]])
+
+kernel = C(1.0, (1e-3, 1e5)) * RBF([1.0]*2, np.array([[1e-3, 1e5]]*2))
+gp = GaussianProcessRegressor(kernel=kernel,
+                             preprocessing_X=Normalize_bounds(bnds),
+                             preprocessing_y=Normalize_y(),
+                             n_restarts_optimizer=20)
+af = Log_exp()
+
 acquire = GP_Acquisition(bnds,
                  acq_func=af,
                  n_restarts_optimizer=20)
@@ -68,16 +74,24 @@ init_y = f(init_X)
 
 gp.append_to_data(init_X, init_y, fit=True)
 
+convergence_criterion = KL_divergence(bnds)
+
 n_points = 2
-for _ in range(5):
+for _ in range(20):
+    old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
     new_y = f(new_X)
     gp.append_to_data(new_X, new_y, fit=True)
+    kl_divergence = convergence_criterion.kl_from_draw(gp, old_gp)
+    print(kl_divergence)
+    if kl_divergence < 1e-2:
+        break
+
 
 
 # Getting the prediction
-x_gp = gp.X_train_[:,0]
-y_gp = gp.X_train_[:,1]
+x_gp = gp.X_train[:,0]
+y_gp = gp.X_train[:,1]
 y_fit, std_fit = gp.predict(x, return_std=True)
 y_fit = -1 * y_fit.reshape(xdim[:-1])
 

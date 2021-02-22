@@ -781,7 +781,7 @@ class Expected_improvement(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
-            y_opt = np.max(gp._y_train_)
+            y_opt = np.max(gp.y_train)
 
         values = np.zeros_like(mu)
         mask = std > 0
@@ -855,7 +855,7 @@ class Log_exp(Acquisition_Function):
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
     """
-    def __init__(self, zeta=1, sigma_n=None, fixed=False):
+    def __init__(self, zeta=1., sigma_n=0., fixed=False):
         self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
@@ -908,27 +908,32 @@ class Log_exp(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
-        if self.sigma_n is None:
+        if self.sigma_n == 0.:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                sigma_n = np.mean(noise_level)
+                sigma_n = np.mean(sigma_n)
         else:
             sigma_n = self.sigma_n
 
         zeta = self.zeta
 
-        mask = std > sigma_n
+        mask = (std > sigma_n) & (np.isfinite(mu))
         values = np.zeros_like(std)
-        values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
-        values[~mask] = - np.inf
+        if np.any(mask):
+            values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
+        if np.any(~mask):
+            values[~mask] = - np.inf
         if eval_gradient:
             if np.array(std_grad).ndim > 1:
-                grad = np.zeros_like(std)
-                grad[mask] = np.array(std_grad)[:, mask]/(std[mask]-sigma_n) + 2*zeta*np.array(mu_grad)[:, mask]
-                grad[~mask] = np.ones_like(std_grad[:,mask])*np.inf
+                grad = np.zeros_like(std_grad)
+                if np.any(mask):
+                    grad[mask] = np.array(std_grad)[mask]/\
+                        (std[mask]-sigma_n) + 2*zeta*np.array(mu_grad)[mask]
+                if np.any(~mask):
+                    grad[~mask] = np.ones_like(std_grad[~mask])*np.inf
             else:
                 std = std[0]
-                if std > sigma_n:
+                if std > sigma_n and np.all(np.isfinite(mu)):
                     grad = std_grad/(std-sigma_n) - 2*zeta*mu_grad
                 else:
                     grad = np.ones_like(std_grad)*np.inf
