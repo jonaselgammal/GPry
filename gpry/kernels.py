@@ -2,17 +2,23 @@ from math import sqrt
 
 import numpy as np
 from sklearn.gaussian_process.kernels import Kernel as sk_Kernel
-from sklearn.gaussian_process.kernels import ConstantKernel as sk_ConstantKernel
+from sklearn.gaussian_process.kernels import ConstantKernel \
+    as sk_ConstantKernel
 from sklearn.gaussian_process.kernels import DotProduct as sk_DotProduct
-from sklearn.gaussian_process.kernels import Exponentiation as sk_Exponentiation
-from sklearn.gaussian_process.kernels import ExpSineSquared as sk_ExpSineSquared
+from sklearn.gaussian_process.kernels import Exponentiation \
+    as sk_Exponentiation
+from sklearn.gaussian_process.kernels import ExpSineSquared \
+    as sk_ExpSineSquared
 from sklearn.gaussian_process.kernels import Hyperparameter
 from sklearn.gaussian_process.kernels import Matern as sk_Matern
-from sklearn.gaussian_process.kernels import NormalizedKernelMixin as sk_NormalizedKernelMixin
+from sklearn.gaussian_process.kernels import NormalizedKernelMixin \
+    as sk_NormalizedKernelMixin
 from sklearn.gaussian_process.kernels import Product as sk_Product
-from sklearn.gaussian_process.kernels import RationalQuadratic as sk_RationalQuadratic
+from sklearn.gaussian_process.kernels import RationalQuadratic \
+    as sk_RationalQuadratic
 from sklearn.gaussian_process.kernels import RBF as sk_RBF
-from sklearn.gaussian_process.kernels import StationaryKernelMixin as sk_StationaryKernelMixin
+from sklearn.gaussian_process.kernels import StationaryKernelMixin \
+    as sk_StationaryKernelMixin
 from sklearn.gaussian_process.kernels import Sum as sk_Sum
 from sklearn.gaussian_process.kernels import WhiteKernel as sk_WhiteKernel
 
@@ -25,6 +31,7 @@ class Kernel(sk_Kernel):
      .. note::
         This kernel class is taken entirely from the Scikit-optimize package.
     """
+
     def __add__(self, b):
         if not isinstance(b, Kernel):
             return Sum(self, ConstantKernel(b))
@@ -66,6 +73,7 @@ class Kernel(sk_Kernel):
             Gradient of K(x, X_train) with respect to x.
         """
         raise NotImplementedError
+
 
 class RBF(Kernel, sk_RBF):
     def gradient_x(self, x, X_train):
