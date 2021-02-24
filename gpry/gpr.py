@@ -22,6 +22,7 @@ from sklearn.base import clone, BaseEstimator as BE
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_array
 
+
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     """
     GaussianProcessRegressor (GPR) that allows dynamic expansion.
@@ -289,7 +290,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 return self
             X = X[finite]
             y = y[finite]
-            if np.iterable(noise_level):
+            if np.iterable(noise_level) and noise_level is not None:
                 noise_level = noise_level[finite]
 
         # Update noise_level, this is a bit complicated because it can be
@@ -496,16 +497,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Set noise level
             if noise_level is None:
                 if np.iterable(self.noise_level):
-                    raise ValueError("If None is passed as noise level the "\
-                        "internally saved noise level needs to be a scalar")
+                    raise ValueError("If None is passed as noise level the "
+                                     "internally saved noise level needs "
+                                     "to be a scalar")
                 noise_level = self.noise_level
             else:
                 self.noise_level = noise_level
             if np.iterable(noise_level) and noise_level.shape[0] != y.shape[0]:
-                raise ValueError("noise_level must be a scalar or an array "\
-                                "with same number of entries as y.(%s "\
-                                "!= %s)"
-                                % (noise_level.shape[0], y.shape[0]))
+                raise ValueError("noise_level must be a scalar or an array "
+                                 "with same number of entries as y.(%s "
+                                 "!= %s)"
+                                 % (noise_level.shape[0], y.shape[0]))
 
             # Account for infinite values
             if self.account_for_inf is not None:
@@ -566,7 +568,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             if self.n_restarts_optimizer > 0:
                 if not np.isfinite(self.kernel_.bounds).all():
                     raise ValueError(
-                        "Multiple optimizer restarts (n_restarts_optimizer>0) "\
+                        "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
                 bounds = self.kernel_.bounds
                 for iteration in range(self.n_restarts_optimizer):
@@ -579,7 +581,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # likelihood
             lml_values = list(map(itemgetter(1), optima))
             self.kernel_.theta = optima[np.argmin(lml_values)][0]
-            self.kernel_._check_bounds_params()
+            # self.kernel_._check_bounds_params()
 
             self.log_marginal_likelihood_value_ = -np.min(lml_values)
         else:
@@ -787,15 +789,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.account_for_inf is not None:
             # Every variable that ends in _full is the full (including infinite)
             # values
-            X = np.copy(X) # copy since we might change it
+            X = np.copy(X)  # copy since we might change it
             n_samples = X.shape[0]
             n_dims = X.shape[1]
             # Initialize the full arrays for filling them later with infinite
             # and non-infinite values
             y_mean_full = np.ones(n_samples)
-            y_std_full = np.zeros(n_samples) # std is zero when mu is -inf
+            y_std_full = np.zeros(n_samples)  # std is zero when mu is -inf
             grad_mean_full = np.ones((n_samples, n_dims))
-            grad_std_full =np.zeros((n_samples, n_dims))
+            grad_std_full = np.zeros((n_samples, n_dims))
             finite = self.account_for_inf.predict(X)
             # If all values are infinite there's no point in running the
             # prediction through the GP
@@ -806,10 +808,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     if not return_mean_grad and not return_std_grad:
                         return y_mean, y_std
                 if return_mean_grad:
-                    grad_mean = np.ones(n_samples) * np.inf
+                    grad_mean = np.ones((n_samples, n_dims)) * np.inf
                     if return_std:
                         if return_std_grad:
-                            grad_std = np.ones(n_samples)
+                            grad_std = np.zeros((n_samples, n_dims))
                             return y_mean, y_std, grad_mean, grad_std
                         else:
                             return y_mean, y_std, grad_mean
@@ -817,9 +819,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                         return y_mean, grad_mean
                 return y_mean
 
-            y_mean_full[~finite] = -np.inf # Set infinite values
-            grad_mean_full[~finite] = np.inf # the grad of inf values is +inf
-            X = X[finite] # only predict the finite samples
+            y_mean_full[~finite] = -np.inf  # Set infinite values
+            grad_mean_full[~finite] = np.inf  # the grad of inf values is +inf
+            X = X[finite]  # only predict the finite samples
 
         if self.preprocessing_X is not None:
             X = self.preprocessing_X.transform(X)
@@ -881,7 +883,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 grad_std = np.zeros(X.shape[1])
                 if not np.allclose(y_std, grad_std):
                     grad_std = -np.dot(K_trans,
-                                       np.dot(K_inv, grad))[0] / y_std_untransformed
+                                       np.dot(K_inv, grad))[0] \
+                                       / y_std_untransformed
                     # Undo normalization
                     if self.preprocessing_y is not None:
                         # Apply inverse transformation twice
