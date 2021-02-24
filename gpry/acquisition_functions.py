@@ -845,16 +845,19 @@ class Log_exp(Acquisition_Function):
 
             \zeta = \exp(-N_0/N)
 
-        where :math:`N_0\geq 0` is a "decay constant" and :math:`N` the number of training points
+        where :math:`N_0\geq 0` is a "decay constant" and :math:`N`
+        the number of training points
         in the GP.
 
     sigma_n : float, default=None
-        The (constant) noise level of the data. If set to ``None`` the square-root of alpha of the
-        training data (or the square root of the mean of alpha if alpha is an array) will be used.
+        The (constant) noise level of the data. If set to ``None`` the
+        square-root of alpha of the training data (or the square root of the
+        mean of alpha if alpha is an array) will be used.
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
     """
+
     def __init__(self, zeta=1., sigma_n=0., fixed=False):
         self.zeta = zeta
         self.sigma_n = sigma_n
@@ -872,7 +875,8 @@ class Log_exp(Acquisition_Function):
             "sigma_n", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
+        its gradient.
 
         Parameters
         ----------
@@ -927,7 +931,7 @@ class Log_exp(Acquisition_Function):
             if np.array(std_grad).ndim > 1:
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
-                    grad[mask] = np.array(std_grad)[mask]/\
+                    grad[mask] = np.array(std_grad)[mask] / \
                         (std[mask]-sigma_n) + 2*zeta*np.array(mu_grad)[mask]
                 if np.any(~mask):
                     grad[~mask] = np.ones_like(std_grad[~mask])*np.inf
@@ -943,6 +947,7 @@ class Log_exp(Acquisition_Function):
 
     def __repr__(self):
         return "{0:.3f}".format(self.zeta)
+
 
 # Function for determining whether an object is an acquisition function
 def is_acquisition_function(acq_func):
@@ -962,15 +967,18 @@ def is_acquisition_function(acq_func):
     """
     return isinstance(acq_func, Acquisition_Function)
 
+
 class Hyperparameter(namedtuple('Hyperparameter',
                                 ('name', 'value_type',
                                  'n_elements', 'fixed'))):
-    """An acquisition function hyperparameter's specification in form of a namedtuple.
-    This formalism is copied from the ``kernel`` module of Scikit-Learn.
+    """An acquisition function hyperparameter's specification in form of a
+    namedtuple. This formalism is copied from the ``kernel`` module of
+    Scikit-Learn.
      .. note::
 
-        The current code does not support optimization of any hyperparameters of the acquisition
-        functions. This might be added in the future (which is why the ``fixed`` parameter exists).
+        The current code does not support optimization of any hyperparameters
+        of the acquisition functions. This might be added in the future
+        (which is why the ``fixed`` parameter exists).
 
     Attributes
     ----------
@@ -1008,12 +1016,11 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
-        return (self.name == other.name and
-                self.value_type == other.value_type and
-                self.n_elements == other.n_elements and
-                self.fixed == other.fixed)
+        return (self.name == other.name
+                and self.value_type == other.value_type
+                and self.n_elements == other.n_elements
+                and self.fixed == other.fixed)
 
-    # DONE
 
 class Acquisition_Function_Operator(Acquisition_Function):
     """Base class for all AF operators.
@@ -1070,7 +1077,8 @@ class Acquisition_Function_Operator(Acquisition_Function):
         Returns
         -------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function
         """
         return np.append(self.k1.theta, self.k2.theta)
 
@@ -1081,7 +1089,8 @@ class Acquisition_Function_Operator(Acquisition_Function):
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function
         """
         k1_dims = self.k1.n_dims
         self.k1.theta = theta[:k1_dims]
@@ -1092,6 +1101,7 @@ class Acquisition_Function_Operator(Acquisition_Function):
             return False
         return (self.k1 == b.k1 and self.k2 == b.k2) \
             or (self.k1 == b.k2 and self.k2 == b.k1)
+
 
 class Sum(Acquisition_Function_Operator):
     """Overwrites the ``+`` operator for two or more AF's.
@@ -1167,10 +1177,12 @@ class Exponentiation(Acquisition_Function):
         params : dict
             Parameter names mapped to their values.
         """
-        params = dict(acquisition_function=self.acquisition_function, exponent=self.exponent)
+        params = dict(acquisition_function=self.acquisition_function,
+                      exponent=self.exponent)
         if deep:
             deep_items = self.acquisition_function.get_params().items()
-            params.update(('acquisition_function__' + k, val) for k, val in deep_items)
+            params.update(('acquisition_function__' + k, val) for k,
+                          val in deep_items)
         return params
 
     @property
@@ -1178,7 +1190,8 @@ class Exponentiation(Acquisition_Function):
         """Returns a list of all hyperparameter."""
         r = []
         for hyperparameter in self.acquisition_function.hyperparameters:
-            r.append(Hyperparameter("acquisition_function__" + hyperparameter.name,
+            r.append(Hyperparameter("acquisition_function__"
+                                    + hyperparameter.name,
                                     hyperparameter.value_type,
                                     hyperparameter.n_elements))
         return r
@@ -1187,13 +1200,14 @@ class Exponentiation(Acquisition_Function):
     def theta(self):
         """Returns the (flattened, log-transformed) non-fixed hyperparameters.
         Note that theta are typically the log-transformed values of the
-        acquisition function's hyperparameters as this representation of the search space
-        is more amenable for hyperparameter search, as hyperparameters like
-        length-scales naturally live on a log-scale.
+        acquisition function's hyperparameters as this representation of the
+        search space is more amenable for hyperparameter search, as
+        hyperparameters like length-scales naturally live on a log-scale.
         Returns
         -------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function
         """
         return self.acquisition_function.theta
 
@@ -1203,17 +1217,20 @@ class Exponentiation(Acquisition_Function):
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function
         """
         self.acquisition_function.theta = theta
 
     def __eq__(self, b):
         if type(self) != type(b):
             return False
-        return (self.acquisition_function == b.acquisition_function and self.exponent == b.exponent)
+        return (self.acquisition_function == b.acquisition_function
+                and self.exponent == b.exponent)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
+        gradient.
 
         Parameters
         ----------
@@ -1239,7 +1256,8 @@ class Exponentiation(Acquisition_Function):
         X = self.check_X(X)
         if eval_gradient:
             K, K_grad = self.acquisition_function(X, gp, eval_gradient)
-            return K ** self.exponent, K_grad * self.exponent * K ** (self.exponent - 1)
+            return K ** self.exponent, K_grad * self.exponent * \
+                K ** (self.exponent - 1)
         else:
             K = self.acquisition_function(X, gp)
             return K ** self.exponent
