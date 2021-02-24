@@ -60,6 +60,9 @@ class SVM(SVC):
         if (hasattr(self, "X_train_") and hasattr(self, "y_train_")):
             X_train = np.append(self.X_train, X, axis=0)
             y_train = np.append(self.y_train, y)
+        else:
+            X_train = X
+            y_train = y
         # Fit SVM
         self.fit(X_train, y_train, fit_preprocessors=fit_preprocessors)
 
@@ -81,13 +84,14 @@ class SVM(SVC):
             if fit_preprocessors:
                 self.preprocessing_X.fit(X, y)
             self.X_train_ = self.preprocessing_X.transform(X)
+        else:
+            self.X_train_ = X
+
         if self.preprocessing_y is not None:
             if fit_preprocessors:
                 self.preprocessing_y.fit(X, y)
             self.y_train_ = self.preprocessing_y.transform(y)
-
         else:
-            self.X_train_ = X
             self.y_train_ = y
 
         # turn into categorial values (1 for finite and 0 for infinite)
