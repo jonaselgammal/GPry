@@ -22,3 +22,12 @@ algorithm to be efficient and give correct results are as follows:
   can be split into *slow* dimensions which are evaluated using the GP algorithm and *fast* dimensions which are
   evaluated using [PolyChord](https://arxiv.org/abs/1502.01856). The speed hierarchy usually needs to be at least
   one order of magnitude.
+
+## TODOs for the release:
+
+- Fix the convergence criterion (kl_from_draw does not seem to be working correctly at all)
+- Do some robustness tests of the SVM. It seems like *C* needs to be set to a finite value for the SVM to converge
+  in a finite time but this should be checked in detail.
+- Maybe write a method which dynamically expands the hyperparameter space prior so the user doesn't have to worry about this
+- Interface to Cobaya
+- Write a module which acts as a "frontend" for easy use.
