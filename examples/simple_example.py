@@ -15,20 +15,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-# Sklearn and Sklearn gp minimize
-from gpry.acquisition_functions import Log_exp, Expected_improvement
+# GPry things needed for building the model
+from gpry.acquisition_functions import Log_exp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
-from gpry.convergence import KL_divergence
+from gpry.convergence import KL_from_draw
 from gpry.gp_acquisition import GP_Acquisition
+
+# Cobaya things needed for building the model
+from cobaya.run import run
+from cobaya.model import get_model
+from getdist.mcsamples import MCSamplesFromCobaya
+import getdist.plots as gdplt
 
 rv = multivariate_normal([3, 2], [[0.5, 0.4], [0.4, 1.5]])
 
 
-def f(X):
-    return np.log(rv.pdf(X))
+def f(x, y):
+    return np.log(rv.pdf(np.array([x, y]).T))
 
+
+# Define the likelihood and the prior of the model
+info = {"likelihood": {"f": f}}
+info["params"] = {
+    "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
+    "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
+
+model = get_model(info)
 
 #############################################################
 # Modelling part
@@ -40,7 +54,7 @@ A, B = np.meshgrid(a, b)
 x = np.stack((A, B), axis=-1)
 xdim = x.shape
 x = x.reshape(-1, 2)
-Y = -1 * f(x)
+Y = -1 * f(x[:, 0], x[:, 1])
 Y = Y.reshape(xdim[:-1])
 
 # Plot ground truth
@@ -56,7 +70,7 @@ plt.close()
 
 #############################################################
 # Training part
-bnds = np.array([[-10., 10.], [-10., 10.]])
+bnds = model.prior.bounds(confidence_for_unbounded=0.99995)
 
 kernel = C(1.0, (1e-3, 1e5)) * RBF([1.0]*2, np.array([[1e-3, 1e5]]*2))
 gp = GaussianProcessRegressor(kernel=kernel,
@@ -70,29 +84,31 @@ acquire = GP_Acquisition(bnds,
                          acq_func=af,
                          n_restarts_optimizer=20)
 
-init_1 = np.random.uniform(bnds[0, 0], bnds[0, 1], 3)
-init_2 = np.random.uniform(bnds[1, 0], bnds[1, 1], 3)
-
-init_X = np.stack((init_1, init_2), axis=1)
-init_y = f(init_X)
+init_X = model.prior.sample(3)
+init_y = f(init_X[:, 0], init_X[:, 1])
 
 gp.append_to_data(init_X, init_y, fit=True)
 
-convergence_criterion = KL_divergence(bnds)
+convergence_criterion = KL_from_draw(model.prior,
+                                     {"limit": 1e-2,
+                                      "n_draws": 5000})
 
-n_points = 2
+n_points = 2 # Number of acquired points per step
 y_s = init_y
 
 for _ in range(10):
     old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
-    new_y = f(new_X)
+    new_y = f(new_X[:, 0], new_X[:, 1])
     y_s = np.append(y_s, new_y)
     gp.append_to_data(new_X, new_y, fit=True)
-    kl_divergence = convergence_criterion.kl_from_draw(gp, old_gp)
-    print(kl_divergence)
-    if kl_divergence < 1e-2:
+    print(convergence_criterion.criterion_value(gp, old_gp))
+    # This should stop the algorithm but since the KL divergence doesn't work
+    # I turned it off.
+    """
+    if convergence_criterion.is_converged(gp, old_gp):
         break
+    """
 
 
 # Getting the prediction
@@ -120,18 +136,9 @@ plt.close()
 #############################################################
 # Cobaya Part
 
-from cobaya.run import run
-from getdist.mcsamples import MCSamplesFromCobaya
-import getdist.plots as gdplt
-
 # First the MCMC Run on the actual function
 
-
-def true_func(x, y):
-    return f(np.array([[x, y]]))
-
-
-info = {"likelihood": {"true_func": true_func}}
+info = {"likelihood": {"true_func": f}}
 info["params"] = {
     "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
     "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
