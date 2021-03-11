@@ -7,17 +7,216 @@ converged.
 find a suitable convergence criterion for our purposes...**
 """
 
+from abc import ABCMeta, abstractmethod
 import numpy as np
 from numpy.linalg import det
 from numpy import trace as tr
-from scipy.stats import multivariate_normal
+from scipy.stats import multivariate_normal, entropy
 from scipy.special import logsumexp
 import warnings
 
-class KL_divergence:
+
+class Convergence_criterion(metaclass=ABCMeta):
+    """ Base class for all convergence criteria (CCs). A CC quantifies the
+    convergence of the GP surrogate model. If this value goes below a certain,
+    user-set value we consider the GP to have converged to the true posterior
+    distribution.
+
+    Currently several CCs are supported which should be versatile enough for
+    most tasks. If however one wants to specify a custom CC
+    it should be a class which inherits from this abstract class.
+    This class needs to be of the format::
+
+        from Acquisition_functions import Acquisition_function
+        Class custom_acq_func(Acquisition_Function):
+            def __init__(self, prior, params):
+                # prior should be a prior object and contain the prior for all
+                # parameters
+                # params is to be passed as a dictionary. The init should
+                # then set the parameters which are needed later accordingly.
+                # as a minimal requirement this method should set a number
+                # at which the algorithm is considered to have converged.
+                # Furthermore this method should initialize empty lists in
+                # which we can write the values of the convergence criterion
+                # as well as the number of posterior evaluations. This allows
+                # for easy tracking/plotting of the convergence.
+                self.values = []
+                self.n_posterior_evals = []
+                self.limit = ... # stores the limit for convergence
+
+            def is_converged(self, gp):
+                # Basically a wrapper for the 'criterion_value' method which
+                # returns True if the convergence criterion is met and False
+                # otherwise.
+
+            def criterion_value():
+                # Returns the value of the convergence criterion. Should also
+                # append the current value and the number of posterior
+                # evaluations to the corresponding variables.
     """
-    Class to calculate the KL divergence between two different GPs assuming that
-    the GP follows some (unnormalized) multivariate gaussian distribution.
+
+    def get_n_evals_from_gp(self, gp):
+        """Method which returns the number of posterior evaluations from the
+        gp."""
+        if gp.account_for_inf is None:
+            n_evals = len(gp.y_train)
+        else:
+            n_evals = len(gp.account_for_inf.y_train)
+        return n_evals
+
+    def get_history(self):
+        """Returns the two lists containing the values of the convergence
+        criterion at each step as well as the number of posterior evaluations.
+        """
+        return self.values, self.n_posterior_evals
+
+    @abstractmethod
+    def __init__(self, prior, params):
+        """sets all relevant initial parameters from the 'params' dict"""
+
+    @abstractmethod
+    def is_converged(self, gp, gp_2=None):
+        """Returns False if the algorithm hasn't converged and
+        True if it has. If gp_2 is None the last GP is taken from the
+        model instance."""
+
+    @abstractmethod
+    def criterion_value(self, gp, gp_2=None):
+        """Returns the value of the convergence criterion for the current
+        gp. If gp_2 is None the last GP is taken from the model instance."""
+
+
+class KL_from_draw(Convergence_criterion):
+    """
+    Class to calculate the KL divergence between two steps of the algorithm
+    by drawing n points from the prior and evaluating the KL divergence between
+    the last surrogate model and the current one at these points.
+
+    Parameters
+    ----------
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"prior"``: prior object. Needs to be supplied.
+        * ``"limit"``: Number, optional (default=1e-2)
+        * ``"n_draws"``: int, optional (default=5000)
+
+    """
+
+    def __init__(self, prior, params):
+        # get prior
+        self.prior = prior
+
+        self.limit = params.get("limit", 1e-2)
+        self.n_draws = params.get("n_draws", 5000)
+        self.gp_2 = None
+
+        self.values = []
+        self.n_posterior_evals = []
+
+    def is_converged(self, gp, gp_2=None):
+        kl = self.criterion_value(gp, gp_2)
+        print(kl)
+        if kl < self.limit:
+            return True
+        else:
+            return False
+
+    def criterion_value(self, gp, gp_2=None):
+        """Calculate the Kullback-Liebler (KL) divergence between different
+        steps of the GP acquisition. In contrast to the version where the
+        training data is used to calculate the KL divergence this method does
+        not assume any form of underlying distribution of the data.
+
+        This function approximates the KL divergence by drawing n samples and
+        calculating the cov from this.
+
+        Parameters
+        ----------
+
+        gp : SKLearn Gaussian Process Regressor
+            The first surrogate model from which the training data is
+            retrieved.
+
+        gp_2 : SKLearn Gaussian Process Regressor, optional (default=None)
+            The second surrogate model from which the training data is
+            retrieved.
+
+        Returns
+        -------
+
+        KL_divergence : The value of the KL divergence
+        """
+
+        if gp_2 is None:
+            gp_2 = self.gp_2
+            if not hasattr(gp_2, "X_train"):
+                # gp_2 is not a GP so we do not calculate anything...
+                self.gp_2 = gp
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                return np.nan
+        else:
+            if not hasattr(gp_2, "X_train"):
+                raise NameError("gp_2 is either not a GP "
+                                "regressor or hasn't been fit to data before.")
+
+        # Check all inputs
+        if not hasattr(gp, "X_train"):
+            raise NameError("gp is either not a GP regressor "
+                            "or hasn't been fit to data before.")
+
+        else:
+            X_test = self.prior.sample(self.n_draws)
+
+        # Actual calculation of the KL divergence as sum(p * log(p/q))
+        # For this p and q need to be normalized such that they add up to 1.
+        # Raise exception for all warnings to catch them.
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+
+            try:
+                # First get p and q by predicting them from the respective
+                # models
+                logp = gp.predict(X_test)
+                logq = gp_2.predict(X_test)
+
+                mask = np.isfinite(logp) & np.isfinite(logq)
+                p = np.exp(logp[mask])
+                q = np.exp(logq[mask])
+
+                kl = entropy(p, qk=q)
+
+                """
+                # Need to make sure that stuff adds up to 1 which is a
+                # bit tricky... Luckily there's the logsumexp function
+                logp = logp - logsumexp(logp)
+                logq = logq - logsumexp(logq)
+
+                # Now that stuff is normalized we can calculate the KL
+                # divergence. We also save exp(p) for later
+                mask = np.isfinite(logp)  & np.isfinite(logq)
+                p = np.exp(logp[mask])
+                kl = np.sum(p * (logp[mask] - logq[mask]), axis=0)
+                """
+            except Exception:
+                print("KL divergence couldn't be calculated.")
+                kl = np.nan
+
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+
+            return kl
+
+
+class KL_from_training(Convergence_criterion):
+    """
+    Class to calculate the KL divergence between two different GPs assuming
+    that the GP follows some (unnormalized) multivariate gaussian distribution.
+
+    params : dict
+        ...
 
     Attributes
     ----------
@@ -28,12 +227,27 @@ class KL_divergence:
     cov : The covariance matrix of the training data along its last axis.
 
     """
-    def __init__(self, bounds):
+
+    def __init__(self, prior, params):
+        self.prior = prior
         self.cov = None
         self.mean = None
-        self.bounds = bounds
+        self.limit = params.get("limit", 1e-2)
+        self.n_draws = params.get("n_draws", 5000)
+        self.gp_2 = None
 
-    def kl_from_training(self, surrogate_model_1, surrogate_model_2=None):
+        self.values = []
+        self.n_posterior_evals = []
+
+    def is_converged(self, gp, gp_2=None):
+        kl = self.criterion_value(gp, gp_2)
+        print(kl)
+        if kl < self.limit:
+            return True
+        else:
+            return False
+
+    def criterion_value(self, gp, gp_2=None):
         """Calculate the Kullback-Liebler (KL) divergence between different
         steps of the GP acquisition. Here the KL divergence is used as a
         convergence criterion for the GP. The KL-Divergence assumes a
@@ -48,11 +262,11 @@ class KL_divergence:
         Parameters
         ----------
 
-        surrogate_model_1 : SKLearn Gaussian Process Regressor
-            The first surrogate model from which the training data is retrieved.
+        gp : SKLearn Gaussian Process Regressor
+            The first surrogate model from which the training data is
+            retrieved.
 
-        surrogate_model_2 : SKLearn Gaussian Process Regressor, optional
-            (default=None)
+        gp_2 : SKLearn Gaussian Process Regressor, optional (default=None)
             The second surrogate model from which the training data is
             retrieved.
 
@@ -65,24 +279,24 @@ class KL_divergence:
         If the KL divergence cannot be determined ``None`` is returned.
         """
         # Check all inputs
-        if not hasattr(surrogate_model_1, "X_train"):
-            raise NameError("surrogate_model_1 is either not a GP regressor "\
-                "or hasn't been fit to data before.")
+        if not hasattr(gp, "X_train"):
+            raise NameError("GP is either not a GP regressor "
+                            "or hasn't been fit to data before.")
 
-        if surrogate_model_2 is None:
+        if gp_2 is None:
             # raise warning if mean and cov do not exist/were not calculated
             # successfully before
             if self.mean is None or self.cov is None:
-                warnings.warn("The mean and cov have not been fit "\
-                    "successfully before. Therefore the KL divergence cannot "\
-                    "be calculated properly...")
+                warnings.warn("The mean and cov have not been fit "
+                              "successfully before. Therefore the KL "
+                              "divergence cannot be calculated properly...")
             mean_2 = np.copy(self.mean)
             cov_2 = np.copy(self.cov)
 
         else:
-            if not hasattr(surrogate_model_2, "X_train"):
-                raise NameError("surrogate_model_2 is either not a GP "\
-                    "regressor or hasn't been fit to data before.")
+            if not hasattr(gp_2, "X_train"):
+                raise NameError("surrogate_model_2 is either not a GP "
+                                "regressor or hasn't been fit to data before.")
 
         # Raise warnings as exceptions from here to control their behaviour
         with warnings.catch_warnings():
@@ -96,8 +310,8 @@ class KL_divergence:
                 # Furthermore we need to exponentiate the target values
                 # such that they follow an (unnormalized) PDF. We choose the
                 # normalization such that max(exp(y_train))=1.
-                X_train = np.copy(surrogate_model_1.X_train)
-                y_train = surrogate_model_1.predict(X_train)
+                X_train = np.copy(gp.X_train)
+                y_train = gp.predict(X_train)
                 y_train = np.exp(y_train - np.max(y_train))
 
                 # Actually calculate the mean and cov
@@ -110,19 +324,21 @@ class KL_divergence:
                 self.cov = cov_1
 
             except Exception as e:
-                print("The mean or cov of surrogate_model_1 couldn't be "\
-                    "calculated.")
+                print("The mean or cov of surrogate_model_1 couldn't be "
+                      "calculated.")
                 print(e)
                 self.mean = None
                 self.cov = None
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return np.nan
 
             # Calculate the mean and cov of surrogate model 2
             try:
-                if surrogate_model_2 is not None:
+                if gp_2 is not None:
                     # Same stuff as above
-                    X_train = np.copy(surrogate_model_2.X_train)
-                    y_train = surrogate_model_2.predict(X_train)
+                    X_train = np.copy(gp_2.X_train)
+                    y_train = gp_2.predict(X_train)
                     y_train = np.exp(y_train - np.max(y_train))
                     mean_2 = np.average(X_train, axis=0, weights=y_train)
                     cov_2 = np.cov(X_train.T, aweights=y_train)
@@ -131,152 +347,97 @@ class KL_divergence:
                 cov_2_inv = np.linalg.inv(cov_2)
 
             except Exception as e:
-                print("The mean or cov of surrogate_model_2 couldn't be "\
-                    "calculated.")
+                print("The mean or cov of surrogate_model_2 couldn't be "
+                      "calculated.")
                 print(e)
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return np.nan
 
             # Actually calculate the KL divergence
             try:
-                kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1)) \
-                    - X_train.shape[-1] + tr(cov_2_inv@cov_1) \
-                    + (mean_2-mean_1).T @ cov_2_inv \
-                    @ (mean_2-mean_1))
+                kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1))
+                            - X_train.shape[-1] + tr(cov_2_inv@cov_1)
+                            + (mean_2-mean_1).T @ cov_2_inv
+                            @ (mean_2-mean_1))
+                self.values.append(kl)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return kl
 
             except Exception as e:
                 print("KL divergence couldn't be calculated.")
                 print(e)
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return np.nan
 
-    def kl_from_draw(self, surrogate_model_1, surrogate_model_2,
-            n_draws = 5000, guess_initial=True):
-        """Calculate the Kullback-Liebler (KL) divergence between different
-        steps of the GP acquisition. In contrast to the version where the
-        training data is used to calculate the KL divergence this method does
-        not assume any form of underlying distribution of the data.
 
-        This function approximates the KL divergence by drawing n samples and
-        calculating the cov from this.
+class New_convergence_criterion(Convergence_criterion):
+    """
+    This class is supposed to use a short MCMC chain to get independent samples
+    from the posterior distribution. These can then be used to get the KL
+    divergence between samples.
+    """
 
-        Parameters
-        ----------
+    def __init__(self, prior, params):
+        self.prior = prior
+        self.cov = None
+        self.mean = None
+        self.limit = params.get("limit", 1e-2)
+        # Number of MCMC chains to generate samples
+        self.n_draws = params.get("n_chains", 100)
+        # Number of jumps per MCMC chain
+        self.n_jumps_per_chain = params.get("n_jumps_per_chain", 10)
+        self.n_initial = params.get("n_initial", 500)
+        self.gp_2 = None
 
-        surrogate_model_1 : SKLearn Gaussian Process Regressor
-            The first surrogate model from which the training data is retrieved.
+        self.values = []
+        self.n_posterior_evals = []
 
-        surrogate_model_2 : SKLearn Gaussian Process Regressor
-            The second surrogate model from which the training data is
-            retrieved.
+    def is_converged(self, gp, gp_2=None):
+        crit = self.criterion_value(gp, gp_2)
+        print(crit)
+        if crit < self.limit:
+            return True
+        else:
+            return False
 
-        bounds : array-like, shape=(n_dims,2)
-            Array of bounds of the prior [lower, upper] along each dimension.
-
-        n_draws : int, optional (default=5000)
-            The number of samples that are drawn from the GPs
-
-        guess_initial : bool, optional (default=True)
-            Whether to draw the random samples from the multivariate gaussian
-            distribution that has been fit to data before. For this the KL
-            divergence needs to have been called before.
-
-        Returns
-        -------
-
-        KL_divergence : The value of the KL divergence
+    def criterion_value(self, gp, gp_2=None):
+        """
+        This is the important part of the code. Here the calculation of the
+        value of the convergence criterion should be performed.
         """
 
-        # Check all inputs
-        if not hasattr(surrogate_model_1, "X_train"):
-            raise NameError("surrogate_model_1 is either not a GP regressor "\
-                "or hasn't been fit to data before.")
+        # Draw samples from the prior until mean and cov stabilize
+        # to get an initial guess for the MCMC
+        if self.mean is None or self.cov is None:
+            X_values = self.prior.sample(self.n_initial)
+            y_values = gp.predict(X_values)
+            # Right now this doesn't check whether the value of the covariance
+            # matrix is numerically stable i.e. whether it's converged. This
+            # shouldn't matter too much though since it's only run once at the
+            # beginning and then the MCMC should take care of the rest.
+            while True:  # Maybe need something better here so it can't get stuck
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('error')
+                    try:
+                        y_values = np.exp(y_values - np.max(y_values))
 
-        if not hasattr(surrogate_model_2, "X_train"):
-            raise NameError("surrogate_model_2 is either not a GP "\
-                "regressor or hasn't been fit to data before.")
+                        # Actually calculate the mean and cov
+                        self.mean = np.average(X_values, axis=0, weights=y_values)
+                        self.cov = np.cov(X_values.T, aweights=y_values)
 
-        # Draw training data either from uniform distribution or initial guess
-        if guess_initial:
-            if self.mean is None or self.cov is None:
-                warnings.warn("mean or cov is None so samples will be drawn "\
-                    "uniformly inside bounds.")
-                X_train = np.random.uniform(self.bounds[:,0], self.bounds[:,1],
-                    (n_draws,len(self.bounds[:,0])))
-                weights = None
-            else:
-                # Drawing from initial guess means drawing samples from the
-                # multivariate prpopsal normal dist. Essentially this is just
-                # importance sampling.
-                try:
-                    rv = multivariate_normal(self.mean, self.cov)
-                    X_train = rv.rvs(size=n_draws)
-                    # Delete all points which fall outside of the bounds.
-                    # Unfortunately we have to do that manually
-                    mask = (X_train > self.bounds[:, 0]) \
-                        & (X_train < self.bounds[:, 1])
-                    mask = mask[:, 0] & mask[:, 1]
-                    X_train = X_train[mask]
-                    # Raise warning if too many points lie outside of the bounds
-                    if X_train.shape[0] < n_draws / 4.:
-                        warnings.warn("More than 3/4 of the points drawn from "\
-                            "the multivariate normal dist. are outside of the "\
-                            "bounds. You may want to consider using uniform "\
-                            "sampling instead.")
+                        break
+                    except:
+                        X_values = np.append(X_values,
+                                             self.prior.sample(self.n_initial),
+                                             axis=0)
+                        y_values = np.append(y_values, gp.predict(X_values))
+                        self.mean = None
+                        self.cov = None
 
-                    # Get the value of the PDF at X_train as a measure of p(x) dx.
-                    # This is done to remove the effect of importance sampling.
-                    # We only need to keep track of the log as it's easier to use...
-                    weights = np.log(rv.pdf(X_train))
-                except:
-                    warnings.warn("Could not draw points from the "\
-                        "multivariate normal dist. Falling back to uniform.")
-                    X_train = np.random.uniform(self.bounds[:,0], self.bounds[:,1],
-                        (n_draws,len(self.bounds[:,0])))
-                    weights = None
-        else:
-            X_train = np.random.uniform(self.bounds[:,0], self.bounds[:,1],
-                (n_draws,len(self.bounds[:,0])))
-            weights = None
+        # Here the MCMC is supposed to go & generate points + calculate the kl
+        # divergence from them.
 
-        # Actual calculation of the KL divergence as sum(p * log(p/q))
-        # For this p and q need to be normalized such that they add up to 1.
-        # Raise exception for all warnings to catch them.
-        with warnings.catch_warnings():
-            warnings.filterwarnings('error')
-
-            try:
-                # First get p and q by predicting them from the respective models
-                logp = surrogate_model_1.predict(X_train)
-                logq = surrogate_model_2.predict(X_train)
-                # Now we need to normalize everything
-                if weights is not None:
-                    # We are in log-space so we need to substract the log of
-                    # the weights
-                    logp = logp - weights
-                    logq = logq - weights
-                # Still need to make sure that stuff adds up to 1 which is a bit
-                # tricky... Luckily there's the logsumexp function
-                logp = logp - logsumexp(logp)
-                logq = logq - logsumexp(logq)
-
-                # Now that stuff is normalized we can calculate the KL
-                # divergence. We also save exp(p) for later
-                mask = np.isfinite(logp)
-                p = np.exp(logp[mask])
-                kl = np.sum(p * (logp[mask] - logq[mask]), axis=0)
-
-            except Exception as e:
-                print("KL divergence couldn't be calculated.")
-                self.mean = None
-                self.cov = None
-                return np.nan
-
-            # Also empirically calculate the mean and cov in case we want to
-            # draw from them
-            try:
-                self.mean = np.average(X_train, axis=0, weights=p)
-                self.cov = np.cov(X_train.T, aweights=p)
-
-            except Exception as e:
-                print("Couldn't get an estimate for mean and cov.")
-            return kl
+        kl_divergence = None  # Just a placeholder
+        return kl_divergence
