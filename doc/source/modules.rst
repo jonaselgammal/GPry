@@ -10,3 +10,5 @@ Modules
    acquisition_functions
    gp_acquisition
    preprocessing
+   convergence
+   prior

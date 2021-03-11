@@ -1,29 +1,11 @@
 """
-This module contains the implementation of an "Aquisition Function" class with a structure similar to the one
-provided by the Kernels module of sklearn. Additionally to some internally provided base AF's
-this module also overwrites arithmetic operators for AF's in order to enable the construction of composite
-AF's.
-
-.. note::
-
-    Bear in mind, that you first need to initialize an instance of an acquisition function before calling it.
-    Composite acquisition functions are possible too, e.g.::
-
-        from acquisition_functions import ConstantAcqFunc, Mu, Sigma
-        af = ConstantAcqFunc(2) * Mu + (-3) * Sigma ** 2.5
-
-.. warning::
-    Currently only the ``+``, ``*`` and ``**`` operator are supported but I am sure you can figure out how to
-    work around using ``-`` and ``/`` on your own ;)
-
 Base Class
 ==========
-All acquisition functions are derived from this class. If you want to define your own
-acquisition functions it needs to inherit from this class. A tutorial on how to define such
-a class is given in :class:`.Acquisition_Function`
+All acquisition functions are derived from this class. If you want to define
+your own acquisition functions it needs to inherit from this class. A tutorial
+on how to define such a class is given in :class:`.Acquisition_Function`
 
 .. autosummary::
-     :toctree: stubs
 
      Acquisition_Function
 
@@ -34,10 +16,10 @@ All inbuilt Acquisition Functions can evaluate the gradient in addition
 to the value of the acquisition function at point X.
 
 The inbuilt acquisition functions should offer a great deal of flexibility.
-If you want to define your own acquisition function please refer to :class:`acquisition_functions.Acquisition_Function`"
+If you want to define your own acquisition function please refer to
+:class:`Acquisition_Function`.
 
 .. autosummary::
-     :toctree: stubs
 
      ConstantAcqFunc
      Mu
@@ -50,10 +32,10 @@ If you want to define your own acquisition function please refer to :class:`acqu
 Additional things
 =================
 
-The things listed here are tools and similar things which in normal operation should not be needed.
+The things listed here are tools and similar things which in normal operation
+should not be needed.
 
 .. autosummary::
-     :toctree: stubs
 
      is_acquisition_function
      Hyperparameter
@@ -61,7 +43,9 @@ The things listed here are tools and similar things which in normal operation sh
      Sum
      Product
      Exponentiation
+
 """
+
 
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
@@ -74,13 +58,12 @@ import numpy as np
 from scipy.special import kv, gamma, logsumexp
 from scipy.spatial.distance import pdist, cdist, squareform
 from scipy.stats import norm
-
-
 from sklearn.base import clone
 
+
 class Acquisition_Function(metaclass=ABCMeta):
-    """ Base class for all Acquisition Functions (AF's). All acquisition functions
-    are derived from this class.
+    """ Base class for all Acquisition Functions (AF's). All acquisition
+    functions are derived from this class.
 
     Currently several acquisition functions are supported which should be
     versatile enough for most tasks.
@@ -91,13 +74,14 @@ class Acquisition_Function(metaclass=ABCMeta):
         from Acquisition_functions import Acquisition_function
         Class custom_acq_func(Acquisition_Function):
             def __init__(self, param_1, ..., fixed=...):
-                # * 'hyperparam_i': The hyperparameters of the custom acquisition
-                #   function.
-                # * 'fixed': whether the hyperparameters of the acquisition function
-                #    are to be kept fixed.
-                # * 'hasgradient': Whether the acquisition function can return a gradient.
-                # Furthermore the bool hasgradient needs to be specified to 'True'
-                # if the acquisition function can return gradient(s) or 'False' otherwise.
+                # * 'hyperparam_i': The hyperparameters of the custom
+                #   acquisition function.
+                # * 'fixed': whether the hyperparameters of the acquisition
+                #   function are to be kept fixed.
+                # * 'hasgradient': Whether the acquisition function can return
+                #   a gradient. Furthermore the bool hasgradient needs to be
+                #   specified to 'True' if the acquisition function can return
+                #   gradient(s) or 'False' otherwise.
                 self.param_1 = param_1
                 ...
                 self.fixed=fixed
@@ -111,25 +95,28 @@ class Acquisition_Function(metaclass=ABCMeta):
                 return Hyperparameter(
                     "param_1", "numeric", fixed=self.fixed)
 
+                return Hyperparameter(
+                    "param_1", "numeric", fixed=self.fixed)
+
             def __call__(self, X, gp, eval_gradient=False):
                 # * 'X': The value(s) at which the acquisition function is
                 #    evaluated
                 # * 'GP': The surrogate GP model which shall be used.
-                # * 'eval_gradient': Whether the gradient shall be given or not.
-                #   Only required if 'self.hasgradient' is true
+                # * 'eval_gradient': Whether the gradient shall be given or
+                #   not. Only required if 'self.hasgradient' is true.
                 ....
-                # Returned are the value(s) of the acquisition function at point(s) X
-                # and optionally their gradient(s)
+                # Returned are the value(s) of the acquisition function at
+                # point(s) X and optionally their gradient(s)
 
-    Once the Acquisition function is defined in this way it can be used with the
-    same operators as the inbuilt acquisition functions.
+    Once the Acquisition function is defined in this way it can be used with
+    the same operators as the inbuilt acquisition functions.
 
      .. note::
 
         If one of the
-        operands of a composite acquisiton function does not return a gradient the same applies
-        for all operands. Furthermore some optimizers require gradients, which cannot be used in
-        this case.
+        operands of a composite acquisiton function does not return a gradient
+        the same applies for all operands. Furthermore some optimizers require
+        gradients, which cannot be used in this case.
 
     """
 
@@ -156,8 +143,8 @@ class Acquisition_Function(metaclass=ABCMeta):
         init_sign = signature(init)
         args, varargs = [], []
         for parameter in init_sign.parameters.values():
-            if (parameter.kind != parameter.VAR_KEYWORD and
-                    parameter.name != 'self'):
+            if (parameter.kind != parameter.VAR_KEYWORD
+                    and parameter.name != 'self'):
                 args.append(parameter.name)
             if parameter.kind == parameter.VAR_POSITIONAL:
                 varargs.append(parameter.name)
@@ -191,7 +178,8 @@ class Acquisition_Function(metaclass=ABCMeta):
         ----------
         **params : dict
             Any number of parameters which shall be set. Should be of the form
-            ``{"parameter_1_name" : parameter_1_value, "parameter_2_name" : parameter_2_value, ...}``
+            ``{"parameter_1_name" : parameter_1_value,
+            "parameter_2_name" : parameter_2_value, ...}``
 
         Returns
         -------
@@ -242,8 +230,8 @@ class Acquisition_Function(metaclass=ABCMeta):
 
         .. warning::
 
-            This method only checks for the correct type of an input, inappropriate
-            values might still cause problems.
+            This method only checks for the correct type of an input,
+            inappropriate values might still cause problems.
 
         Parameters
         ----------
@@ -265,7 +253,8 @@ class Acquisition_Function(metaclass=ABCMeta):
 
     @property
     def n_dims(self):
-        """Returns the number of non-fixed hyperparameters of the acquisition function."""
+        """Returns the number of non-fixed hyperparameters of the acquisition
+        function."""
         return self.theta.shape[0]
 
     @property
@@ -280,13 +269,15 @@ class Acquisition_Function(metaclass=ABCMeta):
         """Returns the (flattened, log-transformed) non-fixed hyperparameters.
 
         Note that theta are typically the log-transformed values of the
-        acquisition function's hyperparameters as this representation of the search space
-        is more amenable for hyperparameter search, as hyperparameters like
-        length-scales naturally live on a log-scale.
+        acquisition function's hyperparameters as this representation of the
+        search space is more amenable for hyperparameter search, as
+        hyperparameters likelength-scales naturally live on a log-scale.
+
         Returns
         -------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function.
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function.
         """
         theta = []
         params = self.get_params()
@@ -304,7 +295,8 @@ class Acquisition_Function(metaclass=ABCMeta):
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the acquisition function.
+            The non-fixed, log-transformed hyperparameters of the acquisition
+            function.
         """
         params = self.get_params()
         i = 0
@@ -339,7 +331,7 @@ class Acquisition_Function(metaclass=ABCMeta):
             self._hasgradient = hasgradient
         else:
             raise TypeError("hasgradient needs to be"
-                            "bool, not %s"%hasgradient)
+                            "bool, not %s" % hasgradient)
 
     @abstractmethod
     def __call__(self, X, gp, eval_gradient=False):
@@ -382,11 +374,12 @@ class Acquisition_Function(metaclass=ABCMeta):
         return "{0}({1})".format(self.__class__.__name__,
                                  ", ".join(map("{0:.3g}".format, self.theta)))
 
+
 class ConstantAcqFunc(Acquisition_Function):
     """Constant Acquisition function.
 
-    Can be used as part of a product-Composition where it scales the magnitude of
-    the other factor or as part of a sum.
+    Can be used as part of a product-Composition where it scales the magnitude
+    of the other factor or as part of a sum.
 
     .. math::
         A_f(X) = constant\\_value \\;\\forall\\; X
@@ -400,6 +393,7 @@ class ConstantAcqFunc(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, constant_value=1.0, fixed=False):
         self.constant_value = constant_value
         self.fixed = fixed
@@ -411,7 +405,8 @@ class ConstantAcqFunc(Acquisition_Function):
             "constant_value", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
+        gradient.
 
         Parameters
         ----------
@@ -447,6 +442,7 @@ class ConstantAcqFunc(Acquisition_Function):
     def __repr__(self):
         return "{0:.3g}**2".format(np.sqrt(self.constant_value))
 
+
 class Mu(Acquisition_Function):
     """:math:`\mu(X)` of the surrogate model.
 
@@ -461,6 +457,7 @@ class Mu(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, a=1.0, fixed=False):
         self.a = a
         self.fixed = fixed
@@ -472,7 +469,8 @@ class Mu(Acquisition_Function):
             "a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
+        its gradient.
 
         Parameters
         ----------
@@ -516,6 +514,7 @@ class Mu(Acquisition_Function):
     def __repr__(self):
         return "{0:.3g}**2".format(np.sqrt(self.a))
 
+
 class Exponential_mu(Acquisition_Function):
     """:math:`\exp[\mu(X)]` of the surrogate model.
 
@@ -530,6 +529,7 @@ class Exponential_mu(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, a=1.0, fixed=False):
         self.a = a
         self.fixed = fixed
@@ -541,7 +541,8 @@ class Exponential_mu(Acquisition_Function):
             "a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
+        gradient.
 
         Parameters
         ----------
@@ -568,8 +569,10 @@ class Exponential_mu(Acquisition_Function):
 
         if not np.iterable(X):
             X = np.array([X])
-        mu, mu_grad = gp.predict(X, return_std=False, return_cov=False,
-                                    return_mean_grad=True, return_std_grad=False)
+        mu, mu_grad = gp.predict(X, return_std=False,
+                                 return_cov=False,
+                                 return_mean_grad=True,
+                                 return_std_grad=False)
         A_f = np.exp(self.a * mu)
         if eval_gradient:
             A_f_grad = self.a * mu_grad * np.exp(self.a * mu)
@@ -580,6 +583,7 @@ class Exponential_mu(Acquisition_Function):
     def __repr__(self):
         return "{0:.3g}**2".format(np.sqrt(self.a))
 
+
 class Std(Acquisition_Function):
     """:math:`\sigma(X)` of the surrogate model.
 
@@ -589,11 +593,13 @@ class Std(Acquisition_Function):
     Parameters
     ----------
     a : float, default=1.0
-        The value with which :math:`\sigma` is multiplied before exponentiating.
+        The value with which :math:`\sigma` is multiplied before
+        exponentiating.
 
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, a=1.0, fixed=False):
         self.a = a
         self.fixed = fixed
@@ -605,7 +611,8 @@ class Std(Acquisition_Function):
             "a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
+        its gradient.
 
         Parameters
         ----------
@@ -648,6 +655,7 @@ class Std(Acquisition_Function):
     def __repr__(self):
         return "{0:.3f}".format(self.a)
 
+
 class Exponential_std(Acquisition_Function):
     """:math:`\exp[\sigma(X)]` of the surrogate model.
 
@@ -657,7 +665,8 @@ class Exponential_std(Acquisition_Function):
     Parameters
     ----------
     a : float, default=1.0
-        The value with which :math:`\sigma` is multiplied before exponentiating.
+        The value with which :math:`\sigma` is multiplied before
+        exponentiating.
 
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
@@ -673,7 +682,8 @@ class Exponential_std(Acquisition_Function):
             "a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
+        gradient.
 
         Parameters
         ----------
@@ -700,8 +710,11 @@ class Exponential_std(Acquisition_Function):
 
         if not np.iterable(X):
             X = np.array([X])
-        _, std, _, std_grad = gp.predict(X, return_std=True, return_cov=False,
-                                    return_mean_grad=True, return_std_grad=True)
+        _, std, _, std_grad = gp.predict(X,
+                                         return_std=True,
+                                         return_cov=False,
+                                         return_mean_grad=True,
+                                         return_std_grad=True)
         A_f = np.exp(self.a * std)
         if eval_gradient:
             A_f_grad = self.a * std_grad * np.exp(self.a * std)
@@ -712,6 +725,7 @@ class Exponential_std(Acquisition_Function):
     def __repr__(self):
         return "{0:.3f}".format(self.a)
 
+
 class Expected_improvement(Acquisition_Function):
     """Computes the (negative) Expected improvement function.
 
@@ -719,7 +733,8 @@ class Expected_improvement(Acquisition_Function):
     mean and standard deviation approximated by the model.
 
     The EI condition is derived by computing :math:`E[u(f(x))]`
-    where :math:`u(f(x)) = 0`, if :math:`f(x) > y_{\mathrm{opt}}` and :math:`u(f(x)) = y_{\mathrm{opt}} - f(x)`,
+    where :math:`u(f(x)) = 0`, if :math:`f(x) > y_{\mathrm{opt}}`
+    and :math:`u(f(x)) = y_{\mathrm{opt}} - f(x)`,
     if :math:`f(x) < y_{\mathrm{opt}}`.
 
     This solves one of the issues of the PI condition by giving a reward
@@ -745,7 +760,8 @@ class Expected_improvement(Acquisition_Function):
             "xi", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False):
-        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its gradient.
+        """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
+        gradient.
 
         Parameters
         ----------
@@ -814,10 +830,11 @@ class Expected_improvement(Acquisition_Function):
         return "{0:.3f}".format(self.xi)
 
 class Log_exp(Acquisition_Function):
-    """Acquisition function which is designed to efficiently sample log-probability
-    distributions. This is achieved by transforming :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of
-    the true, non-logarithmic probability distribution) to logarithmic space using
-    gaussian error propagation. This gives the acquisition function
+    """Acquisition function which is designed to efficiently sample
+    log-probability distributions. This is achieved by transforming
+    :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
+    probability distribution) to logarithmic space using gaussian error
+    propagation. This gives the acquisition function
 
     .. math::
 
@@ -830,15 +847,16 @@ class Log_exp(Acquisition_Function):
         \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
 
     .. note::
-        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the GP regressor
-        which follows the **log**-probability distribution.
+        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
+        GP regressor which follows the **log**-probability distribution.
 
     Parameters
     ----------
     zeta : float, default=1
-        Controls the exploration-exploitation tradeoff parameter. The value of :math:`\zeta`
-        should not exceed 1 under normal circumstances as a value <1 accounts for the fact
-        that the GP's estimate for :math:`\mu` is not correct at the beginning. A good suggestion
+        Controls the exploration-exploitation tradeoff parameter. The value
+        of :math:`\zeta` should not exceed 1 under normal circumstances as a
+        value <1 accounts for the fact that the GP's estimate for
+        :math:`\mu` is not correct at the beginning. A good suggestion
         for setting zeta which is inspired by simulated annealing is
 
         .. math::
@@ -974,8 +992,8 @@ class Hyperparameter(namedtuple('Hyperparameter',
     """An acquisition function hyperparameter's specification in form of a
     namedtuple. This formalism is copied from the ``kernel`` module of
     Scikit-Learn.
-     .. note::
 
+    .. note::
         The current code does not support optimization of any hyperparameters
         of the acquisition functions. This might be added in the future
         (which is why the ``fixed`` parameter exists).
@@ -1033,11 +1051,13 @@ class Acquisition_Function_Operator(Acquisition_Function):
 
     def get_params(self, deep=True):
         """Get parameters of this acquisition function.
+
         Parameters
         ----------
         deep : bool, default=True
             If True, will return the parameters for this estimator and
             contained subobjects that are estimators.
+
         Returns
         -------
         params : dict
@@ -1203,8 +1223,10 @@ class Exponentiation(Acquisition_Function):
         acquisition function's hyperparameters as this representation of the
         search space is more amenable for hyperparameter search, as
         hyperparameters like length-scales naturally live on a log-scale.
+
         Returns
         -------
+
         theta : ndarray of shape (n_dims,)
             The non-fixed, log-transformed hyperparameters of the acquisition
             function

@@ -65,12 +65,11 @@ class GP_Acquisition(object):
                 # the corresponding value of the target function.
                 return X_opt, func_min
 
-        if set to "auto" either the 'fmin_l_bfgs_b' or 'sampling' algorithm
+        if set to 'auto' either the 'fmin_l_bfgs_b' or 'sampling' algorithm
         from scipy.optimize is used depending on whether gradient information
         is available or not.
 
-        ..note::
-
+        .. note::
             The default optimizers are designed to **maximize** the acquisition
             function.
 
@@ -101,14 +100,6 @@ class GP_Acquisition(object):
 
     surrogate_model_ : SKLearn Gaussian Process Regressor
             The GP Regressor which is currently used for optimization.
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        multi_optimization
-        optimize_acq_func
     """
 
     def __init__(self, bounds,
@@ -220,7 +211,7 @@ class GP_Acquisition(object):
 
         # Initialize arrays for storing the optimized points
         X_opts = np.empty((n_points,
-                surrogate_model.X_train_.shape[1]))
+                           surrogate_model.X_train_.shape[1]))
         y_lies = np.empty(n_points)
         acq_vals = np.empty(n_points)
 
@@ -244,14 +235,13 @@ class GP_Acquisition(object):
                     y_lie, noise_level=lie_noise_level, fit=False)
             else:
                 surrogate_model.append_to_data(X_opt,
-                    y_lie, fit=False)
+                                               y_lie, fit=False)
             # Append the points found to the array
             X_opts[i] = X_opt[0]
             y_lies[i] = y_lie[0]
-            acq_vals[i]  = acq_val
+            acq_vals[i] = acq_val
 
         return X_opts, y_lies, acq_vals
-
 
     def optimize_acq_func(self, surrogate_model, n_cores=1, fit_preprocessor=True):
         """Exposes the optimization method for the acquisition function.
@@ -286,8 +276,8 @@ class GP_Acquisition(object):
 
         # Check whether surrogate_model is a GP regressor
         if not is_regressor(surrogate_model):
-            raise ValueError("surrogate model has to be a GP Regressor. "\
-                "Got %s instead." % surrogate_model)
+            raise ValueError("surrogate model has to be a GP Regressor. "
+                             "Got %s instead." % surrogate_model)
 
         # Check whether the GP has been fit to data before
         if not hasattr(surrogate_model, "X_train_"):
@@ -319,21 +309,21 @@ class GP_Acquisition(object):
             X = np.asarray(X)
             X = np.expand_dims(X, axis=0)
             if X.ndim != 2:
-                raise ValueError("X is {}-dimensional, however, "\
+                raise ValueError("X is {}-dimensional, however, "
                     "it must be 2-dimensional.".format(X.ndim))
             if self.preprocessing_X is not None:
                 X = self.preprocessing_X.inverse_transform(X)
 
             if eval_gradient:
                 acq, grad = self.acq_func(X, self.surrogate_model_,
-                    eval_gradient=True)
+                                          eval_gradient=True)
                 return -acq, -grad
             else:
                 return -1 * self.acq_func(X, self.surrogate_model_,
-                    eval_gradient=False)
+                                          eval_gradient=False)
 
         optima_X = np.empty((self.n_restarts_optimizer+1,
-                           self.surrogate_model_.X_train_.shape[1]))
+                             self.surrogate_model_.X_train_.shape[1]))
         optima_acq_func = np.empty(self.n_restarts_optimizer+1)
 
         # Perform first run from last training point
@@ -342,7 +332,7 @@ class GP_Acquisition(object):
             x0 = self.preprocessing_X.transform(x0)
         optima_X[0], optima_acq_func[0] = \
             self._constrained_optimization(obj_func, x0,
-                                            transformed_bounds)
+                                           transformed_bounds)
         optima_acq_func[0] = np.inf
 
         # Additional runs are performed from uniform chosen initial X's
@@ -352,8 +342,8 @@ class GP_Acquisition(object):
             n_points = 5000
             X_initial = \
                 np.random.uniform(self.bounds[:, 0],
-                    self.bounds[:, 1],
-                    size=(n_points, len(self.bounds[:,0])) )
+                                  self.bounds[:, 1],
+                                  size=(n_points, len(self.bounds[:, 0])))
             values = self.acq_func(X_initial, self.surrogate_model_)
             x0 = X_initial[np.argsort(values)[-self.n_restarts_optimizer:]]
             if self.preprocessing_X is not None:
@@ -362,13 +352,14 @@ class GP_Acquisition(object):
             for i, x_i in enumerate(x0):
                 optima_X[i+1], optima_acq_func[i+1] = \
                     self._constrained_optimization(obj_func, x_i,
-                                                    transformed_bounds)
+                                                   transformed_bounds)
             # Select result from run with maximal acquisition function
             max_pos = np.argmin(optima_acq_func)
             X_opt = optima_X[max_pos]
             # Transform X and clip to bounds
             if self.preprocessing_X is not None:
-                X_opt = self.preprocessing_X.inverse_transform(X_opt, copy=True)
+                X_opt = self.preprocessing_X.inverse_transform(X_opt,
+                                                               copy=True)
             X_opt = np.clip(X_opt, self.bounds[:, 0], self.bounds[:, 1])
 
             # Get the value of the acquisition function at the optimum value
