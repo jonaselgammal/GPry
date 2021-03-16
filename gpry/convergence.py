@@ -14,6 +14,7 @@ from numpy import trace as tr
 from scipy.stats import multivariate_normal, entropy
 from scipy.special import logsumexp
 import warnings
+from random import choice
 
 
 class Convergence_criterion(metaclass=ABCMeta):
@@ -438,6 +439,50 @@ class New_convergence_criterion(Convergence_criterion):
 
         # Here the MCMC is supposed to go & generate points + calculate the kl
         # divergence from them.
+
+        # A lot of this can be moved to __init__
+        # TODO: we need actual prior bounds!!! -- or force to work in preprocessed coords in [0,1]
+        mini, maxi = -1e3, 1e3  # provisional prior bounds
+        dim = gp.X_train.shape[1]
+        params_info = {"x_%d" % i: {"prior": [mini, maxi]} for i in range(dim)}
+        self.cobaya_input = {"params": params_info}
+        # Do NOT move next line to __init__ in any case
+        self.cobaya_input["likelihood"] = {
+            "gp": {"external":
+                   (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
+                   "input_params": list(params_info)}}
+        # Main parameters of this criterion
+        n_steps = 5 * dim  # num steps after which we can assume decorrelation
+        n_draws = 10 * dim  # num of total draws (maybe squared scaling with dim?)
+        self.cobaya_input["sampler"] = {
+            "mcmc": {"covmat": self.cov, "covmat_params": list(params_info),
+                     "max_samples": n_steps, "measure_speeds": False}}
+        # Not necessarily the fastest implementation:
+        n = 0
+        X_values = np.empty(shape=(n_draws, dim))
+        y_values = np.empty(shape=(n_draws, ))
+        from cobaya.run import run as cobaya_run
+        while n < n_draws:
+            this_X = choice(gp.X_train)
+            for p, x in zip(params_info, this_X):
+                params_info[p]["ref"] = x
+            try:
+                _, mcmc_sampler = cobaya_run(self.cobaya_input)
+            except:  # max_tries reached (but may catch and ignore other errors. Not ideal!)
+                continue
+            last_point = mcmc_sampler.products()["sample"][list(params_info)].values[-1]
+            last_gp_value = -0.5 * mcmc_sampler.products()["sample"]["chi2"].values[-1]
+            X_values[n] = last_point
+            y_values[n] = last_gp_value
+            n += 1
+        exp_y = np.exp(y_values - np.max(y_values))
+        self.mean = np.average(X_values, axis=0, weights=exp_y)
+        self.cov = np.cov(X_values.T, aweights=exp_y)
+        print(self.mean)
+        print(self.cov)
+        exit()
+
+        # update self.mean and self.covmat
 
         kl_divergence = None  # Just a placeholder
         return kl_divergence
