@@ -65,6 +65,8 @@ plt.ylabel(r"$y$")
 fig.subplots_adjust(right=0.8)
 cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
 cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
+if not "images" in os.listdir("."):
+    os.makedirs("images")
 plt.savefig("images/Ground_truth.png", dpi=300)
 plt.close()
 
