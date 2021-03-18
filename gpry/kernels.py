@@ -22,10 +22,96 @@ from sklearn.gaussian_process.kernels import StationaryKernelMixin \
 from sklearn.gaussian_process.kernels import Sum as sk_Sum
 from sklearn.gaussian_process.kernels import WhiteKernel as sk_WhiteKernel
 
+from collections import namedtuple
+
+
+class Hyperparameter(namedtuple('Hyperparameter',
+                                ('name', 'value_type', 'bounds',
+                                 'n_elements', 'fixed', 'dynamic'))):
+    """A kernel hyperparameter's specification in form of a namedtuple.
+    .. versionadded:: 0.18
+    Attributes
+    ----------
+    name : str
+        The name of the hyperparameter. Note that a kernel using a
+        hyperparameter with name "x" must have the attributes self.x and
+        self.x_bounds
+    value_type : str
+        The type of the hyperparameter. Currently, only "numeric"
+        hyperparameters are supported.
+    bounds : pair of floats >= 0 or "fixed"
+        The lower and upper bound on the parameter. If n_elements>1, a pair
+        of 1d array with n_elements each may be given alternatively. If
+        the string "fixed" is passed as bounds, the hyperparameter's value
+        cannot be changed.
+    n_elements : int, default=1
+        The number of elements of the hyperparameter value. Defaults to 1,
+        which corresponds to a scalar hyperparameter. n_elements > 1
+        corresponds to a hyperparameter which is vector-valued,
+        such as, e.g., anisotropic length-scales.
+    fixed : bool, default=None
+        Whether the value of this hyperparameter is fixed, i.e., cannot be
+        changed during hyperparameter tuning. If None is passed, the "fixed" is
+        derived based on the given bounds.
+    dynamic : bool, default=None
+        Whether the value of this hyperparameter is dynamic, i.e. whether the
+        bounds of the hyperparameter should automatically be adjusted to two
+        orders of magnitude above and below the current best fit value. If None
+        is passed, the "dynamic" is derived based on the given bounds.
+
+    We overwrite the whole class here since the namedtuple approach does not
+    allow for easy extension.
+
+    For more information on this see
+    `here <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_
+    process.kernels.Hyperparameter.html#sklearn.gaussian_process.kernels.
+    Hyperparameter>`
+    """
+
+    # A raw namedtuple is very memory efficient as it packs the attributes
+    # in a struct to get rid of the __dict__ of attributes in particular it
+    # does not copy the string for the keys on each instance.
+    # By deriving a namedtuple class just to introduce the __init__ method we
+    # would also reintroduce the __dict__ on the instance. By telling the
+    # Python interpreter that this subclass uses static __slots__ instead of
+    # dynamic attributes. Furthermore we don't need any additional slot in the
+    # subclass so we set __slots__ to the empty tuple.
+    __slots__ = ()
+
+    def __new__(cls, name, value_type, bounds, n_elements=1, fixed=None,
+                dynamic=None):
+        if not isinstance(bounds, str) or bounds != "fixed" \
+                or bounds != "dynamic":
+            bounds = np.atleast_2d(bounds)
+            if n_elements > 1:  # vector-valued parameter
+                if bounds.shape[0] == 1:
+                    bounds = np.repeat(bounds, n_elements, 0)
+                elif bounds.shape[0] != n_elements:
+                    raise ValueError("Bounds on %s should have either 1 or "
+                                     "%d dimensions. Given are %d"
+                                     % (name, n_elements, bounds.shape[0]))
+
+        if fixed is None:
+            fixed = isinstance(bounds, str) and bounds == "fixed"
+        if dynamic is None:
+            dynamic = isinstance(bounds, str) and bounds == "dynamic"
+        return super(Hyperparameter, cls).__new__(
+            cls, name, value_type, bounds, n_elements, fixed, dynamic)
+
+    # This is mainly a testing utility to check that two hyperparameters
+    # are equal.
+    def __eq__(self, other):
+        return (self.name == other.name and
+                self.value_type == other.value_type and
+                np.all(self.bounds == other.bounds) and
+                self.n_elements == other.n_elements and
+                self.fixed == other.fixed and
+                self.dynamic == other.dynamic)
+
 
 class Kernel(sk_Kernel):
     """
-    Base class for skopt.gaussian_process kernels.
+    Base class for gpry kernels.
     Supports computation of the gradient of the kernel with respect to X
 
      .. note::
@@ -54,6 +140,52 @@ class Kernel(sk_Kernel):
 
     def __pow__(self, b):
         return Exponentiation(self, b)
+
+    @theta.setter
+    def theta(self, theta):
+        """Sets the (flattened, log-transformed) non-fixed hyperparameters.
+        This is overwritten from the standard sklearn implementation to allow
+        for dynamic hyperparmeter bounds.
+        Parameters
+        ----------
+        theta : ndarray of shape (n_dims,)
+            The non-fixed, log-transformed hyperparameters of the kernel
+        """
+        params = self.get_params()
+        i = 0
+        for hyperparameter in self.hyperparameters:
+            if hyperparameter.fixed:
+                continue
+            if hyperparameter.n_elements > 1:
+                # vector-valued parameter
+                params[hyperparameter.name] = np.exp(
+                    theta[i:i + hyperparameter.n_elements])
+                i += hyperparameter.n_elements
+                if hyperparameter.dynamic:
+                    ###################################################
+                    """
+                    Continue here
+                    """
+            else:
+                params[hyperparameter.name] = np.exp(theta[i])
+                i += 1
+
+        if i != len(theta):
+            raise ValueError("theta has not the correct number of entries."
+                             " Should be %d; given are %d"
+                             % (i, len(theta)))
+        self.set_params(**params)
+
+    @bounds.setter
+    def bounds(self, bounds):
+        """
+        Setter for the bounds of the hyperparameters. Is used when theta is set
+        by an optimizer and the hyperparameters' bounds are set to 'dynamic'.
+        Parameters
+        ----------
+        bounds : ndarray of shape (n_dims, 2)
+            The log-transformed bounds of the kernel's hyperparameters whic
+        """
 
     def gradient_x(self, x, X_train):
         """
