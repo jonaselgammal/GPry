@@ -777,7 +777,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                         std_grad = np.zeros_like(X)
                         return y_mean, y_std, mean_grad, std_grad
                     else:
-                        y_mean, y_std, mean_grad
+                        return y_mean, y_std, mean_grad
                 else:
                     return y_mean, mean_grad
             else:
