@@ -183,8 +183,9 @@ class KL_from_draw(Convergence_criterion):
                 logq = gp_2.predict(X_test)
 
                 mask = np.isfinite(logp) & np.isfinite(logq)
-                p = np.exp(logp[mask])
-                q = np.exp(logq[mask])
+                norm = np.max(logp[mask])
+                p = np.exp(logp[mask]-norm)
+                q = np.exp(logq[mask]-norm)
 
                 kl = entropy(p, qk=q)
 

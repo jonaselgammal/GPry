@@ -118,8 +118,8 @@ class GP_Acquisition(object):
         elif self.acq_func == "Log_exp":
             self.acq_func = Log_exp()
         else:
-            raise TypeError("acq_func needs to be an Acquisition_Function "\
-                            "or 'Log_exp', instead got %s"%acq_func)
+            raise TypeError("acq_func needs to be an Acquisition_Function "
+                            "or 'Log_exp', instead got %s" % acq_func)
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -132,9 +132,10 @@ class GP_Acquisition(object):
         elif isinstance(acq_optimizer, str):
             if acq_optimizer == "fmin_l_bfgs_b":
                 if not self.acq_func.hasgradient:
-                    raise ValueError("In order to use the 'fmin_l_bfgs_b' "\
-                        "optimizer the acquisition function needs to be able "\
-                        "to return gradients. Got %s"%self.acq_func)
+                    raise ValueError(
+                        "In order to use the 'fmin_l_bfgs_b' "
+                        "optimizer the acquisition function needs to be able "
+                        "to return gradients. Got %s" % self.acq_func)
                 self.acq_optimizer = "fmin_l_bfgs_b"
             elif acq_optimizer == "sampling":
                 self.acq_optimizer = "sampling"
@@ -199,14 +200,16 @@ class GP_Acquisition(object):
 
         # Check whether surrogate_model is a GP regressor
         if not is_regressor(surrogate_model):
-            raise ValueError("surrogate model has to be a GP Regressor. "\
+            raise ValueError(
+                "surrogate model has to be a GP Regressor. "
                 "Got %s instead." % surrogate_model)
 
         # Check whether the GP has been fit to data before
         if not hasattr(surrogate_model, "X_train_"):
-            raise AttributeError("The model which is given has not been fed "\
-                "any points. Please make sure, that the model already "\
-                "contains data when trying to optimize an acquisition "\
+            raise AttributeError(
+                "The model which is given has not been fed "
+                "any points. Please make sure, that the model already "
+                "contains data when trying to optimize an acquisition "
                 "function on it as optimizing priors is not supported yet.")
 
         # Initialize arrays for storing the optimized points
@@ -214,6 +217,8 @@ class GP_Acquisition(object):
                            surrogate_model.X_train_.shape[1]))
         y_lies = np.empty(n_points)
         acq_vals = np.empty(n_points)
+        # Mask for deleting points which are already contained in the GP
+        already_sampled = np.ones(n_points, dtype="bool")
 
         # Copy the GP instance as it is modified during
         # the optimization. The GP will be reset after the
@@ -223,27 +228,44 @@ class GP_Acquisition(object):
         for i in range(n_points):
             # Optimize the acquisition function to get the next proposal point
             X_opt, acq_val = self.optimize_acq_func(surrogate_model,
-                n_cores=n_cores, fit_preprocessor=False)
+                                                    n_cores=n_cores,
+                                                    fit_preprocessor=False)
 
-            # Get the "lie" (prediction of the GP at X)
-            y_lie = surrogate_model.predict(X_opt)
+            # Check that the point found is not already in the GP.
+            if X_opt is not None:
+                # Get the "lie" (prediction of the GP at X)
+                y_lie = surrogate_model.predict(X_opt)
 
-            # Take the mean of errors as supposed measurement error
-            if np.iterable(surrogate_model.noise_level):
-                lie_noise_level = np.array([np.mean(surrogate_model.noise_level)])
-                surrogate_model.append_to_data(X_opt,
-                    y_lie, noise_level=lie_noise_level, fit=False)
+                # No need to append if it's the last iteration
+                if i < n_points-1:
+                    # Take the mean of errors as supposed measurement error
+                    if np.iterable(surrogate_model.noise_level):
+                        lie_noise_level = np.array(
+                            [np.mean(surrogate_model.noise_level)])
+                        surrogate_model.append_to_data(
+                            X_opt, y_lie, noise_level=lie_noise_level,
+                            fit=False)
+                    else:
+                        surrogate_model.append_to_data(X_opt, y_lie, fit=False)
+                # Append the points found to the array
+                X_opts[i] = X_opt[0]
+                y_lies[i] = y_lie[0]
+                acq_vals[i] = acq_val
+                already_sampled[i] = False
             else:
-                surrogate_model.append_to_data(X_opt,
-                                               y_lie, fit=False)
-            # Append the points found to the array
-            X_opts[i] = X_opt[0]
-            y_lies[i] = y_lie[0]
-            acq_vals[i] = acq_val
+                already_sampled[i] = True
+        print(X_opts)
+        print(already_sampled)
+
+        # Delete all points which have been acquired multiple times
+        X_opts = X_opts[~already_sampled]
+        y_lies = y_lies[~already_sampled]
+        acq_vals = acq_vals[~already_sampled]
 
         return X_opts, y_lies, acq_vals
 
-    def optimize_acq_func(self, surrogate_model, n_cores=1, fit_preprocessor=True):
+    def optimize_acq_func(self, surrogate_model,
+                          n_cores=1, fit_preprocessor=True):
         """Exposes the optimization method for the acquisition function.
 
         Parameters
@@ -281,9 +303,10 @@ class GP_Acquisition(object):
 
         # Check whether the GP has been fit to data before
         if not hasattr(surrogate_model, "X_train_"):
-            raise AttributeError("The model which is given has not been fed "\
-                "any points. Please make sure, that the model already "\
-                "contains data when trying to optimize an acquisition "\
+            raise AttributeError(
+                "The model which is given has not been fed "
+                "any points. Please make sure, that the model already "
+                "contains data when trying to optimize an acquisition "
                 "function on it as optimizing priors is not supported yet.")
 
         # Preprocessing
@@ -365,11 +388,17 @@ class GP_Acquisition(object):
             # Get the value of the acquisition function at the optimum value
             acq_val = -1 * optima_acq_func[max_pos]
             X_opt = np.array([X_opt])
-            return X_opt, acq_val
 
-        X_opt = optima_X[0]
-        acq_val = optima_acq_func[0]
-        return np.atleast_2d(X_opt), acq_val
+        else:
+            X_opt = np.atleast_2d(optima_X[0])
+            acq_val = np.array([optima_acq_func[0]])
+
+        # Check whether the acquired point already exists in the GP and if so
+        # exclude it.
+        if self._has_already_been_sampled(surrogate_model, X_opt):
+            return None, acq_val
+        else:
+            return X_opt, acq_val
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 
@@ -392,3 +421,22 @@ class GP_Acquisition(object):
             raise ValueError("Unknown optimizer %s." % self.acq_optimizer)
 
         return theta_opt, func_min
+
+    def _has_already_been_sampled(self, gp, new_X):
+        """
+        Method for determining whether points which have been found by the
+        acquisition algorithm are already in the GP. This is called from the
+        optimize_acq_func method to determine whether points may have been
+        sampled multiple times which could break the GP.
+        This is meant to be used for a **single** point new_X.
+        """
+        X_train = np.copy(gp.X_train)
+        print(X_train)
+        print(new_X)
+
+        for i, xi in enumerate(X_train):
+            if np.allclose(new_X, xi):
+                warnings.warn("A point has been sampled multiple times. "
+                              "Excluding this.")
+                return True
+        return False

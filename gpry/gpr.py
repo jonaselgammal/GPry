@@ -1,4 +1,3 @@
-
 # general purpose stuff
 import warnings
 from operator import itemgetter
@@ -599,16 +598,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             L_inv = solve_triangular(self.L_.T, np.eye(self.L_.shape[0]))
             self.K_inv_ = L_inv.dot(L_inv.T)
         except np.linalg.LinAlgError as exc:
-            exc.args = ("The kernel, %s, is not returning a "\
-                        "positive definite matrix. Try gradually "\
-                        "increasing the 'alpha' parameter of your "\
+            exc.args = ("The kernel, %s, is not returning a "
+                        "positive definite matrix. Try gradually "
+                        "increasing the 'alpha' parameter of your "
                         "GaussianProcessRegressor estimator."
                         % self.kernel_,) + exc.args
             raise
         self.alpha_ = self.K_inv_ @ self.y_train_
         # leave this here if stuff doesnt work...
         # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
-
 
         # Reset newly_appended to 0
         self.newly_appended = 0
@@ -640,12 +638,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # newly_appended > 0.
 
         if self.newly_appended < 1:
-            raise ValueError("No new points have been appended to the model. "\
-                "Please append points with the 'append_to_data'-method before "\
+            raise ValueError("No new points have been appended to the model. "
+                "Please append points with the 'append_to_data'-method before "
                 "trying to update.")
 
         if getattr(self, "X_train_", None) is None:
-            raise ValueError("X_train_ is missing. Most probably the model "\
+            raise ValueError("X_train_ is missing. Most probably the model "
                 "hasn't been fit to the data previously.")
 
         if getattr(self, "y_train_", None) is None:
