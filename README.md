@@ -25,9 +25,9 @@ algorithm to be efficient and give correct results are as follows:
 
 ## TODOs for the release:
 
-- Fix the convergence criterion (kl_from_draw does not seem to be working correctly at all)
+- Fix the convergence criterion (kl_from_draw does not seem to be working correctly at all) (In progress)
 - Do some robustness tests of the SVM. It seems like *C* needs to be set to a finite value for the SVM to converge
   in a finite time but this should be checked in detail.
-- Maybe write a method which dynamically expands the hyperparameter space prior so the user doesn't have to worry about this
-- Interface to Cobaya
-- Write a module which acts as a "frontend" for easy use.
+- Maybe write a method which dynamically expands the hyperparameter space prior so the user doesn't have to worry about this (done)
+- Interface to Cobaya (in progress)
+- Write a module which acts as a "frontend" for easy use. (in progress)
