@@ -254,8 +254,6 @@ class GP_Acquisition(object):
                 already_sampled[i] = False
             else:
                 already_sampled[i] = True
-        print(X_opts)
-        print(already_sampled)
 
         # Delete all points which have been acquired multiple times
         X_opts = X_opts[~already_sampled]
@@ -431,8 +429,6 @@ class GP_Acquisition(object):
         This is meant to be used for a **single** point new_X.
         """
         X_train = np.copy(gp.X_train)
-        print(X_train)
-        print(new_X)
 
         for i, xi in enumerate(X_train):
             if np.allclose(new_X, xi):
