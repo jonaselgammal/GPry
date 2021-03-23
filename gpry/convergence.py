@@ -15,6 +15,8 @@ from scipy.stats import multivariate_normal, entropy
 from scipy.special import logsumexp
 import warnings
 from random import choice
+from cobaya.run import run as cobaya_run
+import sys
 
 
 class Convergence_criterion(metaclass=ABCMeta):
@@ -398,10 +400,13 @@ class New_convergence_criterion(Convergence_criterion):
 
     def is_converged(self, gp, gp_2=None):
         crit = self.criterion_value(gp, gp_2)
-        print(crit)
-        if crit < self.limit:
-            return True
-        else:
+        try:
+            if np.all(np.array(self.values[-2:]) < self.limit):
+                return True
+            else:
+                return False
+        except Exception as e:
+            raise(e)
             return False
 
     def criterion_value(self, gp, gp_2=None):
@@ -443,9 +448,11 @@ class New_convergence_criterion(Convergence_criterion):
 
         # A lot of this can be moved to __init__
         # TODO: we need actual prior bounds!!! -- or force to work in preprocessed coords in [0,1]
-        mini, maxi = -1e3, 1e3  # provisional prior bounds
+        bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
         dim = gp.X_train.shape[1]
-        params_info = {"x_%d" % i: {"prior": [mini, maxi]} for i in range(dim)}
+        params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0],
+                                              "max": bounds[i, 1]}
+                                    } for i in range(dim)}
         self.cobaya_input = {"params": params_info}
         # Do NOT move next line to __init__ in any case
         self.cobaya_input["likelihood"] = {
@@ -458,32 +465,56 @@ class New_convergence_criterion(Convergence_criterion):
         self.cobaya_input["sampler"] = {
             "mcmc": {"covmat": self.cov, "covmat_params": list(params_info),
                      "max_samples": n_steps, "measure_speeds": False}}
+        self.cobaya_input["debug"] = 50
         # Not necessarily the fastest implementation:
         n = 0
         X_values = np.empty(shape=(n_draws, dim))
         y_values = np.empty(shape=(n_draws, ))
-        from cobaya.run import run as cobaya_run
         while n < n_draws:
             this_X = choice(gp.X_train)
             for p, x in zip(params_info, this_X):
                 params_info[p]["ref"] = x
             try:
                 _, mcmc_sampler = cobaya_run(self.cobaya_input)
-            except:  # max_tries reached (but may catch and ignore other errors. Not ideal!)
+            except Exception as e:  # max_tries reached (but may catch and ignore other errors. Not ideal!)
+                print(e)
+                sys.exit()
                 continue
             last_point = mcmc_sampler.products()["sample"][list(params_info)].values[-1]
             last_gp_value = -0.5 * mcmc_sampler.products()["sample"]["chi2"].values[-1]
             X_values[n] = last_point
             y_values[n] = last_gp_value
             n += 1
-        exp_y = np.exp(y_values - np.max(y_values))
-        self.mean = np.average(X_values, axis=0, weights=exp_y)
-        self.cov = np.cov(X_values.T, aweights=exp_y)
-        print(self.mean)
-        print(self.cov)
-        exit()
 
-        # update self.mean and self.covmat
+        try:
+            mean_2 = np.copy(self.mean)
+            cov_2 = np.copy(self.cov)
+            exp_y = np.exp(y_values - np.max(y_values))
+            mean_1 = np.average(X_values, axis=0, weights=exp_y)
+            cov_1 = np.cov(X_values.T, aweights=exp_y)
+            self.mean = mean_1
+            self.cov = cov_1
+        except:
+            print("Mean or cov couldn't be calculated...")
+            self.mean = None
+            self.cov = None
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return np.nan
 
-        kl_divergence = None  # Just a placeholder
-        return kl_divergence
+        try:
+            cov_2_inv = np.linalg.inv(cov_2)
+            kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1))
+                        - dim + tr(cov_2_inv@cov_1)
+                        + (mean_2-mean_1).T @ cov_2_inv
+                        @ (mean_2-mean_1))
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return kl
+
+        except Exception as e:
+            print("KL divergence couldn't be calculated.")
+            print(e)
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return np.nan
