@@ -2,6 +2,8 @@ from math import sqrt
 
 import numpy as np
 from sklearn.gaussian_process.kernels import Kernel as sk_Kernel
+from sklearn.gaussian_process.kernels import KernelOperator \
+    as sk_KernelOperator
 from sklearn.gaussian_process.kernels import ConstantKernel \
     as sk_ConstantKernel
 from sklearn.gaussian_process.kernels import DotProduct as sk_DotProduct
@@ -9,7 +11,6 @@ from sklearn.gaussian_process.kernels import Exponentiation \
     as sk_Exponentiation
 from sklearn.gaussian_process.kernels import ExpSineSquared \
     as sk_ExpSineSquared
-from sklearn.gaussian_process.kernels import Hyperparameter
 from sklearn.gaussian_process.kernels import Matern as sk_Matern
 from sklearn.gaussian_process.kernels import NormalizedKernelMixin \
     as sk_NormalizedKernelMixin
@@ -80,8 +81,8 @@ class Hyperparameter(namedtuple('Hyperparameter',
 
     def __new__(cls, name, value_type, bounds, n_elements=1, fixed=None,
                 dynamic=None):
-        if not isinstance(bounds, str) or bounds != "fixed" \
-                or bounds != "dynamic":
+        if not isinstance(bounds, str) or (bounds != "fixed"
+                                           and bounds != "dynamic"):
             bounds = np.atleast_2d(bounds)
             if n_elements > 1:  # vector-valued parameter
                 if bounds.shape[0] == 1:
@@ -141,51 +142,35 @@ class Kernel(sk_Kernel):
     def __pow__(self, b):
         return Exponentiation(self, b)
 
-    @theta.setter
-    def theta(self, theta):
-        """Sets the (flattened, log-transformed) non-fixed hyperparameters.
-        This is overwritten from the standard sklearn implementation to allow
-        for dynamic hyperparmeter bounds.
-        Parameters
-        ----------
-        theta : ndarray of shape (n_dims,)
-            The non-fixed, log-transformed hyperparameters of the kernel
-        """
-        params = self.get_params()
-        i = 0
-        for hyperparameter in self.hyperparameters:
-            if hyperparameter.fixed:
-                continue
-            if hyperparameter.n_elements > 1:
-                # vector-valued parameter
-                params[hyperparameter.name] = np.exp(
-                    theta[i:i + hyperparameter.n_elements])
-                i += hyperparameter.n_elements
-                if hyperparameter.dynamic:
-                    ###################################################
-                    """
-                    Continue here
-                    """
-            else:
-                params[hyperparameter.name] = np.exp(theta[i])
-                i += 1
+    @property
+    def hyperparameters(self):
+        """Returns a list of all hyperparameter specifications."""
+        r = [getattr(self, attr) for attr in dir(self)
+             if attr.startswith("hyperparameter_")]
+        return r
 
-        if i != len(theta):
-            raise ValueError("theta has not the correct number of entries."
-                             " Should be %d; given are %d"
-                             % (i, len(theta)))
-        self.set_params(**params)
-
-    @bounds.setter
-    def bounds(self, bounds):
-        """
-        Setter for the bounds of the hyperparameters. Is used when theta is set
-        by an optimizer and the hyperparameters' bounds are set to 'dynamic'.
-        Parameters
-        ----------
+    @property
+    def bounds(self):
+        """Returns the log-transformed bounds on the theta.
+        Returns
+        -------
         bounds : ndarray of shape (n_dims, 2)
-            The log-transformed bounds of the kernel's hyperparameters whic
+            The log-transformed bounds on the kernel's hyperparameters theta
         """
+        bounds = []
+        params = self.get_params(deep=True)
+        for hyperparameter in self.hyperparameters:
+            if not hyperparameter.fixed:
+                if hyperparameter.dynamic:
+                    thetas = params[hyperparameter.name]
+                    for theta in thetas:
+                        bounds.append([theta*1e-2, theta*1e2])
+                else:
+                    bounds.append(hyperparameter.bounds)
+        if len(bounds) > 0:
+            return np.log(np.vstack(bounds))
+        else:
+            return np.array([])
 
     def gradient_x(self, x, X_train):
         """
@@ -208,6 +193,16 @@ class Kernel(sk_Kernel):
 
 
 class RBF(Kernel, sk_RBF):
+
+    @property
+    def hyperparameter_length_scale(self):
+        if self.anisotropic:
+            return Hyperparameter("length_scale", "numeric",
+                                  self.length_scale_bounds,
+                                  len(self.length_scale))
+        return Hyperparameter(
+            "length_scale", "numeric", self.length_scale_bounds)
+
     def gradient_x(self, x, X_train):
         # diff = (x - X) / length_scale
         # size = (n_train_samples, n_dimensions)
@@ -233,6 +228,16 @@ class RBF(Kernel, sk_RBF):
 
 
 class Matern(Kernel, sk_Matern):
+
+    @property
+    def hyperparameter_length_scale(self):
+        if self.anisotropic:
+            return Hyperparameter("length_scale", "numeric",
+                                  self.length_scale_bounds,
+                                  len(self.length_scale))
+        return Hyperparameter(
+            "length_scale", "numeric", self.length_scale_bounds)
+
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
         X_train = np.asarray(X_train)
@@ -344,6 +349,15 @@ class Matern(Kernel, sk_Matern):
 
 class RationalQuadratic(Kernel, sk_RationalQuadratic):
 
+    @property
+    def hyperparameter_length_scale(self):
+        return Hyperparameter(
+            "length_scale", "numeric", self.length_scale_bounds)
+
+    @property
+    def hyperparameter_alpha(self):
+        return Hyperparameter("alpha", "numeric", self.alpha_bounds)
+
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
         X_train = np.asarray(X_train)
@@ -369,6 +383,17 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
 
 
 class ExpSineSquared(Kernel, sk_ExpSineSquared):
+
+    @property
+    def hyperparameter_length_scale(self):
+        """Returns the length scale"""
+        return Hyperparameter(
+            "length_scale", "numeric", self.length_scale_bounds)
+
+    @property
+    def hyperparameter_periodicity(self):
+        return Hyperparameter(
+            "periodicity", "numeric", self.periodicity_bounds)
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -401,17 +426,58 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
 
 class ConstantKernel(Kernel, sk_ConstantKernel):
 
+    @property
+    def hyperparameter_constant_value(self):
+        return Hyperparameter(
+            "constant_value", "numeric", self.constant_value_bounds)
+
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
 
 
 class WhiteKernel(Kernel, sk_WhiteKernel):
 
+    @property
+    def hyperparameter_noise_level(self):
+        return Hyperparameter(
+            "noise_level", "numeric", self.noise_level_bounds)
+
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
 
 
+class KernelOperator:
+    """
+    Updated to accomodate the new kernel hyperparameter definition.
+    """
+    @property
+    def hyperparameters(self):
+        """Returns a list of all hyperparameter."""
+        r = [Hyperparameter("k1__" + hyperparameter.name,
+                            hyperparameter.value_type,
+                            hyperparameter.bounds, hyperparameter.n_elements)
+             for hyperparameter in self.k1.hyperparameters]
+
+        for hyperparameter in self.k2.hyperparameters:
+            r.append(Hyperparameter("k2__" + hyperparameter.name,
+                                    hyperparameter.value_type,
+                                    hyperparameter.bounds,
+                                    hyperparameter.n_elements))
+        return r
+
+
 class Exponentiation(Kernel, sk_Exponentiation):
+
+    @property
+    def hyperparameters(self):
+        """Returns a list of all hyperparameter."""
+        r = []
+        for hyperparameter in self.kernel.hyperparameters:
+            r.append(Hyperparameter("kernel__" + hyperparameter.name,
+                                    hyperparameter.value_type,
+                                    hyperparameter.bounds,
+                                    hyperparameter.n_elements))
+        return r
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -424,7 +490,11 @@ class Exponentiation(Kernel, sk_Exponentiation):
         return expo * K ** (expo - 1) * kernel.gradient_x(x, X_train)
 
 
-class Sum(Kernel, sk_Sum):
+class Sum(KernelOperator, Kernel, sk_Sum):
+
+    @property
+    def hyperparameters(self):
+        return super(KernelOperator, self).hyperparameters
 
     def gradient_x(self, x, X_train):
         return (
@@ -433,7 +503,11 @@ class Sum(Kernel, sk_Sum):
         )
 
 
-class Product(Kernel, sk_Product):
+class Product(KernelOperator, Kernel, sk_Product):
+
+    @property
+    def hyperparameters(self):
+        return super().hyperparameters
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -452,112 +526,9 @@ class Product(Kernel, sk_Product):
 
 class DotProduct(Kernel, sk_DotProduct):
 
+    @property
+    def hyperparameter_sigma_0(self):
+        return Hyperparameter("sigma_0", "numeric", self.sigma_0_bounds)
+
     def gradient_x(self, x, X_train):
         return np.asarray(X_train)
-
-
-class HammingKernel(sk_StationaryKernelMixin, sk_NormalizedKernelMixin,
-                    Kernel):
-    """
-    The HammingKernel is used to handle categorical inputs.
-
-    ``K(x_1, x_2) = exp(\sum_{j=1}^{d} -ls_j * (I(x_1j != x_2j)))``
-
-    Parameters
-    -----------
-    * `length_scale` [float, array-like, shape=[n_features,], 1.0 (default)]
-        The length scale of the kernel. If a float, an isotropic kernel is
-        used. If an array, an anisotropic kernel is used where each dimension
-        of l defines the length-scale of the respective feature dimension.
-
-    * `length_scale_bounds` [array-like, [1e-5, 1e5] (default)]
-        The lower and upper bound on length_scale
-    """
-
-    def __init__(self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5)):
-        self.length_scale = length_scale
-        self.length_scale_bounds = length_scale_bounds
-
-    @property
-    def hyperparameter_length_scale(self):
-        length_scale = self.length_scale
-        anisotropic = np.iterable(length_scale) and len(length_scale) > 1
-        if anisotropic:
-            return Hyperparameter("length_scale", "numeric",
-                                  self.length_scale_bounds,
-                                  len(length_scale))
-        return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds)
-
-    def __call__(self, X, Y=None, eval_gradient=False):
-        """Return the kernel k(X, Y) and optionally its gradient.
-
-        Parameters
-        ----------
-        * `X` [array-like, shape=(n_samples_X, n_features)]
-            Left argument of the returned kernel k(X, Y)
-
-        * `Y` [array-like, shape=(n_samples_Y, n_features) or None(default)]
-            Right argument of the returned kernel k(X, Y). If None, k(X, X)
-            if evaluated instead.
-
-        * `eval_gradient` [bool, False(default)]
-            Determines whether the gradient with respect to the kernel
-            hyperparameter is determined. Only supported when Y is None.
-
-        Returns
-        -------
-        * `K` [array-like, shape=(n_samples_X, n_samples_Y)]
-            Kernel k(X, Y)
-
-        * `K_gradient` [array-like, shape=(n_samples_X, n_samples_X, n_dims)]
-            The gradient of the kernel k(X, X) with respect to the
-            hyperparameter of the kernel. Only returned when eval_gradient
-            is True.
-        """
-        length_scale = self.length_scale
-        anisotropic = np.iterable(length_scale) and len(length_scale) > 1
-
-        if np.iterable(length_scale):
-            if len(length_scale) > 1:
-                length_scale = np.asarray(length_scale, dtype=np.float)
-            else:
-                length_scale = float(length_scale[0])
-        else:
-            length_scale = float(length_scale)
-
-        X = np.atleast_2d(X)
-        if anisotropic and X.shape[1] != len(length_scale):
-            raise ValueError(
-                "Expected X to have %d features, got %d" %
-                (len(length_scale), X.shape[1]))
-
-        n_samples, n_dim = X.shape
-
-        Y_is_None = Y is None
-        if Y_is_None:
-            Y = X
-        elif eval_gradient:
-            raise ValueError("gradient can be evaluated only when Y != X")
-        else:
-            Y = np.atleast_2d(Y)
-
-        indicator = np.expand_dims(X, axis=1) != Y
-        kernel_prod = np.exp(-np.sum(length_scale * indicator, axis=2))
-
-        # dK / d theta = (dK / dl) * (dl / d theta)
-        # theta = log(l) => dl / d (theta) = e^theta = l
-        # dK / d theta = l * dK / dl
-
-        # dK / dL computation
-        if anisotropic:
-            grad = (-np.expand_dims(kernel_prod, axis=-1) *
-                    np.array(indicator, dtype=np.float32))
-        else:
-            grad = -np.expand_dims(kernel_prod * np.sum(indicator, axis=2),
-                                   axis=-1)
-
-        grad *= length_scale
-        if eval_gradient:
-            return kernel_prod, grad
-        return kernel_prod
