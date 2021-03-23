@@ -12,7 +12,6 @@ from gpry.kernels import RBF, ConstantKernel as C
 from gpry.svm import SVM
 
 # sklearn GP and kernel utilities
-import sklearn
 from sklearn.gaussian_process import GaussianProcessRegressor \
     as sk_GaussianProcessRegressor
 from sklearn.base import clone, BaseEstimator as BE
@@ -569,7 +568,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
-                bounds = self.kernel_.bounds
+                bounds = np.copy(self.kernel_.bounds)
                 for iteration in range(self.n_restarts_optimizer):
                     theta_initial = \
                         self._rng.uniform(bounds[:, 0], bounds[:, 1])
