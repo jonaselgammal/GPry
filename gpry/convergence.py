@@ -383,8 +383,9 @@ class KL_from_MC_training(Convergence_criterion):
     """
 
     def __init__(self, prior, params):
-        from cobaya.run import run as cobaya_run
-        global cobaya_run
+        from cobaya.model import get_model
+        from cobaya.sampler import get_sampler
+        global get_model, get_sampler
         self.prior = prior
         self.cov = None
         self.mean = None
@@ -401,10 +402,7 @@ class KL_from_MC_training(Convergence_criterion):
         bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
         params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
                        for i in range(self.prior.d())}
-        self.cobaya_input = {
-            "params": params_info,
-            "sampler": {"mcmc": {
-                "covmat_params": list(params_info), "measure_speeds": False}}}
+        self.cobaya_input = {"params": params_info}
 
     @property
     def n_draws(self):
@@ -462,36 +460,44 @@ class KL_from_MC_training(Convergence_criterion):
             if self.cov is None:
                 self.cov = cov_prior
         # Update Cobaya's input: mcmc's propolsal covmat and log-likelihood
-        self.cobaya_input["sampler"]["mcmc"]["covmat"] = self.cov
         self.cobaya_input["likelihood"] = {
             "gp": {"external":
                    (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
                    "input_params": list(self.cobaya_input["params"])}}
         self.cobaya_input["debug"] = 50
+        model = get_model(self.cobaya_input)
         # TODO: improve this implementation by running longer chains each time,
         # so that max_sampler is n_steps * #points_to_be_acquired
-        # --> it would save quite a bit of time (many cobaya restarts)
-        self.cobaya_input["sampler"]["mcmc"]["max_samples"] = self.n_steps
+        # (but maybe then points are too decorrelated from training/starting points?)
         n = 0
         X_values = np.empty(shape=(self.n_draws, self.prior.d()))
         y_values = np.empty(shape=(self.n_draws, ))
         while n < self.n_draws:
             this_X = choice(gp.X_train)
             # Starting point of the chain
-            for p, x in zip(self.cobaya_input["params"], this_X):
-                self.cobaya_input["params"][p]["ref"] = x
+            # TODO: this is hacky. Update when prior.set_ref created (or sth in mcmc)
+            for i, (p, x) in enumerate(zip(self.cobaya_input["params"], this_X)):
+                model.prior.ref_pdf[i] = x
+            model.prior._ref_is_pointlike = True
+            # TODO: hopefully in the future not necessary to re-initialise the sampler
+            info_sampler = {
+                "mcmc":
+                {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
+                 "measure_speeds": False, "max_samples": self.n_steps}}
+            mcmc_sampler = get_sampler(info_sampler, model)
             try:
-                _, mcmc_sampler = cobaya_run(self.cobaya_input)
-            except Exception as e:  # max_tries reached (but may catch and ignore other errors. Not ideal!)
+                mcmc_sampler.run()
+            except Exception as e:
+                # max_tries reached (but may catch and ignore other errors. Not ideal!)
                 print(e)
-                sys.exit()
+                # sys.exit()
                 continue
-            last_point = mcmc_sampler.products()["sample"][list(self.cobaya_input["params"])].values[-1]
+            last_point = mcmc_sampler.products()["sample"][
+                list(self.cobaya_input["params"])].values[-1]
             last_gp_value = -0.5 * mcmc_sampler.products()["sample"]["chi2"].values[-1]
             X_values[n] = last_point
             y_values[n] = last_gp_value
             n += 1
-
         # import matplotlib.pyplot as plt
         # plt.figure()
         # plt.scatter(*gp.X_train.T, marker="o", label="train")
@@ -499,15 +505,13 @@ class KL_from_MC_training(Convergence_criterion):
         # plt.legend()
         # plt.savefig("images/MC-generated.png")
         # plt.close()
-
+        # Compute the mean and covmat using appropriate weighting (if possible)
         try:
-            mean_2 = np.copy(self.mean)
-            cov_2 = np.copy(self.cov)
-            exp_y = np.exp(y_values - np.max(y_values))
-            mean_1 = np.average(X_values, axis=0, weights=exp_y)
-            cov_1 = np.cov(X_values.T, aweights=exp_y)
-            self.mean = mean_1
-            self.cov = cov_1
+            mean_old = np.copy(self.mean)
+            cov_old = np.copy(self.cov)
+            exp_y_new = np.exp(y_values - np.max(y_values))
+            self.mean = np.average(X_values, axis=0, weights=exp_y_new)
+            self.cov = np.cov(X_values.T, aweights=exp_y_new)
         except:
             print("Mean or cov couldn't be calculated...")
             self.mean = None
@@ -515,17 +519,16 @@ class KL_from_MC_training(Convergence_criterion):
             self.values.append(np.nan)
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
             return np.nan
-
+        # Compute the KL divergence (gaussian approx) with the previous iteration
         try:
-            cov_2_inv = np.linalg.inv(cov_2)
-            kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1))
-                        - self.prior.d() + tr(cov_2_inv@cov_1)
-                        + (mean_2-mean_1).T @ cov_2_inv
-                        @ (mean_2-mean_1))
+            cov_old_inv = np.linalg.inv(cov_old)
+            kl = 0.5 * (np.log(det(cov_old)) - np.log(det(self.cov))
+                        - self.prior.d() + tr(cov_old_inv @ self.cov)
+                        + (mean_old - self.mean).T @ cov_old_inv
+                        @ (mean_old - self.mean))
             self.values.append(kl)
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
             return kl
-
         except Exception as e:
             print("KL divergence couldn't be calculated.")
             print(e)
