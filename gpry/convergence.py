@@ -492,10 +492,13 @@ class KL_from_MC_training(Convergence_criterion):
             y_values[n] = last_gp_value
             n += 1
 
-#        import matplotlib.pyplot as plt
-#        plt.scatter(*gp.X_train.T, marker="o")
-#        plt.scatter(*X_values.T, marker="^")
-#        plt.savefig("new.png")
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.scatter(*gp.X_train.T, marker="o", label="train")
+        # plt.scatter(*X_values.T, marker="^", label="mcmc")
+        # plt.legend()
+        # plt.savefig("images/MC-generated.png")
+        # plt.close()
 
         try:
             mean_2 = np.copy(self.mean)
