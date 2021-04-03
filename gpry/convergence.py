@@ -15,7 +15,6 @@ from scipy.stats import multivariate_normal, entropy
 from scipy.special import logsumexp
 import warnings
 from random import choice
-from cobaya.run import run as cobaya_run
 import sys
 
 
@@ -376,7 +375,7 @@ class KL_from_training(Convergence_criterion):
                 return np.nan
 
 
-class New_convergence_criterion(Convergence_criterion):
+class KL_from_MC_training(Convergence_criterion):
     """
     This class is supposed to use a short MCMC chain to get independent samples
     from the posterior distribution. These can then be used to get the KL
@@ -384,22 +383,38 @@ class New_convergence_criterion(Convergence_criterion):
     """
 
     def __init__(self, prior, params):
+        from cobaya.run import run as cobaya_run
+        global cobaya_run
         self.prior = prior
         self.cov = None
         self.mean = None
-        self.limit = params.get("limit", 1e-2)
-        # Number of MCMC chains to generate samples
-        self.n_draws = params.get("n_chains", 100)
-        # Number of jumps per MCMC chain
-        self.n_jumps_per_chain = params.get("n_jumps_per_chain", 10)
-        self.n_initial = params.get("n_initial", 500)
-        self.gp_2 = None
-
         self.values = []
+        self.limit = params.get("limit", 1e-2)
         self.n_posterior_evals = []
+        # Number of MCMC chains to generate samples
+        self.n_draws_per_dimsquared = params.get("n_draws_per_dimsquared", 10)
+        # Number of jumps necessary to assume decorrelation
+        self.n_steps_per_dim = params.get("n_steps_per_dim", 5)
+        # Number of prior draws for the initial sample
+        self.n_initial = params.get("n_initial", 500)
+        # Prepare Cobaya's input
+        bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
+        params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
+                       for i in range(self.prior.d())}
+        self.cobaya_input = {
+            "params": params_info,
+            "sampler": {"mcmc": {
+                "covmat_params": list(params_info), "measure_speeds": False}}}
+
+    @property
+    def n_draws(self):
+        return self.n_draws_per_dimsquared * self.prior.d()**2
+
+    @property
+    def n_steps(self):
+        return self.n_steps_per_dim * self.prior.d()
 
     def is_converged(self, gp, gp_2=None):
-        crit = self.criterion_value(gp, gp_2)
         try:
             if np.all(np.array(self.values[-2:]) < self.limit):
                 return True
@@ -409,82 +424,78 @@ class New_convergence_criterion(Convergence_criterion):
             raise(e)
             return False
 
+    def from_prior(self, gp):
+        """
+        Get mean and covmat from a prior sample.
+        """
+        X_values = self.prior.sample(self.n_initial)
+        y_values = gp.predict(X_values)
+        # Right now this doesn't check whether the value of the covariance
+        # matrix is numerically stable i.e. whether it's converged. This
+        # shouldn't matter too much though since it's only run once at the
+        # beginning and then the MCMC should take care of the rest.
+        while True:  # Maybe need something better here so it can't get stuck
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error')
+                try:
+                    y_values = np.exp(y_values - np.max(y_values))
+                    mean = np.average(X_values, axis=0, weights=y_values)
+                    cov = np.cov(X_values.T, aweights=y_values)
+                    return mean, cov
+                except:
+                    # Draw more points and try again
+                    X_values = np.append(X_values,
+                                         self.prior.sample(self.n_initial),
+                                         axis=0)
+
     def criterion_value(self, gp, gp_2=None):
         """
         This is the important part of the code. Here the calculation of the
         value of the convergence criterion should be performed.
         """
-
         # Draw samples from the prior until mean and cov stabilize
         # to get an initial guess for the MCMC
         if self.mean is None or self.cov is None:
-            X_values = self.prior.sample(self.n_initial)
-            y_values = gp.predict(X_values)
-            # Right now this doesn't check whether the value of the covariance
-            # matrix is numerically stable i.e. whether it's converged. This
-            # shouldn't matter too much though since it's only run once at the
-            # beginning and then the MCMC should take care of the rest.
-            while True:  # Maybe need something better here so it can't get stuck
-                with warnings.catch_warnings():
-                    warnings.filterwarnings('error')
-                    try:
-                        y_values = np.exp(y_values - np.max(y_values))
-
-                        # Actually calculate the mean and cov
-                        self.mean = np.average(X_values, axis=0, weights=y_values)
-                        self.cov = np.cov(X_values.T, aweights=y_values)
-
-                        break
-                    except:
-                        X_values = np.append(X_values,
-                                             self.prior.sample(self.n_initial),
-                                             axis=0)
-                        y_values = np.append(y_values, gp.predict(X_values))
-                        self.mean = None
-                        self.cov = None
-
-        # Here the MCMC is supposed to go & generate points + calculate the kl
-        # divergence from them.
-
-        # A lot of this can be moved to __init__
-        # TODO: we need actual prior bounds!!! -- or force to work in preprocessed coords in [0,1]
-        bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
-        dim = gp.X_train.shape[1]
-        params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0],
-                                              "max": bounds[i, 1]}
-                                    } for i in range(dim)}
-        self.cobaya_input = {"params": params_info}
-        # Do NOT move next line to __init__ in any case
+            mean_prior, cov_prior = self.from_prior(gp)
+            if self.mean is None:
+                self.mean = mean_prior
+            if self.cov is None:
+                self.cov = cov_prior
+        # Update Cobaya's input: mcmc's propolsal covmat and log-likelihood
+        self.cobaya_input["sampler"]["mcmc"]["covmat"] = self.cov
         self.cobaya_input["likelihood"] = {
             "gp": {"external":
                    (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
-                   "input_params": list(params_info)}}
-        # Main parameters of this criterion
-        n_steps = 5 * dim  # num steps after which we can assume decorrelation
-        n_draws = 10 * dim  # num of total draws (maybe squared scaling with dim?)
-        self.cobaya_input["sampler"] = {
-            "mcmc": {"covmat": self.cov, "covmat_params": list(params_info),
-                     "max_samples": n_steps, "measure_speeds": False}}
+                   "input_params": list(self.cobaya_input["params"])}}
         self.cobaya_input["debug"] = 50
-        # Not necessarily the fastest implementation:
+        # TODO: improve this implementation by running longer chains each time,
+        # so that max_sampler is n_steps * #points_to_be_acquired
+        # --> it would save quite a bit of time (many cobaya restarts)
+        self.cobaya_input["sampler"]["mcmc"]["max_samples"] = self.n_steps
         n = 0
-        X_values = np.empty(shape=(n_draws, dim))
-        y_values = np.empty(shape=(n_draws, ))
-        while n < n_draws:
+        X_values = np.empty(shape=(self.n_draws, self.prior.d()))
+        y_values = np.empty(shape=(self.n_draws, ))
+        while n < self.n_draws:
             this_X = choice(gp.X_train)
-            for p, x in zip(params_info, this_X):
-                params_info[p]["ref"] = x
+            # Starting point of the chain
+            for p, x in zip(self.cobaya_input["params"], this_X):
+                self.cobaya_input["params"][p]["ref"] = x
             try:
                 _, mcmc_sampler = cobaya_run(self.cobaya_input)
             except Exception as e:  # max_tries reached (but may catch and ignore other errors. Not ideal!)
                 print(e)
                 sys.exit()
                 continue
-            last_point = mcmc_sampler.products()["sample"][list(params_info)].values[-1]
+            last_point = mcmc_sampler.products()["sample"][list(self.cobaya_input["params"])].values[-1]
             last_gp_value = -0.5 * mcmc_sampler.products()["sample"]["chi2"].values[-1]
             X_values[n] = last_point
             y_values[n] = last_gp_value
             n += 1
+
+#        import matplotlib.pyplot as plt
+#        plt.scatter(*gp.X_train.T, marker="o")
+#        plt.scatter(*X_values.T, marker="^")
+#        plt.savefig("new.png")
 
         try:
             mean_2 = np.copy(self.mean)
@@ -505,7 +516,7 @@ class New_convergence_criterion(Convergence_criterion):
         try:
             cov_2_inv = np.linalg.inv(cov_2)
             kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1))
-                        - dim + tr(cov_2_inv@cov_1)
+                        - self.prior.d() + tr(cov_2_inv@cov_1)
                         + (mean_2-mean_1).T @ cov_2_inv
                         @ (mean_2-mean_1))
             self.values.append(kl)

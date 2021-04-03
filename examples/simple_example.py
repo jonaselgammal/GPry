@@ -20,7 +20,7 @@ from gpry.acquisition_functions import Log_exp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
-from gpry.convergence import KL_from_draw
+from gpry.convergence import KL_from_draw, KL_from_MC_training
 from gpry.gp_acquisition import GP_Acquisition
 
 # Cobaya things needed for building the model
@@ -79,6 +79,7 @@ gp = GaussianProcessRegressor(kernel=kernel,
                               preprocessing_X=Normalize_bounds(bnds),
                               preprocessing_y=Normalize_y(),
                               n_restarts_optimizer=20,
+#                              account_for_inf=None,  # disable SVM for tests
                               noise_level=0.01)
 af = Log_exp()
 
@@ -94,6 +95,8 @@ gp.append_to_data(init_X, init_y, fit=True)
 convergence_criterion = KL_from_draw(model.prior,
                                      {"limit": 1e-2,
                                       "n_draws": 5000})
+#convergence_criterion = KL_from_MC_training(model.prior, {})
+
 
 n_points = 2 # Number of acquired points per step
 y_s = init_y
