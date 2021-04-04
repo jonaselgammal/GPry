@@ -163,8 +163,11 @@ class Kernel(sk_Kernel):
             if not hyperparameter.fixed:
                 if hyperparameter.dynamic:
                     thetas = params[hyperparameter.name]
-                    for theta in thetas:
-                        bounds.append([theta*1e-2, theta*1e2])
+                    if np.iterable(thetas):
+                        for theta in thetas:
+                            bounds.append([theta*1e-2, theta*1e2])
+                    else:
+                        bounds.append([thetas*1e-2, thetas*1e2])
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
