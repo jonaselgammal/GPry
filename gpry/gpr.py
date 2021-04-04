@@ -47,7 +47,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         The kernel specifying the covariance function of the GP. If "RBF" is
         passed, the asymmetric kernel::
 
-            ConstantKernel(1, (1e-3,1e2)) * RBF([1]*n_dim,[[1e-3, 1e2]*n_dim])
+            ConstantKernel(1, "dynamic") * RBF([1]*n_dim, "dynamic")
 
         is used as default where ``n_dim`` is the number of dimensions of the
         training space. Note that the kernel's hyperparameters are optimized
@@ -122,6 +122,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
+    verbose : 1, 2, 3 optional (default: 1)
+        Level of verbosity of the GP. 3 prints Infos, Warnings and Errors, 2
+        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
+        problems arise.
+
     Attributes
     ----------
 
@@ -194,7 +199,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
                  account_for_inf="SVM",
-                 copy_X_train=True, random_state=None):
+                 copy_X_train=True, random_state=None,
+                 verbose=1):
         self.newly_appended = 0
 
         self.preprocessing_X = preprocessing_X
@@ -202,18 +208,34 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.noise_level = noise_level
 
+        self.verbose = verbose
+
         # Initialize SVM if given
         if account_for_inf=="SVM":
             self.account_for_inf = SVM()
         else:
             self.account_for_inf = account_for_inf
 
-
         super(GaussianProcessRegressor, self).__init__(
             kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
             normalize_y=False, copy_X_train=copy_X_train,
             random_state=random_state)
+
+        if self.verbose == 3:
+            print("Initializing GP with the following options:")
+            print("===========================================")
+            print("Kernel:")
+            if kernel == "RBF":
+                print("ConstantKernel(1, 'dynamic')"
+                      " * RBF([1]*n_dim, 'dynamic')")
+            else:
+                print(self.kernel.hyperparameters)
+            print("Optimizer restarts: %i" % n_restarts_optimizer)
+            print("X-preprocessor: %s" % (preprocessing_X is not None))
+            print("y-preprocessor: %s" % (preprocessing_y is not None))
+            print("SVM to account for infinities: %s"
+                  % (account_for_inf is not None))
 
     def append_to_data(self, X, y, noise_level=None, fit=True):
         """Append newly acquired data to the GP Model and updates it.
@@ -272,7 +294,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Check if X_train and y_train exist to see if a model
         # has previously been fit to the data
         if not (hasattr(self, "X_train_") and hasattr(self, "y_train_")):
-            if not fit:
+            if not fit and self.verbose > 1:
                 warnings.warn("No model has previously been fit to the data, "\
                     "a model will be fit with X and y instead of just "\
                     "updating with the same kernel hyperparameters")
@@ -311,9 +333,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     self.noise_level_ = np.append(self.noise_level_,
                         noise_level_transformed, axis=0)
             else:
-                warnings.warn("A new noise level has been assigned to the "\
-                    "updated training set while the old training set has a "\
-                    "single scalar noise level: %s"%self.noise_level)
+                if self.verbose > 1:
+                    warnings.warn(
+                        "A new noise level has been assigned to the "
+                        "updated training set while the old training set has a"
+                        " single scalar noise level: %s" % self.noise_level)
                 noise_level = np.append(np.ones(self.y_train_.shape) * \
                     self.noise_level, noise_level, axis=0)
                 self.noise_level = noise_level
@@ -331,7 +355,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     "give one scalar value or a different one for each "\
                     "training point.")
         elif isinstance(noise_level, int) or isinstance(noise_level, float):
-            if not fit:
+            if not fit and self.verbose > 1:
                 warnings.warn("Overwriting the noise level with a scalar "\
                     "without refitting the kernel's hyperparamters. This may "\
                     "cause unwanted behaviour.")
@@ -466,8 +490,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.kernel == "RBF":  # Use an RBF kernel as default
             # check how many dimensions X has
             n_dim = X.shape[-1]
-            self.kernel = C(1.0, [1e-3, 1e2]) \
-                * RBF([1.0]*n_dim, [[1e-4, 1e2]*n_dim])
+            self.kernel = C(1.0, "dynamic") \
+                * RBF([1.0]*n_dim, "dynamic")
         if not hasattr(self, 'kernel_'):
             self.kernel_ = clone(self.kernel)
 
@@ -845,7 +869,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Check if any of the variances is negative because of
             # numerical issues. If yes: set the variance to 0.
             y_var_negative = y_var < 0
-            if np.any(y_var_negative):
+            if np.any(y_var_negative) and self.verbose > 1:
                 warnings.warn("Predicted variances smaller than 0. "
                               "Setting those variances to 0.")
                 y_var[y_var_negative] = 0.0
