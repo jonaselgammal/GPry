@@ -29,6 +29,8 @@ from cobaya.model import get_model
 from getdist.mcsamples import MCSamplesFromCobaya
 import getdist.plots as gdplt
 
+import warnings
+
 rv = multivariate_normal([3, 2], [[0.5, 0.4], [0.4, 1.5]])
 
 
@@ -104,10 +106,15 @@ y_s = init_y
 for _ in range(10):
     old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
-    new_y = f(new_X[:, 0], new_X[:, 1])
-    y_s = np.append(y_s, new_y)
-    gp.append_to_data(new_X, new_y, fit=True)
-    print(convergence_criterion.criterion_value(gp, old_gp))
+    if len(new_X) != 0:
+        new_y = f(new_X[:, 0], new_X[:, 1])
+        y_s = np.append(y_s, new_y)
+        gp.append_to_data(new_X, new_y, fit=True)
+        print(convergence_criterion.criterion_value(gp, old_gp))
+    else:
+        warnings.warn("No points were added to the GP because the proposed"
+                      " points have already been evaluated.")
+
     # This should stop the algorithm but since the KL divergence doesn't work
     # I turned it off.
     """
