@@ -81,7 +81,7 @@ gp = GaussianProcessRegressor(kernel=kernel,
                               preprocessing_X=Normalize_bounds(bnds),
                               preprocessing_y=Normalize_y(),
                               n_restarts_optimizer=20,
-#                              account_for_inf=None,  # disable SVM for tests
+                              account_for_inf=None,  # disable SVM for tests
                               noise_level=0.01)
 af = Log_exp()
 
@@ -107,7 +107,7 @@ for _ in range(10):
     old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
     if len(new_X) != 0:
-        new_y = f(new_X[:, 0], new_X[:, 1])
+        new_y = np.atleast_1d(f(new_X[:, 0], new_X[:, 1]))
         y_s = np.append(y_s, new_y)
         gp.append_to_data(new_X, new_y, fit=True)
         print(convergence_criterion.criterion_value(gp, old_gp))
