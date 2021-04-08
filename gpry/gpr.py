@@ -18,6 +18,7 @@ from sklearn.base import clone, BaseEstimator as BE
 
 # sklearn utilities
 from sklearn.utils import check_random_state
+from sklearn.utils.optimize import _check_optimize_result
 from sklearn.utils.validation import check_array
 
 
@@ -863,15 +864,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
             # Compute variance of predictive distribution
             y_var = self.kernel_.diag(X)
-            y_var -= np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
+            y_var -= np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
             # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
+            # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
 
             # Check if any of the variances is negative because of
             # numerical issues. If yes: set the variance to 0.
             y_var_negative = y_var < 0
-            if np.any(y_var_negative) and self.verbose > 1:
-                warnings.warn("Predicted variances smaller than 0. "
-                              "Setting those variances to 0.")
+            if np.any(y_var_negative):
+                if self.verbose > 1:
+                    warnings.warn("Predicted variances smaller than 0. "
+                                  "Setting those variances to 0.")
                 y_var[y_var_negative] = 0.0
             y_std = np.sqrt(y_var)
 
@@ -969,3 +972,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if hasattr(self, "account_for_inf"):
             c.account_for_inf = self.account_for_inf
         return c
+
+    def _constrained_optimization(self, obj_func, initial_theta, bounds):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if self.optimizer == "fmin_l_bfgs_b":
+                opt_res = scipy.optimize.minimize(
+                    obj_func, initial_theta, method="L-BFGS-B", jac=True,
+                    bounds=bounds)
+                if self.verbose > 1:
+                    _check_optimize_result("lbfgs", opt_res)
+                theta_opt, func_min = opt_res.x, opt_res.fun
+            elif callable(self.optimizer):
+                theta_opt, func_min = \
+                    self.optimizer(obj_func, initial_theta, bounds=bounds)
+            else:
+                raise ValueError("Unknown optimizer %s." % self.optimizer)
+
+        return theta_opt, func_min
