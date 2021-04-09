@@ -20,7 +20,7 @@ from gpry.acquisition_functions import Log_exp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
-from gpry.convergence import KL_from_draw, KL_from_MC_training
+from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_approx
 from gpry.gp_acquisition import GP_Acquisition
 
 # Cobaya things needed for building the model
@@ -28,6 +28,9 @@ from cobaya.run import run
 from cobaya.model import get_model
 from getdist.mcsamples import MCSamplesFromCobaya
 import getdist.plots as gdplt
+
+from numpy.linalg import det
+from numpy import trace as tr
 
 import warnings
 
@@ -83,7 +86,7 @@ gp = GaussianProcessRegressor(kernel=kernel,
                               n_restarts_optimizer=20,
                               account_for_inf=None,  # disable SVM for tests
                               noise_level=0.01)
-af = Log_exp()
+af = Log_exp(zeta=1.)
 
 acquire = GP_Acquisition(bnds,
                          acq_func=af,
@@ -94,23 +97,47 @@ init_y = f(init_X[:, 0], init_X[:, 1])
 
 gp.append_to_data(init_X, init_y, fit=True)
 
-convergence_criterion = KL_from_draw(model.prior,
+convergence_criterion_1 = KL_from_MC_training(model.prior,
                                      {"limit": 1e-2,
                                       "n_draws": 5000})
-#convergence_criterion = KL_from_MC_training(model.prior, {})
+convergence_criterion_2 = KL_from_draw_approx(model.prior, {"n_draws": 50000})
+convergence_criterion_3 = KL_from_draw(model.prior, {"n_draws": 50000})
 
 
 n_points = 2 # Number of acquired points per step
 y_s = init_y
+true_kl = []
 
-for _ in range(10):
+for _ in range(20):
     old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
     if len(new_X) != 0:
         new_y = np.atleast_1d(f(new_X[:, 0], new_X[:, 1]))
         y_s = np.append(y_s, new_y)
         gp.append_to_data(new_X, new_y, fit=True)
-        print(convergence_criterion.criterion_value(gp, old_gp))
+        # print(convergence_criterion.criterion_value(gp, old_gp))
+        print("MCMC:         ", convergence_criterion_1.criterion_value(gp, old_gp))
+        print("Prior approx: ", convergence_criterion_2.criterion_value(gp, old_gp))
+        print("Prior full:   ", convergence_criterion_3.criterion_value(gp, old_gp))
+        # Take cov and mean from the prior sampled KL divergence
+        cov_old = convergence_criterion_2.cov
+        mean_old = convergence_criterion_2.mean
+        # mean_new and cov_new are just taken from the definition of the
+        # posterior distribution above
+        mean_new = np.array([3, 2])
+        cov_new = np.array([[0.5, 0.4], [0.4, 1.5]])
+        # Have to check whether the mean and cov could actually be calculated
+        if mean_old is not None and cov_old is not None:
+            cov_old_inv = np.linalg.inv(cov_old)
+            kl = 0.5 * (np.log(det(cov_old)) - np.log(det(cov_new))
+                        - convergence_criterion_2.prior.d() + tr(cov_old_inv @ cov_new)
+                        + (mean_old - mean_new).T @ cov_old_inv
+                        @ (mean_old - mean_new))
+        else:
+            kl = np.nan
+        true_kl.append(kl)
+        print("True:         ", kl)
+        print("")
     else:
         warnings.warn("No points were added to the GP because the proposed"
                       " points have already been evaluated.")
@@ -121,6 +148,30 @@ for _ in range(10):
     if convergence_criterion.is_converged(gp, old_gp):
         break
     """
+
+# Plot the performance of the different KL divergences
+n_post = convergence_criterion_1.n_posterior_evals
+plt.figure()
+plt.plot(n_post,
+         convergence_criterion_1.values,
+         label="MCMC")
+plt.plot(n_post,
+         convergence_criterion_2.values,
+         label="Prior gaussian")
+plt.plot(n_post,
+         convergence_criterion_3.values,
+         label="Prior full",
+         zorder=10)
+plt.plot(n_post,
+         true_kl,
+         label="True")
+plt.grid()
+plt.xlabel("posterior evaluations")
+plt.ylabel("KL-divergence")
+plt.yscale("log")
+plt.legend()
+plt.axhline(1e-2, 0, 1, ls="--", alpha=0.7, color="grey")
+plt.savefig("images/convernence_criteria.pdf")
 
 
 # Getting the prediction
