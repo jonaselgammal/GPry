@@ -876,7 +876,7 @@ class Log_exp(Acquisition_Function):
         whether zeta and sigma_n shall be fixed or not.
     """
 
-    def __init__(self, zeta=1., sigma_n=0., fixed=False):
+    def __init__(self, zeta=1., sigma_n=None, fixed=False):
         self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
@@ -930,7 +930,7 @@ class Log_exp(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
-        if self.sigma_n == 0.:
+        if self.sigma_n is None:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
                 sigma_n = np.mean(sigma_n)
