@@ -393,10 +393,12 @@ class GP_Acquisition(object):
 
         # Check whether the acquired point already exists in the GP and if so
         # exclude it.
+        """
         if self._has_already_been_sampled(surrogate_model, X_opt):
             return None, acq_val
         else:
-            return X_opt, acq_val
+        """
+        return X_opt, acq_val
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 
