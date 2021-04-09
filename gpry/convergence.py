@@ -213,6 +213,138 @@ class KL_from_draw(Convergence_criterion):
             return kl
 
 
+class KL_from_draw_approx(Convergence_criterion):
+    """
+    Class to calculate the KL divergence between two steps of the algorithm
+    by drawing n points from the prior and evaluating the KL divergence between
+    the last surrogate model and the current one at these points.
+
+    Parameters
+    ----------
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"prior"``: prior object. Needs to be supplied.
+        * ``"limit"``: Number, optional (default=1e-2)
+        * ``"n_draws"``: int, optional (default=5000)
+
+    """
+
+    def __init__(self, prior, params):
+        # get prior
+        self.prior = prior
+
+        self.limit = params.get("limit", 1e-2)
+        self.n_draws = params.get("n_draws", 5000)
+        self.gp_2 = None
+
+        self.mean = None
+        self.cov = None
+
+        self.values = []
+        self.n_posterior_evals = []
+
+    def is_converged(self, gp, gp_2=None):
+        kl = self.criterion_value(gp, gp_2)
+        print(kl)
+        if kl < self.limit:
+            return True
+        else:
+            return False
+
+    def criterion_value(self, gp, gp_2=None):
+        """Calculate the Kullback-Liebler (KL) divergence between different
+        steps of the GP acquisition. In contrast to the version where the
+        training data is used to calculate the KL divergence this method does
+        not assume any form of underlying distribution of the data.
+
+        This function approximates the KL divergence by drawing n samples and
+        calculating the cov from this.
+
+        Parameters
+        ----------
+
+        gp : SKLearn Gaussian Process Regressor
+            The first surrogate model from which the training data is
+            retrieved.
+
+        gp_2 : SKLearn Gaussian Process Regressor, optional (default=None)
+            The second surrogate model from which the training data is
+            retrieved.
+
+        Returns
+        -------
+
+        KL_divergence : The value of the KL divergence
+        """
+
+        if gp_2 is None:
+            gp_2 = self.gp_2
+            if not hasattr(gp_2, "X_train"):
+                # gp_2 is not a GP so we do not calculate anything...
+                self.gp_2 = gp
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                return np.nan
+        else:
+            if not hasattr(gp_2, "X_train"):
+                raise NameError("gp_2 is either not a GP "
+                                "regressor or hasn't been fit to data before.")
+
+        # Check all inputs
+        if not hasattr(gp, "X_train"):
+            raise NameError("gp is either not a GP regressor "
+                            "or hasn't been fit to data before.")
+
+        else:
+            X_test = self.prior.sample(self.n_draws)
+
+        # Actual calculation of the KL divergence as sum(p * log(p/q))
+        # For this p and q need to be normalized such that they add up to 1.
+        # Raise exception for all warnings to catch them.
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+
+            try:
+
+                y_values_1 = gp.predict(X_test)
+                y_values_2 = gp_2.predict(X_test)
+                exp_y_old = np.exp(y_values_2 - np.max(y_values_2))
+                exp_y_new = np.exp(y_values_1 - np.max(y_values_1))
+                mean_old = np.average(X_test, axis=0, weights=exp_y_old)
+                cov_old = np.cov(X_test.T, aweights=exp_y_old)
+                mean_new = np.average(X_test, axis=0, weights=exp_y_new)
+                cov_new = np.cov(X_test.T, aweights=exp_y_new)
+
+                self.mean = mean_new
+                self.cov = cov_new
+
+            except:
+                print("Mean or cov couldn't be calculated...")
+                self.mean = None
+                self.cov = None
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                return np.nan
+            # Compute the KL divergence (gaussian approx) with the previous iteration
+            try:
+                cov_old_inv = np.linalg.inv(cov_old)
+                kl = 0.5 * (np.log(det(cov_old)) - np.log(det(cov_new))
+                            - self.prior.d() + tr(cov_old_inv @ cov_new)
+                            + (mean_old - mean_new).T @ cov_old_inv
+                            @ (mean_old - mean_new))
+                self.values.append(kl)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                return kl
+            except Exception as e:
+                print("KL divergence couldn't be calculated.")
+                print(e)
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                return np.nan
+
+
 class KL_from_training(Convergence_criterion):
     """
     Class to calculate the KL divergence between two different GPs assuming
