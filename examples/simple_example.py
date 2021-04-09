@@ -98,8 +98,8 @@ init_y = f(init_X[:, 0], init_X[:, 1])
 gp.append_to_data(init_X, init_y, fit=True)
 
 convergence_criterion_1 = KL_from_MC_training(model.prior,
-                                     {"limit": 1e-2,
-                                      "n_draws": 5000})
+                                              {"limit": 1e-2, "n_draws": 500})
+# TODO: check scaling with dimensionality of n_draws, and if it's propto d^2
 convergence_criterion_2 = KL_from_draw_approx(model.prior, {"n_draws": 50000})
 convergence_criterion_3 = KL_from_draw(model.prior, {"n_draws": 50000})
 
@@ -108,7 +108,10 @@ n_points = 2 # Number of acquired points per step
 y_s = init_y
 true_kl = []
 
-for _ in range(20):
+
+n_iterations = 20
+for i in range(n_iterations):
+    print(f"+++ Iteration {i} (of {n_iterations}) +++++++++")
     old_gp = deepcopy(gp)
     new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
     if len(new_X) != 0:
@@ -171,7 +174,7 @@ plt.ylabel("KL-divergence")
 plt.yscale("log")
 plt.legend()
 plt.axhline(1e-2, 0, 1, ls="--", alpha=0.7, color="grey")
-plt.savefig("images/convernence_criteria.pdf")
+plt.savefig("images/convergence_criteria.pdf")
 
 
 # Getting the prediction

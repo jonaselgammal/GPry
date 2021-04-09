@@ -525,7 +525,13 @@ class KL_from_MC_training(Convergence_criterion):
         self.limit = params.get("limit", 1e-2)
         self.n_posterior_evals = []
         # Number of MCMC chains to generate samples
-        self.n_draws_per_dimsquared = params.get("n_draws_per_dimsquared", 10)
+        if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
+            raise ValueError(
+                "Pass either 'n_draws' or 'n_draws_per_dimsquared', not both")
+        if params.get("n_draws"):
+            self._n_draws = int(params.get("n_draws"))
+        else:
+            self.n_draws_per_dimsquared = params.get("n_draws_per_dimsquared", 10)
         # Number of jumps necessary to assume decorrelation
         self.n_steps_per_dim = params.get("n_steps_per_dim", 5)
         # Number of prior draws for the initial sample
@@ -538,7 +544,10 @@ class KL_from_MC_training(Convergence_criterion):
 
     @property
     def n_draws(self):
-        return self.n_draws_per_dimsquared * self.prior.d()**2
+        if hasattr(self, "_n_draws"):
+            return self._n_draws
+        else:
+            return self.n_draws_per_dimsquared * self.prior.d()**2
 
     @property
     def n_steps(self):
