@@ -607,12 +607,13 @@ class KL_from_MC_training(Convergence_criterion):
                    "input_params": list(self.cobaya_input["params"])}}
         self.cobaya_input["debug"] = 50
         model = get_model(self.cobaya_input)
-        # TODO: improve this implementation by running longer chains each time,
-        # so that max_sampler is n_steps * #points_to_be_acquired
-        # (but maybe then points are too decorrelated from training/starting points?)
+        # Draw >1 point per chain to avoid Cobaya initialisation overhead
+        # At most, draw #draws/#training per chain, unless there are loads of training
+        # At least, in case there are too many training points, #draws=dim
+        draws_per_chain = max(int(self.n_draws / len(gp.X_train)), self.prior.d())
         n = 0
-        X_values = np.empty(shape=(self.n_draws, self.prior.d()))
-        y_values = np.empty(shape=(self.n_draws, ))
+        X_values = np.full(fill_value=np.nan, shape=(self.n_draws, self.prior.d()))
+        y_values = np.full(fill_value=np.nan, shape=(self.n_draws, ))
         while n < self.n_draws:
             this_X = choice(gp.X_train)
             # Starting point of the chain
@@ -621,10 +622,11 @@ class KL_from_MC_training(Convergence_criterion):
                 model.prior.ref_pdf[i] = x
             model.prior._ref_is_pointlike = True
             # TODO: hopefully in the future not necessary to re-initialise the sampler
+            this_n_draws = min(self.n_draws - n, draws_per_chain)
             info_sampler = {
                 "mcmc":
                 {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
-                 "measure_speeds": False, "max_samples": self.n_steps}}
+                 "measure_speeds": False, "max_samples": this_n_draws * self.n_steps}}
             mcmc_sampler = get_sampler(info_sampler, model)
             try:
                 mcmc_sampler.run()
@@ -633,12 +635,13 @@ class KL_from_MC_training(Convergence_criterion):
                 print(e)
                 # sys.exit()
                 continue
-            last_point = mcmc_sampler.products()["sample"][
-                list(self.cobaya_input["params"])].values[-1]
-            last_gp_value = -0.5 * mcmc_sampler.products()["sample"]["chi2"].values[-1]
-            X_values[n] = last_point
-            y_values[n] = last_gp_value
-            n += 1
+            points = mcmc_sampler.products()["sample"][
+                list(self.cobaya_input["params"])].values[::-self.n_steps]
+            gp_values = -0.5 * \
+                mcmc_sampler.products()["sample"]["chi2"].values[::-self.n_steps]
+            X_values[n:n+this_n_draws] = points
+            y_values[n:n+this_n_draws] = gp_values
+            n += this_n_draws
         # import matplotlib.pyplot as plt
         # plt.figure()
         # plt.scatter(*gp.X_train.T, marker="o", label="train")
@@ -669,6 +672,14 @@ class KL_from_MC_training(Convergence_criterion):
                         @ (mean_old - self.mean))
             self.values.append(kl)
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            # Plot acquired points (2d)
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.scatter(*gp.X_train.T, marker="o", label="train")
+            # plt.scatter(*X_values.T, marker="^", label="mcmc")
+            # plt.legend()
+            # plt.savefig("images/MC-generated.png")
+            # plt.close()
             return kl
         except Exception as e:
             print("KL divergence couldn't be calculated.")
