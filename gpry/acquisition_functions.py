@@ -939,7 +939,7 @@ class Log_exp(Acquisition_Function):
 
         zeta = self.zeta
 
-        mask = (std > sigma_n) & (np.isfinite(mu))
+        mask = (std > sigma_n)
         values = np.zeros_like(std)
         if np.any(mask):
             values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
@@ -955,8 +955,8 @@ class Log_exp(Acquisition_Function):
                     grad[~mask] = np.ones_like(std_grad[~mask])*np.inf
             else:
                 std = std[0]
-                if std > sigma_n and np.all(np.isfinite(mu)):
-                    grad = std_grad/(std-sigma_n) - 2*zeta*mu_grad
+                if std > sigma_n:
+                    grad = std_grad/(std-sigma_n) + 2*zeta*mu_grad
                 else:
                     grad = np.ones_like(std_grad)*np.inf
             return values, grad
