@@ -9,13 +9,12 @@ find a suitable convergence criterion for our purposes...**
 
 from abc import ABCMeta, abstractmethod
 import numpy as np
-from numpy.linalg import det
-from numpy import trace as tr
 from scipy.stats import multivariate_normal, entropy
 from scipy.special import logsumexp
 import warnings
 from random import choice
 import sys
+from gpry.tools import kl_norm
 
 
 class Convergence_criterion(metaclass=ABCMeta):
@@ -329,11 +328,7 @@ class KL_from_draw_approx(Convergence_criterion):
                 return np.nan
             # Compute the KL divergence (gaussian approx) with the previous iteration
             try:
-                cov_old_inv = np.linalg.inv(cov_old)
-                kl = 0.5 * (np.log(det(cov_old)) - np.log(det(cov_new))
-                            - self.prior.d() + tr(cov_old_inv @ cov_new)
-                            + (mean_old - mean_new).T @ cov_old_inv
-                            @ (mean_old - mean_new))
+                kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
                 self.values.append(kl)
                 self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return kl
@@ -477,9 +472,6 @@ class KL_from_training(Convergence_criterion):
                     y_train = np.exp(y_train - np.max(y_train))
                     mean_2 = np.average(X_train, axis=0, weights=y_train)
                     cov_2 = np.cov(X_train.T, aweights=y_train)
-                # Invert cov_2 since it will be needed to calculate the
-                # KL-divergence
-                cov_2_inv = np.linalg.inv(cov_2)
 
             except Exception as e:
                 print("The mean or cov of surrogate_model_2 couldn't be "
@@ -491,10 +483,7 @@ class KL_from_training(Convergence_criterion):
 
             # Actually calculate the KL divergence
             try:
-                kl = 0.5 * (np.log(det(cov_2)) - np.log(det(cov_1))
-                            - X_train.shape[-1] + tr(cov_2_inv@cov_1)
-                            + (mean_2-mean_1).T @ cov_2_inv
-                            @ (mean_2-mean_1))
+                kl = kl_norm(mean_1, cov_1, mean_2, cov_2)
                 self.values.append(kl)
                 self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
                 return kl
@@ -600,6 +589,43 @@ class KL_from_MC_training(Convergence_criterion):
                 self.mean = mean_prior
             if self.cov is None:
                 self.cov = cov_prior
+        X_values, y_values = self._draw_from_mcmc(gp)
+        # Compute the mean and covmat using appropriate weighting (if possible)
+        try:
+            mean_old = np.copy(self.mean)
+            cov_old = np.copy(self.cov)
+            exp_y_new = np.exp(y_values - np.max(y_values))
+            self.mean = np.average(X_values, axis=0, weights=exp_y_new)
+            self.cov = np.cov(X_values.T, aweights=exp_y_new)
+        except:
+            print("Mean or cov couldn't be calculated...")
+            self.mean = None
+            self.cov = None
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return np.nan
+        # Compute the KL divergence (gaussian approx) with the previous iteration
+        try:
+            kl = kl_norm(self.mean, self.cov, mean_old, cov_old)
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            # Plot acquired points (2d)
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.scatter(*gp.X_train.T, marker="o", label="train")
+            # plt.scatter(*X_values.T, marker="^", label="mcmc")
+            # plt.legend()
+            # plt.savefig("images/MC-generated.png")
+            # plt.close()
+            return kl
+        except Exception as e:
+            print("KL divergence couldn't be calculated.")
+            print(e)
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return np.nan
+
+    def _draw_from_mcmc(self, gp):
         # Update Cobaya's input: mcmc's propolsal covmat and log-likelihood
         self.cobaya_input["likelihood"] = {
             "gp": {"external":
@@ -639,8 +665,8 @@ class KL_from_MC_training(Convergence_criterion):
                 list(self.cobaya_input["params"])].values[::-self.n_steps]
             gp_values = -0.5 * \
                 mcmc_sampler.products()["sample"]["chi2"].values[::-self.n_steps]
-            X_values[n:n+this_n_draws] = points
-            y_values[n:n+this_n_draws] = gp_values
+            X_values[n:n + this_n_draws] = points
+            y_values[n:n + this_n_draws] = gp_values
             n += this_n_draws
         # import matplotlib.pyplot as plt
         # plt.figure()
@@ -649,41 +675,4 @@ class KL_from_MC_training(Convergence_criterion):
         # plt.legend()
         # plt.savefig("images/MC-generated.png")
         # plt.close()
-        # Compute the mean and covmat using appropriate weighting (if possible)
-        try:
-            mean_old = np.copy(self.mean)
-            cov_old = np.copy(self.cov)
-            exp_y_new = np.exp(y_values - np.max(y_values))
-            self.mean = np.average(X_values, axis=0, weights=exp_y_new)
-            self.cov = np.cov(X_values.T, aweights=exp_y_new)
-        except:
-            print("Mean or cov couldn't be calculated...")
-            self.mean = None
-            self.cov = None
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            return np.nan
-        # Compute the KL divergence (gaussian approx) with the previous iteration
-        try:
-            cov_old_inv = np.linalg.inv(cov_old)
-            kl = 0.5 * (np.log(det(cov_old)) - np.log(det(self.cov))
-                        - self.prior.d() + tr(cov_old_inv @ self.cov)
-                        + (mean_old - self.mean).T @ cov_old_inv
-                        @ (mean_old - self.mean))
-            self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            # Plot acquired points (2d)
-            # import matplotlib.pyplot as plt
-            # plt.figure()
-            # plt.scatter(*gp.X_train.T, marker="o", label="train")
-            # plt.scatter(*X_values.T, marker="^", label="mcmc")
-            # plt.legend()
-            # plt.savefig("images/MC-generated.png")
-            # plt.close()
-            return kl
-        except Exception as e:
-            print("KL divergence couldn't be calculated.")
-            print(e)
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            return np.nan
+        return X_values, y_values

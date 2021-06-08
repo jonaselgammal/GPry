@@ -130,3 +130,6 @@ dmypy.json
 
 # test products
 examples/images/*
+
+# emacs backups
+*~
