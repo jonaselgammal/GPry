@@ -562,7 +562,8 @@ class KL_from_MC_training(Convergence_criterion):
         # matrix is numerically stable i.e. whether it's converged. This
         # shouldn't matter too much though since it's only run once at the
         # beginning and then the MCMC should take care of the rest.
-        while True:  # Maybe need something better here so it can't get stuck
+        # TODO: Maybe need something better here so it can't get stuck
+        while True:
             with warnings.catch_warnings():
                 warnings.filterwarnings('error')
                 try:
@@ -652,7 +653,8 @@ class KL_from_MC_training(Convergence_criterion):
             info_sampler = {
                 "mcmc":
                 {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
-                 "measure_speeds": False, "max_samples": this_n_draws * self.n_steps}}
+                 "measure_speeds": False, "max_samples": this_n_draws * self.n_steps,
+                 "temperature": 2}}
             mcmc_sampler = get_sampler(info_sampler, model)
             try:
                 mcmc_sampler.run()
