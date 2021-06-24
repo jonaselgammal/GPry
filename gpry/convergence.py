@@ -655,7 +655,7 @@ class KL_from_MC_training(Convergence_criterion):
                 "mcmc":
                 {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
                  "measure_speeds": False,
-                 "max_samples": (1 + this_n_draws) * self.n_steps), "temperature": 2}}
+                 "max_samples": (1 + this_n_draws) * self.n_steps, "temperature": 2}}
             mcmc_sampler = get_sampler(info_sampler, model)
             try:
                 mcmc_sampler.run()
