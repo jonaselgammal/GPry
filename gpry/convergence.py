@@ -632,7 +632,8 @@ class KL_from_MC_training(Convergence_criterion):
             "gp": {"external":
                    (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
                    "input_params": list(self.cobaya_input["params"])}}
-        self.cobaya_input["debug"] = 50
+# TODO: recover this line when thoroughly tested to suppress output
+#        self.cobaya_input["debug"] = 50
         model = get_model(self.cobaya_input)
         # Draw >1 point per chain to avoid Cobaya initialisation overhead
         # At most, draw #draws/#training per chain, unless there are loads of training
@@ -653,8 +654,8 @@ class KL_from_MC_training(Convergence_criterion):
             info_sampler = {
                 "mcmc":
                 {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
-                 "measure_speeds": False, "max_samples": this_n_draws * self.n_steps,
-                 "temperature": 2}}
+                 "measure_speeds": False,
+                 "max_samples": this_n_draws * (1 + self.n_steps), "temperature": 2}}
             mcmc_sampler = get_sampler(info_sampler, model)
             try:
                 mcmc_sampler.run()
