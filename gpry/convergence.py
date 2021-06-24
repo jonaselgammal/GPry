@@ -655,7 +655,7 @@ class KL_from_MC_training(Convergence_criterion):
                 "mcmc":
                 {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
                  "measure_speeds": False,
-                 "max_samples": this_n_draws * (1 + self.n_steps), "temperature": 2}}
+                 "max_samples": (1 + this_n_draws) * self.n_steps), "temperature": 2}}
             mcmc_sampler = get_sampler(info_sampler, model)
             try:
                 mcmc_sampler.run()
@@ -668,8 +668,8 @@ class KL_from_MC_training(Convergence_criterion):
                 list(self.cobaya_input["params"])].values[::-self.n_steps]
             gp_values = -0.5 * \
                 mcmc_sampler.products()["sample"]["chi2"].values[::-self.n_steps]
-            X_values[n:n + this_n_draws] = points
-            y_values[n:n + this_n_draws] = gp_values
+            X_values[n:n + this_n_draws] = points[:this_n_draws]
+            y_values[n:n + this_n_draws] = gp_values[:this_n_draws]
             n += this_n_draws
         # import matplotlib.pyplot as plt
         # plt.figure()
