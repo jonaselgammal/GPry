@@ -864,7 +864,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
             # Compute variance of predictive distribution
             y_var = self.kernel_.diag(X)
-            y_var -= np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
+            y_var -= np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
             # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
             # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
 
@@ -935,7 +935,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         also copy instance variables which are not defined in the init.
         """
         # Initialize the stuff specified in init
-        c = GaussianProcessRegressor(kernel=self.kernel,
+        c = GaussianProcessRegressor(
+            kernel=self.kernel,
             noise_level=self.noise_level,
             optimizer=self.optimizer,
             n_restarts_optimizer=self.n_restarts_optimizer,
