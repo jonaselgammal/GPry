@@ -107,7 +107,8 @@ class GP_Acquisition(object):
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
                  preprocessing_X=None,
-                 random_state=None):
+                 random_state=None,
+                 verbose=1):
 
         self.bounds = bounds
 
@@ -115,7 +116,7 @@ class GP_Acquisition(object):
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
-        elif self.acq_func == "Log_exp":
+        elif acq_func == "Log_exp":
             self.acq_func = Log_exp()
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
@@ -149,6 +150,8 @@ class GP_Acquisition(object):
         self.n_restarts_optimizer = n_restarts_optimizer
 
         self.preprocessing_X = preprocessing_X
+
+        self.verbose = verbose
 
         self.mean_ = None
         self.cov = None
@@ -338,7 +341,7 @@ class GP_Acquisition(object):
             if eval_gradient:
                 acq, grad = self.acq_func(X, self.surrogate_model_,
                                           eval_gradient=True)
-                return -acq, -grad
+                return -1*acq, -1*grad
             else:
                 return -1 * self.acq_func(X, self.surrogate_model_,
                                           eval_gradient=False)
@@ -354,13 +357,12 @@ class GP_Acquisition(object):
         optima_X[0], optima_acq_func[0] = \
             self._constrained_optimization(obj_func, x0,
                                            transformed_bounds)
-        optima_acq_func[0] = np.inf
 
         # Additional runs are performed from uniform chosen initial X's
         if self.n_restarts_optimizer > 0:
             # Draw a number of random initial points and choose the best ones
             # to start the optimizer from there
-            n_points = 5000
+            n_points = 100 * self.bounds.shape[0]
             X_initial = \
                 np.random.uniform(self.bounds[:, 0],
                                   self.bounds[:, 1],
@@ -403,12 +405,12 @@ class GP_Acquisition(object):
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 
         if self.acq_optimizer == "fmin_l_bfgs_b":
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                opt_res = scipy.optimize.fmin_l_bfgs_b(
-                    obj_func, initial_X, args={"eval_gradient": True},
-                    bounds=bounds, approx_grad=False, maxiter=200)
-                theta_opt, func_min = opt_res[0], opt_res[1]
+            # with warnings.catch_warnings():
+            #     warnings.simplefilter("ignore")
+            opt_res = scipy.optimize.fmin_l_bfgs_b(
+                obj_func, initial_X, args={"eval_gradient": True},
+                bounds=bounds, approx_grad=False)
+            theta_opt, func_min = opt_res[0], opt_res[1]
         elif self.acq_optimizer == "sampling":
             opt_res = scipy.optimize.minimize(
                 obj_func, initial_X, args=(False), method="Powell",
@@ -434,7 +436,8 @@ class GP_Acquisition(object):
 
         for i, xi in enumerate(X_train):
             if np.allclose(new_X, xi):
-                warnings.warn("A point has been sampled multiple times. "
-                              "Excluding this.")
+                if self.verbose > 1:
+                    warnings.warn("A point has been sampled multiple times. "
+                                  "Excluding this.")
                 return True
         return False
