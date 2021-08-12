@@ -289,8 +289,8 @@ class Normalize_bounds:
         X_transformed : array-like, shape = (n_samples, n_dims)
             Transformed X-values
         """
-        if np.any(X < self.bounds_min) or np.any(X > self.bounds_max):
-            raise ValueError("all X must be between bounds.")
+        # if np.any(X < self.bounds_min) or np.any(X > self.bounds_max):
+        #     raise ValueError("all X must be between bounds.")
         X = np.copy(X) if copy else X
         return (X - self.bounds_min)/(self.bounds_max - self.bounds_min)
 
