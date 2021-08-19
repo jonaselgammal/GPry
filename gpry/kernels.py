@@ -68,13 +68,12 @@ class Hyperparameter(namedtuple('Hyperparameter',
         "dynamic". This is done to restrict their range to the same order of
         magnitude as the prior size (actually 2x the prior).
 
-    We overwrite the whole class here since the namedtuple approach does not
-    allow for easy extension.
+    .. note::
 
-    For more information on this see
-    `here <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_
-    process.kernels.Hyperparameter.html#sklearn.gaussian_process.kernels.
-    Hyperparameter>`
+        We overwrite the whole class here since the namedtuple approach does not
+        allow for easy extension.
+
+        For more information on this see `this link <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.kernels.Hyperparameter.html>`_
     """
 
     # A raw namedtuple is very memory efficient as it packs the attributes
@@ -112,12 +111,12 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # are equal.
     def __eq__(self, other):
         return (self.name == other.name and
-                self.value_type == other.value_type and
-                np.all(self.bounds == other.bounds) and
-                self.n_elements == other.n_elements and
-                self.fixed == other.fixed and
-                self.dynamic == other.dynamic and
-                self.max_length == other.max_length)
+                self.value_type == other.value_type
+                and np.all(self.bounds == other.bounds)
+                and self.n_elements == other.n_elements
+                and self.fixed == other.fixed
+                and self.dynamic == other.dynamic
+                and self.max_length == other.max_length)
 
 
 class Kernel(sk_Kernel):
@@ -466,7 +465,8 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
                         "unintended behaviour.")
-                self.max_length = 2 * max(prior_bounds[:, 1] - prior_bounds[:, 0])
+                self.max_length = 2 * \
+                    max(prior_bounds[:, 1] - prior_bounds[:, 0])
             else:
                 self.max_length = 2 * (prior_bounds[:, 1] - prior_bounds[:, 0])
         else:
@@ -545,7 +545,8 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
                         "unintended behaviour.")
-                self.max_length = 2 * max(prior_bounds[:, 1] - prior_bounds[:, 0])
+                self.max_length = 2 * \
+                    max(prior_bounds[:, 1] - prior_bounds[:, 0])
             else:
                 self.max_length = 2 * (prior_bounds[:, 1] - prior_bounds[:, 0])
         else:
@@ -677,8 +678,8 @@ class Sum(KernelOperator, Kernel, sk_Sum):
 
     def gradient_x(self, x, X_train):
         return (
-            self.k1.gradient_x(x, X_train) +
-            self.k2.gradient_x(x, X_train)
+            self.k1.gradient_x(x, X_train)
+            + self.k2.gradient_x(x, X_train)
         )
 
 
@@ -693,12 +694,12 @@ class Product(KernelOperator, Kernel, sk_Product):
         x = np.expand_dims(x, axis=0)
         X_train = np.asarray(X_train)
         f_ggrad = (
-            np.expand_dims(self.k1(x, X_train)[0], axis=1) *
-            self.k2.gradient_x(x, X_train)
+            np.expand_dims(self.k1(x, X_train)[0], axis=1)
+            * self.k2.gradient_x(x, X_train)
         )
         fgrad_g = (
-            np.expand_dims(self.k2(x, X_train)[0], axis=1) *
-            self.k1.gradient_x(x, X_train)
+            np.expand_dims(self.k2(x, X_train)[0], axis=1)
+            * self.k1.gradient_x(x, X_train)
         )
         return f_ggrad + fgrad_g
 

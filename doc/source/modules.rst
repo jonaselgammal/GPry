@@ -11,4 +11,4 @@ Modules
    gp_acquisition
    preprocessing
    convergence
-   prior
+   run

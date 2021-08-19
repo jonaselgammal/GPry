@@ -1,8 +1,8 @@
-Prior
-=====
+Run
+===
 
 
-.. automodule:: prior
+.. automodule:: run	
    :members:
    :private-members:
    :show-inheritance:
