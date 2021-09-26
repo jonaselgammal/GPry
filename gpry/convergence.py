@@ -496,6 +496,10 @@ class KL_from_training(Convergence_criterion):
                 return np.nan
 
 
+class MCMCDrawError(Exception):
+    pass
+
+
 class KL_from_MC_training(Convergence_criterion):
     """
     This class is supposed to use a short MCMC chain to get independent samples
@@ -506,7 +510,9 @@ class KL_from_MC_training(Convergence_criterion):
     def __init__(self, prior, params):
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
-        global get_model, get_sampler
+        from cobaya.collection import SampleCollection
+        from cobaya.log import LoggedError
+        global get_model, get_sampler, SampleCollection, LoggedError
         self.prior = prior
         self.cov = None
         self.mean = None
@@ -525,6 +531,8 @@ class KL_from_MC_training(Convergence_criterion):
         self.n_steps_per_dim = params.get("n_steps_per_dim", 5)
         # Number of prior draws for the initial sample
         self.n_initial = params.get("n_initial", 500)
+        # MCMC temperature
+        self.temperature = params.get("temperature", 4)
         # Prepare Cobaya's input
         bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
         params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
@@ -590,7 +598,15 @@ class KL_from_MC_training(Convergence_criterion):
                 self.mean = mean_prior
             if self.cov is None:
                 self.cov = cov_prior
-        X_values, y_values = self._draw_from_mcmc(gp)
+        try:
+            X_values, y_values = self._draw_from_mcmc(gp)
+        except MCMCDrawError:
+            print("Could not MCMC-sample from training set")
+            self.mean = None
+            self.cov = None
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            return np.nan
         # Compute the mean and covmat using appropriate weighting (if possible)
         try:
             mean_old = np.copy(self.mean)
@@ -632,9 +648,18 @@ class KL_from_MC_training(Convergence_criterion):
             "gp": {"external":
                    (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
                    "input_params": list(self.cobaya_input["params"])}}
-# TODO: recover this line when thoroughly tested to suppress output
-#        self.cobaya_input["debug"] = 50
+        # Supress Cobaya's output
+        # (set to True for debug output, or comment out for normal output)
+        self.cobaya_input["debug"] = 50
         model = get_model(self.cobaya_input)
+        sampler_input = {"mcmc": {
+            "covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
+            "temperature": self.temperature,
+            # Faster: no need to measure speeds, check convergence or learn proposal
+            "measure_speeds": False, "learn_every": "1000000d"}}
+        # TODO: try to make initialisation even a bit faster
+        # (e.g. set an initial point manually)
+        mcmc_sampler = get_sampler(sampler_input, model)
         # Draw >1 point per chain to avoid Cobaya initialisation overhead
         # At most, draw #draws/#training per chain, unless there are loads of training
         # At least, in case there are too many training points, #draws=dim
@@ -642,40 +667,48 @@ class KL_from_MC_training(Convergence_criterion):
         n = 0
         X_values = np.full(fill_value=np.nan, shape=(self.n_draws, self.prior.d()))
         y_values = np.full(fill_value=np.nan, shape=(self.n_draws, ))
+        failed = []
         while n < self.n_draws:
-            this_X = choice(gp.X_train)
-            # Starting point of the chain
-            # TODO: this is hacky. Update when prior.set_ref created (or sth in mcmc)
-            for i, (p, x) in enumerate(zip(self.cobaya_input["params"], this_X)):
-                model.prior.ref_pdf[i] = x
-            model.prior._ref_is_pointlike = True
-            # TODO: hopefully in the future not necessary to re-initialise the sampler
+            # Pick a point from the training set and set it as initial point of the chain
+            # (a little hacky, but there is no API at the moment to do this)
+            this_i = choice(range(len(gp.X_train)))
+            this_X = np.copy(gp.X_train[this_i])
+            logpost = model.logposterior(this_X, temperature=self.temperature)
+            mcmc_sampler.current_point.add(this_X, logpost)
+            # reset the number of samples and run
+            mcmc_sampler.collection = SampleCollection(
+                model, mcmc_sampler.output, temperature=self.temperature)
             this_n_draws = min(self.n_draws - n, draws_per_chain)
-            info_sampler = {
-                "mcmc":
-                {"covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
-                 "measure_speeds": False,
-                 "max_samples": (1 + this_n_draws) * self.n_steps, "temperature": 2}}
-            mcmc_sampler = get_sampler(info_sampler, model)
+            mcmc_sampler.max_samples = (1 + this_n_draws) * self.n_steps
             try:
                 mcmc_sampler.run()
-            except Exception as e:
-                # max_tries reached (but may catch and ignore other errors. Not ideal!)
-                print(e)
-                # sys.exit()
-                continue
+            except LoggedError:
+                # max_tries reached: chain stuck!
+                # for now, fail (return NaN) if some fraction of the training samples
+                # failed (with repetition).
+                # It would not scale too well with iterations, but highly unlikely to
+                # produce this error after having run for a bit.
+                failed += [this_i]
+                fraction = 0.5
+                if len(failed) >= fraction * len(gp.X_train):
+                    raise MCMCDrawError()
+                else:
+                    continue
             points = mcmc_sampler.products()["sample"][
                 list(self.cobaya_input["params"])].values[::-self.n_steps]
             gp_values = -0.5 * \
                 mcmc_sampler.products()["sample"]["chi2"].values[::-self.n_steps]
+            # There is sometimes one more point, hence the [:this_n_draws] below
             X_values[n:n + this_n_draws] = points[:this_n_draws]
             y_values[n:n + this_n_draws] = gp_values[:this_n_draws]
             n += this_n_draws
+        # Test: plots points (2d only)
         # import matplotlib.pyplot as plt
         # plt.figure()
         # plt.scatter(*gp.X_train.T, marker="o", label="train")
         # plt.scatter(*X_values.T, marker="^", label="mcmc")
         # plt.legend()
+        # plt.show()
         # plt.savefig("images/MC-generated.png")
         # plt.close()
         return X_values, y_values
