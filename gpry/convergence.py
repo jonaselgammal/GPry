@@ -17,6 +17,10 @@ import sys
 from gpry.tools import kl_norm
 
 
+class ConvergenceCheckError(Exception):
+    pass
+
+
 class Convergence_criterion(metaclass=ABCMeta):
     """ Base class for all convergence criteria (CCs). A CC quantifies the
     convergence of the GP surrogate model. If this value goes below a certain,
@@ -496,10 +500,6 @@ class KL_from_training(Convergence_criterion):
                 return np.nan
 
 
-class MCMCDrawError(Exception):
-    pass
-
-
 class KL_from_MC_training(Convergence_criterion):
     """
     This class is supposed to use a short MCMC chain to get independent samples
@@ -514,8 +514,8 @@ class KL_from_MC_training(Convergence_criterion):
         from cobaya.log import LoggedError
         global get_model, get_sampler, SampleCollection, LoggedError
         self.prior = prior
-        self.cov = None
         self.mean = None
+        self.cov = None
         self.values = []
         self.limit = params.get("limit", 1e-2)
         self.n_posterior_evals = []
@@ -560,7 +560,47 @@ class KL_from_MC_training(Convergence_criterion):
             raise(e)
             return False
 
-    def from_prior(self, gp):
+    def criterion_value(self, gp, gp_2=None):
+        """
+        Compute the value of the convergence criterion.
+
+        Raises :class:`convergence.ConvergenceCheckError` if it could not be computed.
+        """
+        mean_new, cov_new = None, None
+        kl = np.nan
+        try:
+            # Get OLD mean and cov
+            if gp_2 is None:
+                # Use last ones. Notice that `np.copy(None) != None`!)
+                mean_old = np.copy(self.mean) if self.mean is not None else None
+                cov_old = np.copy(self.cov) if self.cov is not None else None
+            else:
+                try:
+                    mean_old, cov_old = self._mean_and_cov_from_mcmc(gp)
+                except ConvergenceCheckError as excpt:
+                    raise ConvergenceCheckError(
+                        f"Error when computing mean and cov *for gp_2*: {excpt}")
+            # Get NEW mean and cov
+            mean_new, cov_new = self._mean_and_cov_from_mcmc(gp)
+            # Check AFTER computing new ones: we want to save them for next iter anyway
+            if mean_old is None or cov_old is None:
+                raise ConvergenceCheckError("No mean or cov available from last step.")
+            # Compute the KL divergence (gaussian approx) with the previous iteration
+            try:
+                kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
+            except Exception as excpt:
+                raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        except ConvergenceCheckError as excpt:
+            raise ConvergenceCheckError(
+                f"Could not compute criterion value for this iteration: {excpt}")
+        finally:  # whether failed or not
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+        return kl
+
+    def _mean_and_cov_from_prior(self, gp):
         """
         Get mean and covmat from a prior sample.
         """
@@ -585,65 +625,20 @@ class KL_from_MC_training(Convergence_criterion):
                                          self.prior.sample(self.n_initial),
                                          axis=0)
 
-    def criterion_value(self, gp, gp_2=None):
-        """
-        This is the important part of the code. Here the calculation of the
-        value of the convergence criterion should be performed.
-        """
-        # Draw samples from the prior until mean and cov stabilize
-        # to get an initial guess for the MCMC
-        if self.mean is None or self.cov is None:
-            mean_prior, cov_prior = self.from_prior(gp)
-            if self.mean is None:
-                self.mean = mean_prior
-            if self.cov is None:
-                self.cov = cov_prior
+    def _mean_and_cov_from_mcmc(self, gp):
+        X_values, y_values = self._draw_from_mcmc(gp)
         try:
-            X_values, y_values = self._draw_from_mcmc(gp)
-        except MCMCDrawError:
-            print("Could not MCMC-sample from training set")
-            self.mean = None
-            self.cov = None
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            return np.nan
-        # Compute the mean and covmat using appropriate weighting (if possible)
-        try:
-            mean_old = np.copy(self.mean)
-            cov_old = np.copy(self.cov)
+            # Compute the mean and covmat using appropriate weighting (if possible)
             exp_y_new = np.exp(y_values - np.max(y_values))
-            self.mean = np.average(X_values, axis=0, weights=exp_y_new)
-            self.cov = np.cov(X_values.T, aweights=exp_y_new)
-        except:
-            print("Mean or cov couldn't be calculated...")
-            self.mean = None
-            self.cov = None
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            return np.nan
-        # Compute the KL divergence (gaussian approx) with the previous iteration
-        try:
-            kl = kl_norm(self.mean, self.cov, mean_old, cov_old)
-            self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            # Plot acquired points (2d)
-            # import matplotlib.pyplot as plt
-            # plt.figure()
-            # plt.scatter(*gp.X_train.T, marker="o", label="train")
-            # plt.scatter(*X_values.T, marker="^", label="mcmc")
-            # plt.legend()
-            # plt.savefig("images/MC-generated.png")
-            # plt.close()
-            return kl
-        except Exception as e:
-            print("KL divergence couldn't be calculated.")
-            print(e)
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-            return np.nan
+            mean = np.average(X_values, axis=0, weights=exp_y_new)
+            cov = np.cov(X_values.T, aweights=exp_y_new)
+            return (mean, cov)
+        except Exception as excpt:
+            raise ConvergenceCheckError(
+                f"Could not compute mean and cov from MCMC: {excpt}")
 
     def _draw_from_mcmc(self, gp):
-        # Update Cobaya's input: mcmc's propolsal covmat and log-likelihood
+        # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
         self.cobaya_input["likelihood"] = {
             "gp": {"external":
                    (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
@@ -652,8 +647,13 @@ class KL_from_MC_training(Convergence_criterion):
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
         model = get_model(self.cobaya_input)
+        # If no covariance computed in last step, try to get one from a prior sample
+        # TODO: expensive if intermediate step fails. Maybe save last working one?
+        covmat = self.cov
+        if covmat is None:
+            _, covmat = self._mean_and_cov_from_prior(gp)
         sampler_input = {"mcmc": {
-            "covmat": self.cov, "covmat_params": list(self.cobaya_input["params"]),
+            "covmat": covmat, "covmat_params": list(self.cobaya_input["params"]),
             "temperature": self.temperature,
             # Faster: no need to measure speeds, check convergence or learn proposal
             "measure_speeds": False, "learn_every": "1000000d"}}
@@ -691,7 +691,7 @@ class KL_from_MC_training(Convergence_criterion):
                 failed += [this_i]
                 fraction = 0.5
                 if len(failed) >= fraction * len(gp.X_train):
-                    raise MCMCDrawError()
+                    raise ConvergenceCheckError("Could not draw enough points from MCMC")
                 else:
                     continue
             points = mcmc_sampler.products()["sample"][

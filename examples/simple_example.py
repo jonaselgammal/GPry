@@ -20,7 +20,8 @@ from gpry.acquisition_functions import Log_exp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
-from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_approx
+from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_approx, \
+    ConvergenceCheckError
 from gpry.gp_acquisition import GP_Acquisition
 
 # Cobaya things needed for building the model
@@ -118,8 +119,13 @@ for i in range(n_iterations):
         new_y = np.atleast_1d(f(new_X[:, 0], new_X[:, 1]))
         y_s = np.append(y_s, new_y)
         gp.append_to_data(new_X, new_y, fit=True)
-        # print(convergence_criterion.criterion_value(gp, old_gp))
-        print("MCMC:         ", convergence_criterion_1.criterion_value(gp, old_gp))
+        try:
+            # not passing old_gp as arg of criterion, or it will eval again mean and cov!
+            ccv1 = convergence_criterion_1.criterion_value(gp) #, old_gp)
+        except ConvergenceCheckError as excpt:
+            ccv1 = np.nan
+            print(excpt)
+        print("MCMC:         ", ccv1)
         print("Prior approx: ", convergence_criterion_2.criterion_value(gp, old_gp))
         print("Prior full:   ", convergence_criterion_3.criterion_value(gp, old_gp))
         # Take cov and mean from the prior sampled KL divergence
