@@ -209,6 +209,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.noise_level = noise_level
 
+        self.n_eval = 0
+
         self.verbose = verbose
 
         # Initialize SVM if given
@@ -770,6 +772,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         y_std_grad : shape = (n_samples, n_features), optional
             The gradient of the predicted std.
         """
+        self.n_eval += len(X)
 
         if return_std_grad and not (return_std and return_mean_grad):
             raise ValueError(
