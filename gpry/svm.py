@@ -2,7 +2,7 @@
 This module uses a Support vector machine (SVM) with an RBF kernel to classify
 regions which are "safe" to explore in contrast to regions which are "unsafe"
 to explore since they are infinite. This is done in an attempt to hinder the
-exploration of parts of the parameter space which have a -inf log-posterior
+exploration of parts of the parameter space which have a :math:`-\infty` log-posterior
 value. These values need to be filtered out since feeding them to the GP
 Regressor will break it. Nevertheless this is important information that we
 shouldn't throw away. We will also need the SVM later when doing the MCMC run
@@ -15,17 +15,139 @@ import numpy as np
 from sklearn.svm import SVC
 
 class SVM(SVC):
-    """Wrapper for the sklearn RBF kernel SVM. Implements the same
+    """Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_. Implements the same
     "append_to_data" function as the GP Regressor and is designed to be passed
     to a GP regressor. This is done to classify the data into a "finite" group
     (values with a finite log-likelihood) and an "infinite" group. That way the
     GP can correctly recover the log-likelihood or log-posterior even if has
-    regions where it returns -inf.
+    regions where it returns :math:`-\infty`.
     Also saves the training data internally and has a function to return all
     non-infinite values. Therefore it is supposed to be used inside of a GP
     Regressor.
     Furthermore this accounts for the fact that all values in the SVM might be
     finite and therefore the SVM can be ignored.
+
+
+    Parameters
+    ----------
+    C : float, default=1.0
+        Regularization parameter. The strength of the regularization is
+        inversely proportional to C. Must be strictly positive. The penalty
+        is a squared l2 penalty.
+    kernel : {'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'}, default='rbf'
+        Specifies the kernel type to be used in the algorithm.
+        It must be one of 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed' or
+        a callable.
+        If none is given, 'rbf' will be used. If a callable is given it is
+        used to pre-compute the kernel matrix from data matrices; that matrix
+        should be an array of shape ``(n_samples, n_samples)``.
+    degree : int, default=3
+        Degree of the polynomial kernel function ('poly').
+        Ignored by all other kernels.
+    gamma : {'scale', 'auto'} or float, default='scale'
+        Kernel coefficient for 'rbf', 'poly' and 'sigmoid'.
+        - if ``gamma='scale'`` (default) is passed then it uses
+          1 / (n_features * X.var()) as value of gamma,
+        - if 'auto', uses 1 / n_features.
+    preprocessing_X : X-preprocessor or pipeline, optional (default=None)
+        The transformation in X-direction (parameter space of the posterior)
+        that shall be used to preprocess the data before fitting to the SVM.
+    preprocessing_y : y-preprocessor or pipeline, optional (default=None)
+        The transformation in y-direction (posterior value) that shall be used
+        before fitting to the SVM.
+    coef0 : float, default=0.0
+        Independent term in kernel function.
+        It is only significant in 'poly' and 'sigmoid'.
+    shrinking : bool, default=True
+        Whether to use the shrinking heuristic.
+    probability : bool, default=False
+        Whether to enable probability estimates. This must be enabled prior
+        to calling `fit`, will slow down that method as it internally uses
+        5-fold cross-validation, and `predict_proba` may be inconsistent with
+        `predict`.
+    tol : float, default=1e-3
+        Tolerance for stopping criterion.
+    cache_size : float, default=200
+        Specify the size of the kernel cache (in MB).
+    class_weight : dict or 'balanced', default=None
+        Set the parameter C of class i to class_weight[i]*C for
+        SVC. If not given, all classes are supposed to have
+        weight one.
+        The "balanced" mode uses the values of y to automatically adjust
+        weights inversely proportional to class frequencies in the input data
+        as ``n_samples / (n_classes * np.bincount(y))``.
+    verbose : bool, default=False
+        Enable verbose output. Note that this setting takes advantage of a
+        per-process runtime setting in libsvm that, if enabled, may not work
+        properly in a multithreaded context.
+    max_iter : int, default=-1
+        Hard limit on iterations within solver, or -1 for no limit.
+    decision_function_shape : {'ovo', 'ovr'}, default='ovr'
+        Whether to return a one-vs-rest ('ovr') decision function of shape
+        (n_samples, n_classes) as all other classifiers, or the original
+        one-vs-one ('ovo') decision function of libsvm which has shape
+        (n_samples, n_classes * (n_classes - 1) / 2). However, one-vs-one
+        ('ovo') is always used as multi-class strategy. The parameter is
+        ignored for binary classification.
+    break_ties : bool, default=False
+        If true, ``decision_function_shape='ovr'``, and number of classes > 2,
+        predict will break ties according to the confidence values of
+        decision_function; otherwise the first class among the tied
+        classes is returned. Please note that breaking ties comes at a
+        relatively high computational cost compared to a simple predict.
+    random_state : int, RandomState instance or None, default=None
+        Controls the pseudo random number generation for shuffling the data for
+        probability estimates. Ignored when `probability` is False.
+        Pass an int for reproducible output across multiple function calls.
+    Attributes
+    ----------
+    all_finite : bool
+        Is true when all posterior values which have been sampled are finite
+        which removes the need for fitting the SVM.
+    class_weight_ : ndarray of shape (n_classes,)
+        Multipliers of parameter C for each class.
+        Computed based on the ``class_weight`` parameter.
+    classes_ : ndarray of shape (n_classes,)
+        The classes labels.
+    coef_ : ndarray of shape (n_classes * (n_classes - 1) / 2, n_features)
+        Weights assigned to the features (coefficients in the primal
+        problem). This is only available in the case of a linear kernel.
+        `coef_` is a readonly property derived from `dual_coef_` and
+        `support_vectors_`.
+    dual_coef_ : ndarray of shape (n_classes -1, n_SV)
+        Dual coefficients of the support vector in the decision
+        function, multiplied by
+        their targets.
+        For multiclass, coefficient for all 1-vs-1 classifiers.
+        The layout of the coefficients in the multiclass case is somewhat
+        non-trivial.
+    fit_status_ : int
+        0 if correctly fitted, 1 otherwise (will raise warning)
+    intercept_ : ndarray of shape (n_classes * (n_classes - 1) / 2,)
+        Constants in decision function.
+    n_features_in_ : int
+        Number of features seen during fit.
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during fit. Defined only when `X`
+        has feature names that are all strings.
+    support_ : ndarray of shape (n_SV)
+        Indices of support vectors.
+    support_vectors_ : ndarray of shape (n_SV, n_features)
+        Support vectors.
+    n_support_ : ndarray of shape (n_classes,), dtype=int32
+        Number of support vectors for each class.
+    probA_ : ndarray of shape (n_classes * (n_classes - 1) / 2)
+    probB_ : ndarray of shape (n_classes * (n_classes - 1) / 2)
+        If `probability=True`, it corresponds to the parameters learned in
+        Platt scaling to produce probability estimates from decision values.
+        If `probability=False`, it's an empty array. Platt scaling uses the
+        logistic function
+        ``1 / (1 + exp(decision_value * probA_ + probB_))``
+        where ``probA_`` and ``probB_`` are learned from the dataset..
+    shape_fit_ : tuple of int of shape (n_dimensions_of_X,)
+        Array dimensions of training vector ``X``.
+
+
     """
 
     def __init__(self, C=1e8, kernel='rbf', degree=3, gamma='scale',
@@ -46,8 +168,27 @@ class SVM(SVC):
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """
-        Append to data method works similarly to that of the GP Regressor.
-        Returns all samples which are finite
+        This method works similarly to the :meth:`gpr.append_to_data` method
+        of the GP regressor. This means that it adds samples to the SVM and
+        internally calls the fit method of the SVM. It furthermore provides the
+        option to fit the preprocessor(s) (if they need fitting).
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Training data to append to the model.
+
+        y : array-like, shape = (n_samples, [n_output_dims])
+            Target values to append to the data
+
+        fit_preprocessors : bool, optional (default: True)
+            Whether the preprocessors are to be refit. This only applies if
+            the transformation of at least one of the preprocessors depends on
+            the samples.
+
+        Returns
+        -------
+        self
         """
 
         # Copy stuff
@@ -70,10 +211,31 @@ class SVM(SVC):
 
     def fit(self, X, y, fit_preprocessors=True):
         """
-        Fits the SVM with two classes:
+        Wrapper for the fit value of the sklearn SVM which fits the SVM with
+        two categorial classes:
 
-        * ``y=0``: Finite points
-        * ``y=1``: Infinite points
+        * :math:`\\tilde{y}=1` Finite points
+        * :math:`\\tilde{y}=0` Infinite points
+
+        where :math:`\\tilde{y}` is produced by the fit method after
+        preprocessing the sampling locations and posterior values.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Training data to append to the model.
+
+        y : array-like, shape = (n_samples, [n_output_dims])
+            Target values to append to the data
+
+        fit_preprocessors : bool, optional (default: True)
+            Whether the preprocessors are to be refit. This only applies if
+            the transformation of at least one of the preprocessors depends on
+            the samples.
+
+        Returns
+        -------
+        self
         """
         # Copy X_train and y_train to be able to reproduce stuff
         self.X_train = np.copy(X)
@@ -111,7 +273,22 @@ class SVM(SVC):
 
     def predict(self, X):
         """
-        Wrapper for the predict method. Does all the pre-transformation.
+        Wrapper for the predict method of the SVM which does the preprocessing.
+        Returns a boolean array which is true at locations where the SVM
+        predicts a finite posterior distribution and False where it predicts
+        infinite values.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Query points where SVM is evaluated.
+
+        Returns
+        -------
+        A boolean array which is True at locations predicted finite posterior
+        and False at locations with predicted infinite posterior.
+
+
         """
         # Check if all training values were finite, then just return one for
         # every value
