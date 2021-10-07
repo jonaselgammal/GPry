@@ -34,7 +34,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
        * allows prediction without prior fitting (based on the GP prior).
        * implements a pipeline for pretransforming data before fitting.
-       * provides the method ``append_to_data(X,y)`` which allows to append
+       * provides the method :meth:`append_to_data` which allows to append
          additional data points to an already existing GPR. This is done either
          by refitting the hyperparameters (theta) or alternatively by using the
          Matrix inversion Lemma to keep the hyperparameters fixed.
@@ -62,7 +62,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         data used for fitting and is used as datapoint-dependent noise level.
         Note that this is equivalent to adding a WhiteKernel with c=noise_level.
 
-    optimizer : string or callable, optional (default: "fmin_l_bfgs_b")
+    optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
         Can either be one of the internally supported optimizers for optimizing
         the kernel's parameters, specified by a string, or an externally
         defined optimizer passed as a callable. If a callable is passed, it
@@ -106,7 +106,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         passed the data is not preprocessed.The `fit` method of the preprocessor
         is only called when the GP's hyperparameters are refit.
 
-    account_for_inf : SVM instance, None or "SVM" (default: "SVM")
+    account_for_inf : SVM, None or "SVM" (default: "SVM")
         Uses a SVM (Support Vector Machine) to classify the data into finite and
         infinite values. This allows the GP to express values of -inf in the
         data (unphysical values). If all values are finite the SVM will just
@@ -118,12 +118,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         which might cause predictions to change if the data is modified
         externally.
 
-    random_state : integer or numpy.RandomState, optional
+    random_state : int or `numpy RandomState <https://numpy.org/doc/stable/reference/random/legacy.html?highlight=randomstate#numpy.random.RandomState>`_, optional
         The generator used to initialize the centers. If an integer is
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    verbose : 1, 2, 3 optional (default: 1)
+    verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity of the GP. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
         problems arise.
@@ -178,7 +178,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         .. warning::
 
             ``L_`` is not recomputed when using the append_to_data method
-            without refitting the hyperparameters. As only K_inv_ and
+            without refitting the hyperparameters. As only ``K_inv_`` and
             alpha_ are used at prediction this is not neccessary.
 
     log_marginal_likelihood_value_ : float
@@ -196,7 +196,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         predict
     """
 
-    def __init__(self, kernel="RBF", noise_level=1e-5,
+    def __init__(self, kernel="RBF", noise_level=1e-2,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
                  account_for_inf="SVM",
@@ -258,6 +258,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         than the second one. Therefore it can be useful to use the second
         algorithm in cases where it is worth saving the computational expense
         such as when performing parallelized active sampling.
+
          .. note::
 
             The second method can only be used if the GPR has previously been
@@ -485,7 +486,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Returns
         -------
         self
-            Returns an instance of self.
         """
 
         if self.kernel == "RBF":  # Use an RBF kernel as default
@@ -654,7 +654,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Returns
         -------
         self
-            Returns an instance of self.
         """
 
         # Check if a model has previously been fit to the data, i.e. that a
