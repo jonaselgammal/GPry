@@ -23,6 +23,8 @@ from gpry.gpr import GaussianProcessRegressor
 from copy import deepcopy
 
 import pdb
+
+
 class GP_Acquisition(object):
     """Run Gaussian Process acquisition.
 
@@ -98,7 +100,7 @@ class GP_Acquisition(object):
     Attributes
     ----------
 
-    surrogate_model_ : SKLearn Gaussian Process Regressor
+    surrogate_model_ : GaussianProcessRegressor
             The GP Regressor which is currently used for optimization.
     """
 
@@ -117,6 +119,10 @@ class GP_Acquisition(object):
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif acq_func == "Log_exp":
+            # If the Log_exp acquisition function is chosen it's zeta is set
+            # automatically using the dimensionality of the prior.
+
+            # TODO: make a dimensionality->zeta formula and put it here
             self.acq_func = Log_exp()
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
@@ -141,8 +147,8 @@ class GP_Acquisition(object):
             elif acq_optimizer == "sampling":
                 self.acq_optimizer = "sampling"
             else:
-                raise ValueError("Supported internal optimizers are 'auto', "\
-                                 "'lbfgs' or 'sampling', "\
+                raise ValueError("Supported internal optimizers are 'auto', "
+                                 "'lbfgs' or 'sampling', "
                                  "got {0}".format(acq_optimizer))
         else:
             self.acq_optimizer = acq_optimizer
@@ -169,7 +175,7 @@ class GP_Acquisition(object):
         Parameters
         ----------
 
-        surrogate_model : SKLearn Gaussian Process Regressor
+        surrogate_model : GaussianProcessRegressor
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
@@ -272,7 +278,7 @@ class GP_Acquisition(object):
         Parameters
         ----------
 
-        surrogate_model : SKLearn Gaussian Process Regressor
+        surrogate_model : GaussianProcessRegressor
             The GP Regressor which is used as surrogate model.
 
         n_cores : int, optional (default=1)
@@ -334,7 +340,7 @@ class GP_Acquisition(object):
             X = np.expand_dims(X, axis=0)
             if X.ndim != 2:
                 raise ValueError("X is {}-dimensional, however, "
-                    "it must be 2-dimensional.".format(X.ndim))
+                                 "it must be 2-dimensional.".format(X.ndim))
             if self.preprocessing_X is not None:
                 X = self.preprocessing_X.inverse_transform(X)
 

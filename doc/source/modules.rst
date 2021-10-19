@@ -9,6 +9,7 @@ Modules
    kernels
    acquisition_functions
    gp_acquisition
+   svm
    preprocessing
    convergence
    run

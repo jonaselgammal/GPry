@@ -32,9 +32,15 @@ class Hyperparameter(namedtuple('Hyperparameter',
                                  'max_length',
                                  'n_elements', 'fixed', 'dynamic'))):
     """A kernel hyperparameter's specification in form of a namedtuple.
-    .. versionadded:: 0.18
+
+    .. note::
+
+        We overwrite the whole class here since the namedtuple approach does not
+        allow for easy extension. For more information on this see
+        `this link <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.kernels.Hyperparameter.html>`_
     Attributes
     ----------
+
     name : str
         The name of the hyperparameter. Note that a kernel using a
         hyperparameter with name "x" must have the attributes self.x and
@@ -67,13 +73,6 @@ class Hyperparameter(namedtuple('Hyperparameter',
         length scales (correlation lengths) if their bounds are set to
         "dynamic". This is done to restrict their range to the same order of
         magnitude as the prior size (actually 2x the prior).
-
-    .. note::
-
-        We overwrite the whole class here since the namedtuple approach does not
-        allow for easy extension.
-
-        For more information on this see `this link <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.kernels.Hyperparameter.html>`_
     """
 
     # A raw namedtuple is very memory efficient as it packs the attributes
