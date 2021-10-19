@@ -21,7 +21,7 @@ class ConvergenceCheckError(Exception):
     pass
 
 
-class Convergence_criterion(metaclass=ABCMeta):
+class ConvergenceCriterion(metaclass=ABCMeta):
     """ Base class for all convergence criteria (CCs). A CC quantifies the
     convergence of the GP surrogate model. If this value goes below a certain,
     user-set value we consider the GP to have converged to the true posterior
@@ -91,7 +91,7 @@ class Convergence_criterion(metaclass=ABCMeta):
         gp. If gp_2 is None the last GP is taken from the model instance."""
 
 
-class KL_from_draw(Convergence_criterion):
+class KL_from_draw(ConvergenceCriterion):
     """
     Class to calculate the KL divergence between two steps of the algorithm
     by drawing n points from the prior and evaluating the KL divergence between
@@ -216,7 +216,7 @@ class KL_from_draw(Convergence_criterion):
             return kl
 
 
-class KL_from_draw_approx(Convergence_criterion):
+class KL_from_draw_approx(ConvergenceCriterion):
     """
     Class to calculate the KL divergence between two steps of the algorithm
     by drawing n points from the prior and evaluating the KL divergence between
@@ -344,7 +344,7 @@ class KL_from_draw_approx(Convergence_criterion):
                 return np.nan
 
 
-class KL_from_training(Convergence_criterion):
+class KL_from_training(ConvergenceCriterion):
     """
     Class to calculate the KL divergence between two different GPs assuming
     that the GP follows some (unnormalized) multivariate gaussian distribution.
@@ -500,7 +500,58 @@ class KL_from_training(Convergence_criterion):
                 return np.nan
 
 
-class KL_from_MC_training(Convergence_criterion):
+class ConvergenceCriterionGaussianApprox(ConvergenceCriterion):
+
+    def _mean_and_cov_from_prior(self, gp):
+        """
+        Get mean and covmat from a prior sample.
+        """
+        X_values = self.prior.sample(self.n_initial)
+        try:
+            y_values = gp.predict(X_values)
+        except:
+            raise ConvergenceCheckError("Argument is either not a GP "
+                                        "regressor or hasn't been fit to data before.")
+        # Right now this doesn't check whether the value of the covariance
+        # matrix is numerically stable i.e. whether it's converged. This
+        # shouldn't matter too much though since it's only run once at the
+        # beginning and then the MCMC should take care of the rest.
+        # TODO: Maybe need something better here so it can't get stuck
+        while True:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('error')
+                try:
+                    y_values = np.exp(y_values - np.max(y_values))
+                    mean = np.average(X_values, axis=0, weights=y_values)
+                    cov = np.cov(X_values.T, aweights=y_values)
+                    return mean, cov
+                except:
+                    # Draw more points and try again
+                    X_values = np.append(X_values,
+                                         self.prior.sample(self.n_initial),
+                                         axis=0)
+
+    def _mean_and_cov(self, X, gp):
+        """
+        Mean and covariance from sample given GP.
+
+        Raises ConvergenceCheckError if singular covariance matrix.
+        """
+        y_values = gp.predict(X)
+        exp_y = np.exp(y_values - np.max(y_values))
+        i_nonzeros = np.where(np.isclose(exp_y, 0))[0]
+        mean = np.average(X, axis=0, weights=exp_y)
+        cov = np.cov(X.T, aweights=exp_y)
+        try:
+            if np.linalg.matrix_rank(cov, 1e-6) < len(cov):
+                raise np.linalg.LinAlgError
+        # np.linalg.matrix_rank can raise this one too!
+        except np.linalg.LinAlgError:
+            raise ConvergenceCheckError("Got singular covariance matrix")
+        return mean, cov
+
+
+class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
     """
     This class is supposed to use a short MCMC chain to get independent samples
     from the posterior distribution. These can then be used to get the KL
@@ -600,31 +651,6 @@ class KL_from_MC_training(Convergence_criterion):
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
         return kl
 
-    def _mean_and_cov_from_prior(self, gp):
-        """
-        Get mean and covmat from a prior sample.
-        """
-        X_values = self.prior.sample(self.n_initial)
-        y_values = gp.predict(X_values)
-        # Right now this doesn't check whether the value of the covariance
-        # matrix is numerically stable i.e. whether it's converged. This
-        # shouldn't matter too much though since it's only run once at the
-        # beginning and then the MCMC should take care of the rest.
-        # TODO: Maybe need something better here so it can't get stuck
-        while True:
-            with warnings.catch_warnings():
-                warnings.filterwarnings('error')
-                try:
-                    y_values = np.exp(y_values - np.max(y_values))
-                    mean = np.average(X_values, axis=0, weights=y_values)
-                    cov = np.cov(X_values.T, aweights=y_values)
-                    return mean, cov
-                except:
-                    # Draw more points and try again
-                    X_values = np.append(X_values,
-                                         self.prior.sample(self.n_initial),
-                                         axis=0)
-
     def _mean_and_cov_from_mcmc(self, gp):
         X_values, y_values = self._draw_from_mcmc(gp)
         try:
@@ -712,3 +738,129 @@ class KL_from_MC_training(Convergence_criterion):
         # plt.savefig("images/MC-generated.png")
         # plt.close()
         return X_values, y_values
+
+
+class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
+    """
+    Class to calculate the KL divergence between two steps of the algorithm
+    by computing the KL divergence between estimations of the mean and
+    covariance matrix of the previous and current surrogate models.
+
+    Parameters
+    ----------
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"prior"``: prior object. Needs to be supplied.
+        * ``"limit"``: Number, optional (default=1e-2)
+        * ``"n_draws"``: int, optional (default=5000)
+
+    """
+
+    def __init__(self, prior, params):
+        # get prior
+        self.prior = prior
+
+        self.limit = params.get("limit", 1e-2)
+        self.n_draws = params.get("n_draws", 5000)
+        self.cov_multiples = params.get("cov_multiples", [5])
+        if not hasattr(self.cov_multiples, "__len__"):
+            self.cov_multiples = [self.cov_multiples]
+
+        self.mean = None
+        self.cov = None
+
+        self.values = []
+        self.n_posterior_evals = []
+
+    def is_converged(self, gp, gp_2=None):
+        kl = self.criterion_value(gp, gp_2)
+        print(kl)
+        if kl < self.limit:
+            return True
+        else:
+            return False
+
+    def criterion_value(self, gp, gp_2=None):
+        """Calculate the Kullback-Liebler (KL) divergence between different
+        steps of the GP acquisition. In contrast to the version where the
+        training data is used to calculate the KL divergence this method does
+        not assume any form of underlying distribution of the data.
+
+        Parameters
+        ----------
+
+        gp : SKLearn Gaussian Process Regressor
+            The first surrogate model from which the training data is
+            retrieved.
+
+        gp_2 : SKLearn Gaussian Process Regressor, optional (default=None)
+            The second surrogate model from which the training data is
+            retrieved. If not specified, the previous mean and covmat are used.
+
+        Returns
+        -------
+
+        KL_divergence : The value of the KL divergence
+        """
+        # First, get the X sample (from prior if mean and cov not prev set)
+        if self.mean is None or self.cov is None:
+            X_test = self.prior.sample(self.n_draws)
+        else:
+            try:
+                X_test = self._sparse_sample_from_gaussian()
+            except ConvergenceCheckError as excpt:
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        try:
+            mean_new, cov_new = self._mean_and_cov(X_test, gp)
+        except ConvergenceCheckError as excpt:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        if gp_2 is None:
+            if self.mean is None or self.cov is None:
+                # Nothing to compare to! But save mean, cov for next call
+                self.mean, self.cov = mean_new, cov_new
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                raise ConvergenceCheckError("No previous call: needs gp_2 to compare.")
+            else:
+                mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
+        else:
+            mean_old, cov_old = self._mean_and_cov(X_test, gp_2)
+        # Compute the KL divergence (gaussian approx) with the previous iteration
+        try:
+            kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
+        except Exception as excpt:
+            kl = np.nan
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        finally:  # whether failed or not
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+        return kl
+
+    def _sparse_sample_from_gaussian(self, mean=None, cov=None, n_draws=None):
+        if mean is None:
+            mean = self.mean
+        if cov is None:
+            cov = self.cov
+        if n_draws is None:
+            n_draws = self.n_draws
+        n_draws_per_size = int(np.ceil(n_draws / len(self.cov_multiples)))
+        X_test = []
+        for mult in self.cov_multiples:
+            while len(X_test) < n_draws:
+                try:
+                    this_X_test = multivariate_normal(mean=mean, cov=mult * cov)\
+                        .rvs(n_draws_per_size)
+                except np.linalg.LinAlgError:
+                    raise ConvergenceCheckError("Covariance is singular.")
+                logpriors = [self.prior.logp(X) for X in this_X_test]
+                this_X_test = this_X_test[np.isfinite(logpriors)]
+                X_test.append(this_X_test)
+        return np.concatenate(X_test)

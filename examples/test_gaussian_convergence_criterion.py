@@ -11,6 +11,7 @@ import pandas as pd
 from scipy.stats import multivariate_normal, random_correlation
 import warnings
 from time import time
+import pickle
 
 # GPry things needed for building the model
 from gpry.acquisition_functions import Log_exp
@@ -18,7 +19,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
 from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_approx, \
-    ConvergenceCheckError
+    ConvergenceCheckError, KL_from_draw_approx_alt
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.tools import kl_norm
 from cobaya.model import get_model
@@ -29,7 +30,11 @@ z = 0.1
 
 # Number of times that each combination of d and zeta is run with different
 # gaussians
-n_repeats = 200
+n_repeats = 3
+n_iterations = 10
+
+# Ratio of prior size to (2x)std of mode
+prior_size_in_std = 15
 
 # Criteria to be tested: tuple (criterion class, dict of parameters)
 criteria = [
@@ -39,9 +44,15 @@ criteria = [
 # NB: KL_from_draw does not have self.mean, self.cov, so cannot be used here
 
 
+# Print always full dataframes
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', -1)
+
 ######################
 
-data = pd.DataFrame(columns=(["i_run", "n_train"] +
+data = pd.DataFrame(columns=(["i_run", "iter", "n_train"] +
                              [f"crit_{i}" for i in range(len(criteria))] +
                              [f"crit_KL_{i}" for i in range(len(criteria))] +
                              [f"time_{i}" for i in range(len(criteria))] +
@@ -52,7 +63,7 @@ for n_r in range(n_repeats):
     std = np.random.uniform(size=dim)
     eigs = np.random.uniform(size=dim)
     eigs = eigs / np.sum(eigs) * dim
-    corr = random_correlation.rvs(eigs)
+    corr = random_correlation.rvs(eigs) if dim > 1 else [[1]]
     cov = np.multiply(np.outer(std, std), corr)
     mean = np.zeros_like(std)
     rv = multivariate_normal(mean, cov)
@@ -69,7 +80,8 @@ for n_r in range(n_repeats):
     param_dict = {}
     for d, p_d in enumerate(input_params):
         param_dict[p_d] = {
-            "prior": {"min": mean[d] - 5 * std[d], "max": mean[d] + 5 * std[d]}}
+            "prior": {"min": mean[d] - prior_size_in_std * std[d],
+                      "max": mean[d] + prior_size_in_std * std[d]}}
     info["params"] = param_dict
     # Initialise stuff
     model = get_model(info)
@@ -101,9 +113,9 @@ for n_r in range(n_repeats):
     # Number of acquired points per step
     n_points = dim
     y_s = init_y
-    n_iterations = 10
     for i in range(n_iterations):
-        print(f"+++ Iteration {i} (of {n_iterations}) +++++++++")
+        print(f"+++ Test {n_r + 1} (of {n_repeats}) "
+              f"-- Iteration {i + 1} (of {n_iterations}) +++++++++")
         new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
         if len(new_X) != 0:
             new_y = np.empty(new_X.shape[0])
@@ -115,7 +127,7 @@ for n_r in range(n_repeats):
             warnings.warn("No points were added to the GP because the proposed"
                           " points have already been evaluated.")
         # Compute convergence criteria
-        row = {"i_run": n_r, "n_train": len(gp.X_train)}
+        row = {"i_run": n_r, "iter": i, "n_train": len(gp.X_train)}
         for i_c, crit in enumerate(criteria_inst):
             try:
                 # arreglar esto: mucho tiempo computar 2 veces cada vez
@@ -135,6 +147,12 @@ for n_r in range(n_repeats):
             row.update({f"crit_{i_c}": val, f"crit_KL_{i_c}": kl,
                         f"time_{i_c}": time_eval, f"evals_{i_c}": n_eval})
         data.loc[len(data.index)] = row
-        print(data)
-# with open(file_name, 'wb') as f:
-#     pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+        print_cols = [col for col in data.columns if any(
+            col.startswith(pre) for pre in (
+                "crit_KL",
+                "time_",
+                #"evals_"
+            ))]
+        print(data[print_cols])
+with open(file_name, "wb") as f:
+    pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)

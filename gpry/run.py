@@ -7,7 +7,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 from gpry.kernels import ConstantKernel as C, RBF, Matern
-from gpry.convergence import Convergence_criterion, KL_from_MC_training, \
+from gpry.convergence import ConvergenceCriterion, KL_from_MC_training, \
     KL_from_draw_approx
 from cobaya.model import get_model
 from copy import deepcopy
@@ -142,7 +142,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             params = {"limit": 0.02}
             convergence = KL_from_MC_training(model.prior,
                                               params)
-    elif isinstance(convergence_criterion, Convergence_criterion):
+    elif isinstance(convergence_criterion, ConvergenceCriterion):
         convergence = convergence_criterion
     else:
         raise TypeError("convergence_criterion should be a "
