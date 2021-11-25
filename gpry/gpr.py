@@ -719,7 +719,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def predict(self, X, return_std=False, return_cov=False,
-                return_mean_grad=False, return_std_grad=False):
+                return_mean_grad=False, return_std_grad=False, do_check_array=True):
         """
         Predict output for X.
 
@@ -782,9 +782,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             raise ValueError("Mean grad and std grad not implemented \
                 for n_samples > 1")
 
-        if self.kernel is None or self.kernel.requires_vector_input:
+        if do_check_array and (self.kernel is None or self.kernel.requires_vector_input):
             X = check_array(X, ensure_2d=True, dtype="numeric")
-        else:
+        elif do_check_array:
             X = check_array(X, ensure_2d=False, dtype=None)
 
         if not hasattr(self, "X_train_"):  # Not fit; predict based on GP prior
