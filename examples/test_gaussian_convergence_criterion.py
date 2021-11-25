@@ -9,6 +9,7 @@ covariance matrix, all criteria would be equivalent).
 import numpy as np
 import pandas as pd
 from scipy.stats import multivariate_normal, random_correlation
+from numpy.random import default_rng
 import warnings
 from time import time
 import pickle
@@ -19,7 +20,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
 from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_approx, \
-    ConvergenceCheckError, KL_from_draw_approx_alt
+    ConvergenceCheckError, KL_from_draw_approx_alt, ConvergenceCriterionGaussianMCMC
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.tools import kl_norm
 from cobaya.model import get_model
@@ -38,8 +39,8 @@ prior_size_in_std = 15
 
 # Criteria to be tested: tuple (criterion class, dict of parameters)
 criteria = [
-    (KL_from_MC_training, {"n_draws": 500, "temperature": 6}),
-    (KL_from_draw_approx, {"n_draws": 50000})]
+    (ConvergenceCriterionGaussianMCMC, {}),
+]
 
 # NB: KL_from_draw does not have self.mean, self.cov, so cannot be used here
 
@@ -48,20 +49,21 @@ criteria = [
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
-pd.set_option('display.max_colwidth', -1)
+pd.set_option('display.max_colwidth', None)
 
 ######################
 
 data = pd.DataFrame(columns=(["i_run", "iter", "n_train"] +
                              [f"crit_{i}" for i in range(len(criteria))] +
-                             [f"crit_KL_{i}" for i in range(len(criteria))] +
+                             [f"crit_KL_true_{i}" for i in range(len(criteria))] +
                              [f"time_{i}" for i in range(len(criteria))] +
                              [f"evals_{i}" for i in range(len(criteria))]))
 
 for n_r in range(n_repeats):
     # Create random gaussian
-    std = np.random.uniform(size=dim)
-    eigs = np.random.uniform(size=dim)
+    rng = default_rng()
+    std = rng.uniform(size=dim)
+    eigs = rng.uniform(size=dim)
     eigs = eigs / np.sum(eigs) * dim
     corr = random_correlation.rvs(eigs) if dim > 1 else [[1]]
     cov = np.multiply(np.outer(std, std), corr)
@@ -133,22 +135,26 @@ for n_r in range(n_repeats):
                 # arreglar esto: mucho tiempo computar 2 veces cada vez
                 n_eval_old = gp.n_eval
                 start = time()
-                val = crit.criterion_value(gp)
-                time_eval = time() - start
+                row[f"crit_{i_c}"] = crit.criterion_value(gp)
+                row[f"time_{i_c}"] = time() - start
                 # n evaluations is important, but speed is not correlated with it:
                 # it's infinitely fastes when predicting for >1 X's at once!
-                n_eval = gp.n_eval - n_eval_old
+                row[f"evals_{i_c}"] = gp.n_eval - n_eval_old
                 # Until ConvergenceCheckerror used by the other convergence criteria:
-                if np.isnan(val):
+                if np.isnan(row[f"crit_{i_c}"]):
                     raise ConvergenceCheckError()
-                kl = kl_norm(crit.mean, crit.cov, mean, cov)
+                if hasattr(crit, "mean") and hasattr(crit, "cov"):
+                    KL_true_left = kl_norm(crit.mean, crit.cov, mean, cov)
+                    KL_true_right = kl_norm(mean, cov, crit.mean, crit.cov)
+                    KL_true = max(KL_true_left, KL_true_right)
+                    row[f"crit_KL_true_{i_c}"] = KL_true
             except ConvergenceCheckError:
-                val, kl, time_eval, n_eval = np.nan, np.nan, np.nan, np.nan
-            row.update({f"crit_{i_c}": val, f"crit_KL_{i_c}": kl,
-                        f"time_{i_c}": time_eval, f"evals_{i_c}": n_eval})
+                row.update({f"crit_{i_c}": np.nan, f"crit_KL_true_{i_c}": np.nan,
+                            f"time_{i_c}": np.nan, f"evals_{i_c}": np.nan})
         data.loc[len(data.index)] = row
         print_cols = [col for col in data.columns if any(
             col.startswith(pre) for pre in (
+                "crit_",
                 "crit_KL",
                 "time_",
                 #"evals_"

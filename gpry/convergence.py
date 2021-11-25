@@ -15,6 +15,7 @@ import warnings
 from random import choice
 import sys
 from gpry.tools import kl_norm
+import lhsmdu
 
 
 class ConvergenceCheckError(Exception):
@@ -240,6 +241,7 @@ class KL_from_draw_approx(ConvergenceCriterion):
 
         self.limit = params.get("limit", 1e-2)
         self.n_draws = params.get("n_draws", 5000)
+        self.method = params.get("method", "simple").lower()
         self.gp_2 = None
 
         self.mean = None
@@ -301,8 +303,20 @@ class KL_from_draw_approx(ConvergenceCriterion):
                             "or hasn't been fit to data before.")
 
         else:
-            X_test = self.prior.sample(self.n_draws)
-
+            if self.method == "simple":
+                X_test = self.prior.sample(self.n_draws)
+            elif self.method == "lhs":
+                # We need to chunk LHS (worse evenly-spacing guarantee) due to memory use
+                nchunk = min(100, self.n_draws)
+                X_test = None
+                for i in range(int(np.ceil(self.n_draws / nchunk))):
+                    lhsmdu.setRandomSeed(None)
+                    this_X_test = lhsmdu.sample(self.prior.d(), nchunk)
+                    if X_test is None:
+                        X_test = this_X_test
+                    else:
+                        X_test = np.concatenate([X_test, this_X_test])
+                X_test = X_test[:self.n_draws]
         # Actual calculation of the KL divergence as sum(p * log(p/q))
         # For this p and q need to be normalized such that they add up to 1.
         # Raise exception for all warnings to catch them.
@@ -667,7 +681,7 @@ class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
         self.cobaya_input["likelihood"] = {
             "gp": {"external":
-                   (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())))[0]),
+                   (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())), do_check_array=False)[0]),
                    "input_params": list(self.cobaya_input["params"])}}
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
@@ -764,9 +778,7 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
 
         self.limit = params.get("limit", 1e-2)
         self.n_draws = params.get("n_draws", 5000)
-        self.cov_multiples = params.get("cov_multiples", [5])
-        if not hasattr(self.cov_multiples, "__len__"):
-            self.cov_multiples = [self.cov_multiples]
+        self.cov_multiple = params.get("cov_multiple", 1)
 
         self.mean = None
         self.cov = None
@@ -851,16 +863,191 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
             cov = self.cov
         if n_draws is None:
             n_draws = self.n_draws
-        n_draws_per_size = int(np.ceil(n_draws / len(self.cov_multiples)))
-        X_test = []
-        for mult in self.cov_multiples:
-            while len(X_test) < n_draws:
-                try:
-                    this_X_test = multivariate_normal(mean=mean, cov=mult * cov)\
-                        .rvs(n_draws_per_size)
-                except np.linalg.LinAlgError:
-                    raise ConvergenceCheckError("Covariance is singular.")
-                logpriors = [self.prior.logp(X) for X in this_X_test]
-                this_X_test = this_X_test[np.isfinite(logpriors)]
-                X_test.append(this_X_test)
-        return np.concatenate(X_test)
+        X_test = []  # will be an array
+        mult = self.cov_multiple
+        while len(X_test) < n_draws:
+            this_n_draws = n_draws - len(X_test)
+            try:
+                this_X_test = np.atleast_2d(multivariate_normal(
+                    mean=mean, cov=mult * cov).rvs(this_n_draws))
+            except np.linalg.LinAlgError:
+                raise ConvergenceCheckError("Covariance is singular.")
+            logpriors = [self.prior.logp(X) for X in this_X_test]
+            this_X_test = this_X_test[np.isfinite(logpriors)]
+            # Shrink contour if not too many points
+            if len(this_X_test) < 0.1 * this_n_draws:
+                if mult > 1:
+                    mult -= 1
+                else:  # probably very misestimated
+                    mult *= 0.5
+            if X_test == []:
+                X_test = this_X_test
+            else:
+                X_test = np.concatenate([X_test, this_X_test])
+        return np.array(X_test[:self.n_draws])
+
+
+class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
+
+    def __init__(self, prior, params):
+        self.values = []
+        self.n_posterior_evals = []
+        from cobaya.model import get_model
+        from cobaya.sampler import get_sampler
+        from cobaya.collection import SampleCollection
+        from cobaya.log import LoggedError
+        global get_model, get_sampler, SampleCollection, LoggedError
+        self.prior = prior
+        self.mean = None
+        self.cov = None
+        self.values = []
+        self.limit = params.get("limit", 1e-2)
+        self.n_posterior_evals = []
+        # Number of MCMC chains to generate samples
+        if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
+            raise ValueError(
+                "Pass either 'n_draws' or 'n_draws_per_dimsquared', not both")
+        if params.get("n_draws"):
+            self._n_draws = int(params.get("n_draws"))
+        else:
+            self.n_draws_per_dimsquared = params.get("n_draws_per_dimsquared", 10)
+        # Number of jumps necessary to assume decorrelation
+        self.n_steps_per_dim = params.get("n_steps_per_dim", 5)
+        # Number of prior draws for the initial sample
+        self.n_initial = params.get("n_initial", 500)
+        # MCMC temperature
+        self.temperature = params.get("temperature", 2)
+        # Max times a sample can be reweighted and reused (we may miss new high regions)
+        self.max_reused = 4
+        # Prepare Cobaya's input
+        bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
+        params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
+                       for i in range(self.prior.d())}
+        self.cobaya_input = {"params": params_info}
+        # Save last sample
+        self._last_collection = None
+
+    def _get_new_mean_and_cov(self, gp):
+        cov_mcmc = None
+        if self._last_collection is not None:
+            points = self._last_collection[
+                list(self.cobaya_input["params"])].to_numpy(np.float64)
+            old_gp_values = -0.5 * \
+                self._last_collection["chi2"].to_numpy(np.float64)
+            new_gp_values = gp.predict(points)
+            weights = self._last_collection["weight"].to_numpy(np.float64)
+            logratio = new_gp_values - old_gp_values
+            logratio -= max(logratio)
+            reweights = weights * np.exp(logratio)
+            mean_reweighted = np.average(points, weights=reweights, axis=0)
+            cov_reweighted = np.cov(points.T, aweights=reweights)
+            cov_mcmc = cov_reweighted
+            # Use max of them
+            kl_reweigt = max(
+                kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
+                kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
+            # If very small, we've probably found nothing yet, so nothing new
+            # But assume that if we have hit 10 * limit, we are right on track
+            min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
+            # If larger than the difference with the last one, bad
+            max_kl = self.values[-1]
+            if kl_reweight > min_kl and kl_reweight < max_kl and \
+               self.n_reused < self.max_reused:
+                self.n_reused += 1
+                return mean_reweighted, cov_reweighted
+        # No previous mcmc sample, or reweighted mean+cov too different
+        self.n_reused = 0
+        self._last_collection = self._sample_mcmc(gp, covmat=cov_mcmc)
+        self._last_collection.detemper()
+        mean_new, cov_new = self._last_collection.mean(), self._last_collection.cov()
+        return mean_new, cov_new
+
+    def criterion_value(self, gp, gp_2=None):
+        try:
+            mean_new, cov_new = self._get_new_mean_and_cov(gp)
+        except ConvergenceCheckError as excpt:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        if gp_2 is None:
+            if self.mean is None or self.cov is None:
+                # Nothing to compare to! But save mean, cov for next call
+                self.mean, self.cov = mean_new, cov_new
+                self.values.append(np.nan)
+                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                raise ConvergenceCheckError("No previous call: needs gp_2 to compare.")
+            else:
+                mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
+        else:
+            raise NotImplementedError("Nothing yet to do with gp2")
+        # Compute the KL divergence (gaussian approx) with the previous iteration
+        try:
+            kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
+        except Exception as excpt:
+            kl = np.nan
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
+        finally:  # whether failed or not
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+        return kl
+
+    def _mean_and_cov_from_mcmc(self, gp):
+        X_values, y_values = self._draw_from_mcmc(gp)
+        try:
+            # Compute the mean and covmat using appropriate weighting (if possible)
+            exp_y_new = np.exp(y_values - np.max(y_values))
+            mean = np.average(X_values, axis=0, weights=exp_y_new)
+            cov = np.cov(X_values.T, aweights=exp_y_new)
+            return (mean, cov)
+        except Exception as excpt:
+            raise ConvergenceCheckError(
+                f"Could not compute mean and cov from MCMC: {excpt}")
+
+    def _sample_mcmc(self, gp, covmat=None):
+        # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
+        self.cobaya_input["likelihood"] = {
+            "gp": {"external":
+                   (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())), do_check_array=False)[0]),
+                   "input_params": list(self.cobaya_input["params"])}}
+        # Supress Cobaya's output
+        # (set to True for debug output, or comment out for normal output)
+        self.cobaya_input["debug"] = 50
+        model = get_model(self.cobaya_input)
+        # If no covariance computed in last step, try to get one from a prior sample
+        if covmat is None:
+            if self.cov is None:
+                _, covmat = self._mean_and_cov_from_prior(gp)
+            else:
+                covmat = self.cov
+        high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
+        sampler_input = {"mcmc": {
+            "covmat": covmat, "covmat_params": list(self.cobaya_input["params"]),
+            "temperature": self.temperature,
+            # Faster: no need to measure speeds, check convergence or learn proposal
+            "measure_speeds": False,
+            # Relax stopping criterion if not yet well converged
+            "Rminus1_stop": (0.01 if high_prec_threshold else 0.2),
+            "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5)}}
+        for i in range(5):
+            # Reduce the covariance matrix size between tries
+            sampler_input["mcmc"]["covmat"] = covmat / 2**(2 * i)
+            mcmc_sampler = get_sampler(sampler_input, model)
+            try:
+                mcmc_sampler.run()
+                break
+            except LoggedError:
+                raise ConvergenceCheckError
+                # Happens most often when the model is learning very fast
+                # Tested the halving, but didn't work too well -- better fail
+                # most likely chain stuck!
+                pass
+        return mcmc_sampler.products()["sample"]
+
+    def is_converged(self, gp, gp_2=None):
+        kl = self.criterion_value(gp, gp_2)
+        if kl < self.limit:
+            return True
+        else:
+            return False
