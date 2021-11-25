@@ -943,7 +943,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             cov_reweighted = np.cov(points.T, aweights=reweights)
             cov_mcmc = cov_reweighted
             # Use max of them
-            kl_reweigt = max(
+            kl_reweight = max(
                 kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
                 kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
             # If very small, we've probably found nothing yet, so nothing new
