@@ -3,6 +3,7 @@ Top level run file which constructs the loop for mapping a posterior
 distribution and sample the GP to get chains.
 """
 
+from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
@@ -79,7 +80,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     -------
 
     model : Cobaya model
-        The model that was used to run the GP on.
+        The model that was used to run the GP on (if running in parallel, needs to be
+        passed for all processes).
 
     gp : GaussianProcessRegressor
         This can be used to call an MCMC sampler for getting marginalized
@@ -98,160 +100,177 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         The options dict used for the active sampling loop.
     """
 
-    # Construct GP if it's not already constructed
-    if isinstance(gp, str):
-        if gp == "RBF":
-            # Construct RBF kernel
-            n_d = model.prior.d()
-            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-            kernel = C(1.0, [0.001, 10000]) \
-                * RBF([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
-            # Construct GP
-            gpr = GaussianProcessRegressor(
-                kernel=kernel,
-                n_restarts_optimizer=10,
-                preprocessing_X=Normalize_bounds(prior_bounds),
-                preprocessing_y=Normalize_y(),
-                verbose=verbose
-            )
-        elif gp == "Matern":
-            # Construct RBF kernel
-            n_d = model.prior.d()
-            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-            kernel = C(1.0, [0.001, 10000]) \
-                * Matern([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
-            # Construct GP
-            gpr = GaussianProcessRegressor(
-                kernel=kernel,
-                n_restarts_optimizer=10,
-                preprocessing_X=Normalize_bounds(),
-                preprocessing_y=Normalize_y(),
-                verbose=verbose
-            )
-        else:
-            raise ValueError("Currently only 'RBF' and 'Matern' are supported "
-                             "as standard GPs. Got %s" % gp)
-
-    elif isinstance(gp, GaussianProcessRegressor):
-        gpr = gp
-    else:
-        raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern', got "
-                        "%s" % gp)
-
-    # Construct the acquisition object if it's not already constructed
-    if isinstance(gp_acquisition, str):
-        prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-        if gp_acquisition == "Log_exp":
-            acquisition = GP_Acquisition(prior_bounds,
-                                         acq_func="Log_exp",
-                                         acq_optimizer="fmin_l_bfgs_b",
-                                         n_restarts_optimizer=5,
-                                         preprocessing_X=Normalize_bounds(
-                                             prior_bounds),
-                                         verbose=verbose)
-    elif isinstance(gp_acquisition, GP_Acquisition):
-        acquisition = acquisition
-    else:
-        raise TypeError("gp_acquisition should be an Acquisition object or "
-                        "'Log_exp', got %s" % gp_acquisition)
-
-    # Construct the convergence criterion
-    if isinstance(convergence_criterion, str):
-        if convergence_criterion == "KL":
-            params = {"limit": 0.02}
-            convergence = KL_from_MC_training(model.prior,
-                                              params)
-    elif isinstance(convergence_criterion, ConvergenceCriterion):
-        convergence = convergence_criterion
-    else:
-        raise TypeError("convergence_criterion should be a "
-                        "Convergence_criterion object or KL, got %s"
-                        % convergence_criterion)
-
-    # Check if a callback exists already and if so resume from there
-    callback_files = _check_callback(callback)
-    if np.any(callback_files):
-        if np.all(callback_files):
-            print("#########################################")
-            print("Callback found. Resuming from there...")
-            print("If this behaviour is unintentional either")
-            print("turn the callback option off or rename it")
-            print("to a file which doesn't exist.")
-            print("#########################################")
-
-            model, gpr, acquisition, convergence, options = _read_callback(
-                callback)
-        else:
-            warnings.warn("Callback files were found but are incomplete. "
-                          "Ignoring those files...")
-
-    print("Model has been initialized")
-
-    # Read in options for the run
-    if options is None:
-        options = {}
     n_d = model.prior.d()
-    n_initial = options.get("n_initial", 3 * n_d)
-    n_points_per_acq = options.get("n_points_per_acq", 1)
-    max_points = options.get("max_points", 1000)
-    max_init = options.get("max_init", 10 * n_d)
+    if is_main_process:
+        # Construct GP if it's not already constructed
+        if isinstance(gp, str):
+            if gp == "RBF":
+                # Construct RBF kernel
+                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                kernel = C(1.0, [0.001, 10000]) \
+                    * RBF([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
+                # Construct GP
+                gpr = GaussianProcessRegressor(
+                    kernel=kernel,
+                    n_restarts_optimizer=10,
+                    preprocessing_X=Normalize_bounds(prior_bounds),
+                    preprocessing_y=Normalize_y(),
+                    verbose=verbose
+                )
+            elif gp == "Matern":
+                # Construct RBF kernel
+                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                kernel = C(1.0, [0.001, 10000]) \
+                    * Matern([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
+                # Construct GP
+                gpr = GaussianProcessRegressor(
+                    kernel=kernel,
+                    n_restarts_optimizer=10,
+                    preprocessing_X=Normalize_bounds(),
+                    preprocessing_y=Normalize_y(),
+                    verbose=verbose
+                )
+            else:
+                raise ValueError("Currently only 'RBF' and 'Matern' are supported "
+                                 "as standard GPs. Got %s" % gp)
 
-    print(max_init)
-    print(n_initial)
+        elif isinstance(gp, GaussianProcessRegressor):
+            gpr = gp
+        else:
+            raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern', got "
+                            "%s" % gp)
 
-    # Sanity checks
-    if n_initial >= max_points:
-        raise ValueError("The number of initial samples needs to be "
-                         "smaller than the maximum number of points")
-    if n_initial <= 0:
-        raise ValueError("The number of initial samples needs to be bigger "
-                         "than 0")
+        # Construct the acquisition object if it's not already constructed
+        if isinstance(gp_acquisition, str):
+            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+            if gp_acquisition == "Log_exp":
+                acquisition = GP_Acquisition(prior_bounds,
+                                             acq_func="Log_exp",
+                                             acq_optimizer="fmin_l_bfgs_b",
+                                             n_restarts_optimizer=5,
+                                             preprocessing_X=Normalize_bounds(
+                                                 prior_bounds),
+                                             verbose=verbose)
+        elif isinstance(gp_acquisition, GP_Acquisition):
+            acquisition = acquisition
+        else:
+            raise TypeError("gp_acquisition should be an Acquisition object or "
+                            "'Log_exp', got %s" % gp_acquisition)
 
-    # Check if the GP already contains points. If so they are reused.
-    pretrained = 0
-    if hasattr(gpr, "y_train"):
-        if len(gpr.y_train) > 0:
-            pretrained = len(gpr.y_train)
+        # Construct the convergence criterion
+        if isinstance(convergence_criterion, str):
+            if convergence_criterion == "KL":
+                params = {"limit": 0.02}
+                convergence = KL_from_MC_training(model.prior,
+                                                  params)
+        elif isinstance(convergence_criterion, ConvergenceCriterion):
+            convergence = convergence_criterion
+        else:
+            raise TypeError("convergence_criterion should be a "
+                            "Convergence_criterion object or KL, got %s"
+                            % convergence_criterion)
 
-    # Draw initial samples if the model hasn't been trained before
-    if pretrained < n_initial:
-        # Initial samples loop. The initial samples are drawn from the prior
-        # and according to the distribution of the prior.
+        # Check if a callback exists already and if so resume from there
+        callback_files = _check_callback(callback)
+        if np.any(callback_files):
+            if np.all(callback_files):
+                print("#########################################")
+                print("Callback found. Resuming from there...")
+                print("If this behaviour is unintentional either")
+                print("turn the callback option off or rename it")
+                print("to a file which doesn't exist.")
+                print("#########################################")
+
+                model, gpr, acquisition, convergence, options = _read_callback(
+                    callback)
+            else:
+                warnings.warn("Callback files were found but are incomplete. "
+                              "Ignoring those files...")
+
+        print("Model has been initialized")
+
+        # Read in options for the run
+        if options is None:
+            options = {}
+        n_initial = options.get("n_initial", 3 * n_d)
+        n_points_per_acq = options.get("n_points_per_acq", 1)
+        max_points = options.get("max_points", 1000)
+        max_init = options.get("max_init", 10 * n_d)
+
+        # Sanity checks
+        if n_initial >= max_points:
+            raise ValueError("The number of initial samples needs to be "
+                             "smaller than the maximum number of points")
+        if n_initial <= 0:
+            raise ValueError("The number of initial samples needs to be bigger "
+                             "than 0")
+    max_init = mpi_comm.bcast(
+        max_init if is_main_process else None)
+
+    random_state = get_random_state()
+# TODO: pass it to GP too!
+
+    # Define initial tranining set
+    if is_main_process:
+        # Check if the GP already contains points. If so they are reused.
+        pretrained = 0
+        if hasattr(gpr, "y_train"):
+            if len(gpr.y_train) > 0:
+                pretrained = len(gpr.y_train)
+        n_still_needed = n_initial - pretrained
+        n_to_sample_per_process = int(np.ceil(n_still_needed / mpi_size))
+        # Arrays to store the initial sample
         X_init = np.empty((0, n_d))
         y_init = np.empty(0)
-        n_finite = pretrained
-        for iter in range(max_init - pretrained):
-            # Draw point from prior and evaluate logposterior at that point
-            X = model.prior.sample(n=1)
-            y = model.logpost(X[0])
-            # Only if the value is finite it contributes to the number of
-            # initial samples
-            if np.isfinite(y):
-                n_finite += 1
-            X_init = np.append(X_init, X, axis=0)
-            y_init = np.append(y_init, y)
-            # Break loop if the desired number of initial samples is reached
-            if n_finite >= n_initial:
+    n_to_sample_per_process = mpi_comm.bcast(
+        n_to_sample_per_process if is_main_process else None)
+    if n_to_sample_per_process:
+        n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
+        # Initial samples loop. The initial samples are drawn from the prior
+        # and according to the distribution of the prior.
+        for i in range(n_iterations_before_giving_up):
+            X_init_loop = np.empty((0, n_d))
+            y_init_loop = np.empty(0)
+            for j in range(n_to_sample_per_process):
+                # Draw point from prior and evaluate logposterior at that point
+                X = model.prior.sample(n=1, random_state=random_state)
+                y = model.logpost(X[0])
+                X_init_loop = np.append(X_init_loop, X, axis=0)
+                y_init_loop = np.append(y_init_loop, y)
+            # Gather points and decide whether to break.
+            all_points = mpi_comm.gather(X_init_loop)
+            all_posts = mpi_comm.gather(y_init_loop)
+            if is_main_process:
+                X_init = np.concatenate([X_init, np.concatenate(all_points)])
+                y_init = np.concatenate([y_init, np.concatenate(all_posts)])
+                # Only finite values contributes to the number of initial samples
+                n_finite_new = sum(np.isfinite(y_init))
+                # Break loop if the desired number of initial samples is reached
+                finished = (n_finite_new >= n_still_needed)
+            finished = mpi_comm.bcast(finished if is_main_process else None)
+            if finished:
                 break
-        # Raise error if the number of initial samples hasn't been reached
-        if n_finite < n_initial:
-            raise RuntimeError("The desired number of finite initial "
-                               "samples hasn't been reached. Try "
-                               "increasing max_init or decreasing the "
-                               "volume of the prior")
-
-        # Append the initial samples to the gpr
-        gpr.append_to_data(X_init, y_init)
-        # Save callback
-        _save_callback(callback, model, gpr, acquisition, convergence, options)
-        print("Initial samples drawn, starting with Bayesian "
-              "optimization loop.")
-    else:
+        if is_main_process:
+            # Raise error if the number of initial samples hasn't been reached
+            if not finished:
+                raise RuntimeError("The desired number of finite initial "
+                                   "samples hasn't been reached. Try "
+                                   "increasing max_init or decreasing the "
+                                   "volume of the prior")
+        if is_main_process:
+            # Append the initial samples to the gpr
+            gpr.append_to_data(X_init, y_init)
+            # Save callback
+            _save_callback(callback, model, gpr, acquisition, convergence, options)
+            print("Initial samples drawn, starting with Bayesian "
+                  "optimization loop.")
+    else:  # Enough pre-training
         n_finite = len(gpr.y_train)
         print("The number of pretrained points exceeds the number of initial "
               "samples")
 
     # Run bayesian optimization loop
+    n_finite = len(gpr.y_train)
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
     for iter in range(n_iterations):
         print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
