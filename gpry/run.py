@@ -105,7 +105,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             n_d = model.prior.d()
             prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             kernel = C(1.0, [0.001, 10000]) \
-                * RBF([0.01]*n_d, "dynamic", prior_bounds=prior_bounds)
+                * RBF([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
             # Construct GP
             gpr = GaussianProcessRegressor(
                 kernel=kernel,
@@ -113,13 +113,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 preprocessing_X=Normalize_bounds(prior_bounds),
                 preprocessing_y=Normalize_y(),
                 verbose=verbose
-                )
+            )
         elif gp == "Matern":
             # Construct RBF kernel
             n_d = model.prior.d()
             prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             kernel = C(1.0, [0.001, 10000]) \
-                * Matern([0.01]*n_d, "dynamic", prior_bounds=prior_bounds)
+                * Matern([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
             # Construct GP
             gpr = GaussianProcessRegressor(
                 kernel=kernel,
@@ -127,7 +127,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 preprocessing_X=Normalize_bounds(),
                 preprocessing_y=Normalize_y(),
                 verbose=verbose
-                )
+            )
         else:
             raise ValueError("Currently only 'RBF' and 'Matern' are supported "
                              "as standard GPs. Got %s" % gp)
@@ -147,7 +147,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                          acq_optimizer="fmin_l_bfgs_b",
                                          n_restarts_optimizer=5,
                                          preprocessing_X=Normalize_bounds(
-                                            prior_bounds),
+                                             prior_bounds),
                                          verbose=verbose)
     elif isinstance(gp_acquisition, GP_Acquisition):
         acquisition = acquisition
@@ -191,10 +191,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if options is None:
         options = {}
     n_d = model.prior.d()
-    n_initial = options.get("n_initial", 3*n_d)
+    n_initial = options.get("n_initial", 3 * n_d)
     n_points_per_acq = options.get("n_points_per_acq", 1)
     max_points = options.get("max_points", 1000)
-    max_init = options.get("max_init", 10*n_d)
+    max_init = options.get("max_init", 10 * n_d)
 
     print(max_init)
     print(n_initial)
@@ -220,7 +220,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         X_init = np.empty((0, n_d))
         y_init = np.empty(0)
         n_finite = pretrained
-        for iter in range(max_init-pretrained):
+        for iter in range(max_init - pretrained):
             # Draw point from prior and evaluate logposterior at that point
             X = model.prior.sample(n=1)
             y = model.logpost(X[0])
@@ -252,7 +252,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
               "samples")
 
     # Run bayesian optimization loop
-    n_iterations = int((max_points-n_finite) / n_points_per_acq)
+    n_iterations = int((max_points - n_finite) / n_points_per_acq)
     for iter in range(n_iterations):
         print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
         # Save old gp for convergence criterion
@@ -279,7 +279,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     # Save
     _save_callback(callback, model, gpr, acquisition, convergence, options)
 
-    if iter == n_iterations-1:
+    if iter == n_iterations - 1:
         warnings.warn("The maximum number of points was reached before "
                       "convergence. Either increase max_points or try to "
                       "choose a smaller prior.")
@@ -392,7 +392,7 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
                             "Convergence_criterion instance.")
         try:
             covariance_matrix = convergence.cov
-        except:
+        except AttributeError:
             warnings.warn("The convergence criterion does not provide a "
                           "covariance matrix. This will make the convergence "
                           "of the sampler slower.")
@@ -476,25 +476,25 @@ def _save_callback(path, model, gp, gp_acquisition, convergence_criterion, optio
     """
     if path is not None:
         try:
-            with open(path+"mod.pkl", 'wb') as f:
+            with open(os.path.join(path, "mod.pkl"), 'wb') as f:
                 # Save model as dict
                 model_dict = model.info()
                 pickle.dump(model_dict, f, pickle.HIGHEST_PROTOCOL)
-            with open(path+"gpr.pkl", 'wb') as f:
+            with open(os.path.join(path, "gpr.pkl"), 'wb') as f:
                 pickle.dump(gp, f, pickle.HIGHEST_PROTOCOL)
-            with open(path+"acq.pkl", 'wb') as f:
+            with open(os.path.join(path, "acq.pkl"), 'wb') as f:
                 pickle.dump(gp_acquisition, f, pickle.HIGHEST_PROTOCOL)
-            with open(path+"con.pkl", 'wb') as f:
+            with open(os.path.join(path, "con.pkl"), 'wb') as f:
                 # Need to delete the prior object in convergence so it doesn't
                 # do weird stuff while pickling
                 convergence = deepcopy(convergence_criterion)
                 convergence.prior = None
                 pickle.dump(convergence, f, pickle.HIGHEST_PROTOCOL)
-            with open(path+"opt.pkl", 'wb') as f:
+            with open(os.path.join(path, "opt.pkl"), 'wb') as f:
                 pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)
-        except:
+        except Exception as excpt:
             raise RuntimeError("Couldn't save the callback. Check if the path "
-                               "is correct and exists.")
+                               "is correct and exists. Error message: " + str(excpt))
 
 
 def _check_callback(path):
@@ -515,11 +515,11 @@ def _check_callback(path):
     [model, gp, acquisition, convergence, options]
     """
     if path is not None:
-        callback_files = [os.path.exists(path + "mod.pkl"),
-                          os.path.exists(path + "gpr.pkl"),
-                          os.path.exists(path + "acq.pkl"),
-                          os.path.exists(path + "con.pkl"),
-                          os.path.exists(path + "opt.pkl")]
+        callback_files = [os.path.exists(os.path.join(path, "mod.pkl")),
+                          os.path.exists(os.path.join(path, "gpr.pkl")),
+                          os.path.exists(os.path.join(path, "acq.pkl")),
+                          os.path.exists(os.path.join(path, "con.pkl")),
+                          os.path.exists(os.path.join(path, "opt.pkl"))]
     else:
         callback_files = [False] * 5
     return callback_files
@@ -545,22 +545,22 @@ def _read_callback(path):
     # Check if a file exists in the callback and if so resume from there.
     callback_files = _check_callback(path)
     # Read in callback
-    with open(path+"mod.pkl", 'rb') as i:
+    with open(os.path.join(path, "mod.pkl"), 'rb') as i:
         model = pickle.load(i) if callback_files[0] else None
         # Convert model from dict to model object
         model = get_model(model)
-    with open(path+"gpr.pkl", 'rb') as i:
+    with open(os.path.join(path, "gpr.pkl"), 'rb') as i:
         gpr = pickle.load(i) if callback_files[1] else None
-    with open(path+"acq.pkl", 'rb') as i:
+    with open(os.path.join(path, "acq.pkl"), 'rb') as i:
         acquisition = pickle.load(i) if callback_files[2] else None
-    with open(path+"con.pkl", 'rb') as i:
+    with open(os.path.join(path, "con.pkl"), 'rb') as i:
         if callback_files[3]:
             convergence = pickle.load(i)
             convergence.prior = model.prior
         else:
             convergence = None
 
-    with open(path+"opt.pkl", 'rb') as i:
+    with open(os.path.join(path, "opt.pkl"), 'rb') as i:
         options = pickle.load(i) if callback_files[4] else None
 
     return model, gpr, acquisition, convergence, options
