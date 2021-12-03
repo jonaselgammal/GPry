@@ -3,7 +3,8 @@ Top level run file which constructs the loop for mapping a posterior
 distribution and sample the GP to get chains.
 """
 
-from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state
+from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
+    split_number_for_parallel_processes
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
@@ -64,7 +65,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             * n_initial : Number of initial samples before starting the BO loop
               (default: 3*number of dimensions)
             * n_points_per_acq : Number of points which are aquired with
-              Kriging believer for every acquisition step (default: 1)
+              Kriging believer for every acquisition step (default: equals the
+              number of parallel processes)
             * max_points : Maximum number of points before the run fails
               (default: 1000)
             * max_init : Maximum number of points drawn at initialization
@@ -193,8 +195,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if options is None:
             options = {}
         n_initial = options.get("n_initial", 3 * n_d)
-        n_points_per_acq = options.get("n_points_per_acq", 1)
         max_points = options.get("max_points", 1000)
+        n_points_per_acq = options.get("n_points_per_acq", mpi_size)
+        if n_points_per_acq < mpi_size:
+            print("Warning: parallellisation not fully utilised! It is advised to make "
+                  "n_points_per_acq equal to the number of MPI processes (default when "
+                  "not specified.")
         max_init = options.get("max_init", 10 * n_d)
 
         # Sanity checks
@@ -204,11 +210,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if n_initial <= 0:
             raise ValueError("The number of initial samples needs to be bigger "
                              "than 0")
-    max_init = mpi_comm.bcast(
-        max_init if is_main_process else None)
+    max_init, max_points, n_points_per_acq = mpi_comm.bcast(
+        (max_init, max_points, n_points_per_acq) if is_main_process else None)
 
+    # Set MPI-aware random state
     random_state = get_random_state()
-# TODO: pass it to GP too!
 
     # Define initial tranining set
     if is_main_process:
@@ -265,40 +271,52 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             print("Initial samples drawn, starting with Bayesian "
                   "optimization loop.")
     else:  # Enough pre-training
-        n_finite = len(gpr.y_train)
         print("The number of pretrained points exceeds the number of initial "
               "samples")
+    n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
 
     # Run bayesian optimization loop
-    n_finite = len(gpr.y_train)
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
+    n_evals_per_acq_per_process = \
+        split_number_for_parallel_processes(n_points_per_acq)
+    n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
+    i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
     for iter in range(n_iterations):
-        print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
-        # Save old gp for convergence criterion
-        old_gpr = deepcopy(gpr)
-        # Get new point(s) from Bayesian optimization
-        new_X, y_lies, acq_vals = acquisition.multi_optimization(
-            gpr, n_points=n_points_per_acq)
-        # Get logposterior value(s) for the acquired points and append to the
-        # current model
+        if is_main_process:
+            print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
+            # Save old gp for convergence criterion
+            old_gpr = deepcopy(gpr)
+            # Get new point(s) from Bayesian optimization
+            new_X, y_lies, acq_vals = acquisition.multi_optimization(
+                gpr, n_points=n_points_per_acq)
+        # Get logposterior value(s) for the acquired points (in parallel)
+        new_X = mpi_comm.bcast(new_X if is_main_process else None)
+        new_X_this_process = new_X[
+            i_evals_this_process: i_evals_this_process + n_evals_this_process]
         new_y = np.empty(0)
-        for x in new_X:
+        for x in new_X_this_process:
             new_y = np.append(new_y, model.logpost(x))
-        gpr.append_to_data(new_X, new_y, fit=True)
+        # Collect (if parallel) and append to the current model
+        all_new_y = mpi_comm.gather(new_y)
+        if is_main_process:
+            new_y = np.concatenate(all_new_y)
+            gpr.append_to_data(new_X, new_y, fit=True)
         # Calculate convergence and break if the run has converged
-        if convergence.is_converged(gpr, old_gpr):
-            print("The run has converged, stopping the program...")
+        if is_main_process:
+            is_converged = convergence.is_converged(gpr, old_gpr)
+            if is_converged:
+                print("The run has converged, stopping the program...")
+        is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
+        if is_converged:
             break
-
-        print(f"Value of convergence criterion: {convergence.values[-1]}")
-
-        # Save
-        _save_callback(callback, model, gpr, acquisition, convergence, options)
+        if is_main_process:
+            # Save
+            _save_callback(callback, model, gpr, acquisition, convergence, options)
 
     # Save
     _save_callback(callback, model, gpr, acquisition, convergence, options)
 
-    if iter == n_iterations - 1:
+    if iter == n_iterations - 1 and is_main_process:
         warnings.warn("The maximum number of points was reached before "
                       "convergence. Either increase max_points or try to "
                       "choose a smaller prior.")
@@ -306,8 +324,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     # Now that the run has converged we can return the gp and all other
     # relevant quantities which can then be processed with an MCMC or other
     # sampler
-
-    return model, gpr, acquisition, convergence, options
+    if is_main_process:
+        return model, gpr, acquisition, convergence, options
+    else:
+        return None
 
 
 def mcmc(model, gp, convergence=None, options=None, output=None):
