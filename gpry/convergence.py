@@ -14,7 +14,7 @@ from scipy.special import logsumexp
 import warnings
 from random import choice
 import sys
-from gpry.tools import kl_norm
+from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood
 
 
 class ConvergenceCheckError(Exception):
@@ -898,9 +898,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         self.n_posterior_evals = []
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
-        from cobaya.collection import SampleCollection
         from cobaya.log import LoggedError
-        global get_model, get_sampler, SampleCollection, LoggedError
+        global get_model, get_sampler, LoggedError
         self.prior = prior
         self.mean = None
         self.cov = None
@@ -924,18 +923,19 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         # Max times a sample can be reweighted and reused (we may miss new high regions)
         self.max_reused = 4
         # Prepare Cobaya's input
-        bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
-        params_info = {"x_%d" % i: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
-                       for i in range(self.prior.d())}
-        self.cobaya_input = {"params": params_info}
+        self.cobaya_input = cobaya_input_prior(prior)
         # Save last sample
+        self._last_info = None
         self._last_collection = None
+
+    @property
+    def cobaya_param_names(self):
+        return list(self.cobaya_input["params"])
 
     def _get_new_mean_and_cov(self, gp):
         cov_mcmc = None
         if self._last_collection is not None:
-            points = self._last_collection[
-                list(self.cobaya_input["params"])].to_numpy(np.float64)
+            points = self._last_collection[self.cobaya_param_names].to_numpy(np.float64)
             old_gp_values = -0.5 * \
                 self._last_collection["chi2"].to_numpy(np.float64)
             new_gp_values = gp.predict(points)
@@ -961,7 +961,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
         self.n_reused = 0
-        self._last_collection = self._sample_mcmc(gp, covmat=cov_mcmc)
+        self._last_info, self._last_collection = self._sample_mcmc(gp, covmat=cov_mcmc)
         self._last_collection.detemper()
         mean_new, cov_new = self._last_collection.mean(), self._last_collection.cov()
         return mean_new, cov_new
@@ -1011,10 +1011,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
 
     def _sample_mcmc(self, gp, covmat=None):
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
-        self.cobaya_input["likelihood"] = {
-            "gp": {"external":
-                   (lambda **kwargs: gp.predict(np.atleast_2d(list(kwargs.values())), do_check_array=False)[0]),
-                   "input_params": list(self.cobaya_input["params"])}}
+        self.cobaya_input.update(cobaya_input_likelihood(gp, self.cobaya_param_names))
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
@@ -1027,7 +1024,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 covmat = self.cov
         high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
         sampler_input = {"mcmc": {
-            "covmat": covmat, "covmat_params": list(self.cobaya_input["params"]),
+            "covmat": covmat, "covmat_params": list(self.cobaya_param_names),
             "temperature": self.temperature,
             # Faster: no need to measure speeds, check convergence or learn proposal
             "measure_speeds": False,
@@ -1047,7 +1044,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 # Tested the halving, but didn't work too well -- better fail
                 # most likely chain stuck!
                 pass
-        return mcmc_sampler.products()["sample"]
+        return model.info, mcmc_sampler.products()["sample"]
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
