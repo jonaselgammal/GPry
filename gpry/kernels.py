@@ -319,11 +319,11 @@ class Matern(Kernel, sk_Matern):
         if self.anisotropic:
             return Hyperparameter("length_scale", "numeric",
                                   self.length_scale_bounds,
-                                  len(self.length_scale),
-                                  max_length=self.max_length)
+                                  self.max_length,
+                                  len(self.length_scale))
         return Hyperparameter(
             "length_scale", "numeric", self.length_scale_bounds,
-            max_length=self.max_length)
+            self.max_length)
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -480,11 +480,11 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         if self.anisotropic:
             return Hyperparameter("length_scale", "numeric",
                                   self.length_scale_bounds,
-                                  len(self.length_scale),
-                                  max_length=self.max_length)
+                                  self.max_length,
+                                  len(self.length_scale))
         return Hyperparameter(
             "length_scale", "numeric", self.length_scale_bounds,
-            max_length=self.max_length)
+            self.max_length)
 
     @property
     def hyperparameter_alpha(self):
