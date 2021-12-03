@@ -73,10 +73,13 @@ class Acquisition_Function(metaclass=ABCMeta):
 
         from Acquisition_functions import Acquisition_function
         Class custom_acq_func(Acquisition_Function):
-            def __init__(self, param_1, ..., fixed=...):
+            def __init__(self, param_1, ..., fixed=..., dimension=...):
                 # * 'hyperparam_i': The hyperparameters of the custom
                 #   acquisition function.
                 # * 'fixed': whether the hyperparameters of the acquisition
+                #   function are to be kept fixed.
+                # * 'dimension': the dimensionality of the target function,
+                #   which can be used to automatically adapt hyperparameters
                 #   function are to be kept fixed.
                 # * 'hasgradient': Whether the acquisition function can return
                 #   a gradient. Furthermore the bool hasgradient needs to be
@@ -394,7 +397,7 @@ class ConstantAcqFunc(Acquisition_Function):
         whether the constant value shall be fixed or not.
     """
 
-    def __init__(self, constant_value=1.0, fixed=False):
+    def __init__(self, constant_value=1.0, fixed=False, dimension=None):
         self.constant_value = constant_value
         self.fixed = fixed
         self.hasgradient = True
@@ -458,7 +461,7 @@ class Mu(Acquisition_Function):
         whether the constant value shall be fixed or not.
     """
 
-    def __init__(self, a=1.0, fixed=False):
+    def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
         self.hasgradient = True
@@ -530,7 +533,7 @@ class Exponential_mu(Acquisition_Function):
         whether the constant value shall be fixed or not.
     """
 
-    def __init__(self, a=1.0, fixed=False):
+    def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
         self.hasgradient = True
@@ -600,7 +603,7 @@ class Std(Acquisition_Function):
         whether the constant value shall be fixed or not.
     """
 
-    def __init__(self, a=1.0, fixed=False):
+    def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
         self.hasgradient = True
@@ -671,7 +674,7 @@ class Exponential_std(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
-    def __init__(self, a=1.0, fixed=False):
+    def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
         self.hasgradient = True
@@ -749,7 +752,7 @@ class Expected_improvement(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
-    def __init__(self, xi=0.01, fixed=False):
+    def __init__(self, xi=0.01, fixed=False, dimension=None):
         self.xi = xi
         self.fixed = fixed
         self.hasgradient = True
@@ -876,8 +879,14 @@ class Log_exp(Acquisition_Function):
         whether zeta and sigma_n shall be fixed or not.
     """
 
-    def __init__(self, zeta=1., sigma_n=None, fixed=False):
-        self.zeta = zeta
+    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None):
+        if zeta is None:
+            if dimension is None:
+                raise ValueError("We need the dimensionality of the problem to "
+                                 "guess an appropriate zeta value.")
+            self.zeta = self.auto_zeta(dimension)
+        else:
+            self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
         self.hasgradient = True
@@ -891,6 +900,9 @@ class Log_exp(Acquisition_Function):
     def hyperparameter_sigma_n(self):
         return Hyperparameter(
             "sigma_n", "numeric", fixed=self.fixed)
+
+    def auto_zeta(self, dimension):
+        return dimension**-1.1
 
     def __call__(self, X, gp, eval_gradient=False):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally

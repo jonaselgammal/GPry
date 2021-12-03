@@ -121,9 +121,7 @@ class GP_Acquisition(object):
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-
-            # TODO: make a dimensionality->zeta formula and put it here
-            self.acq_func = Log_exp()
+            self.acq_func = Log_exp(dimension=len(bounds))
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
                             "or 'Log_exp', instead got %s" % acq_func)
