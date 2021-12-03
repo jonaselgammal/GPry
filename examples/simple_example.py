@@ -3,13 +3,15 @@ Example code for a simple GP Characterization of a likelihood.
 """
 
 import os
-from gpry.mpi import is_main_process
+from gpry.mpi import is_main_process, mpi_comm
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
 import numpy as np
 
-rv = multivariate_normal([3, 2], [[0.5, 0.4], [0.4, 1.5]])
+mean = [3, 2]
+cov = [[0.5, 0.4], [0.4, 1.5]]
+rv = multivariate_normal(mean, cov)
 
 
 def lkl(x, y):

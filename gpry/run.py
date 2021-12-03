@@ -9,6 +9,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 from gpry.kernels import ConstantKernel as C, RBF, Matern
+from gpry.tools import cobaya_gp_model_input
 from gpry.convergence import ConvergenceCriterion, KL_from_MC_training, \
     KL_from_draw_approx
 from cobaya.model import Model, get_model
@@ -415,8 +416,7 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
     elif not isinstance(model, Model):
         raise TypeError("model needs to be a Cobaya model instance.")
 
-    # Generate model dictionary to be able to make modifications
-    model_dict = model.info()
+    sampled_parameter_names = list(model.parameterization.sampled_params())
 
     # Check if convergence_criterion is given and if so try to extract the
     # covariance matrix
@@ -453,34 +453,22 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
     sampler_type = [*sampler][0]
     if sampler_type == "mcmc" and covariance_matrix is not None:
         sampler["mcmc"]["covmat"] = covariance_matrix
-        sampler["mcmc"]["covmat_params"] = list(
-            model.parameterization.sampled_params()
-        )
+        sampler["mcmc"]["covmat_params"] = sampled_parameter_names
 
-    model_dict["sampler"] = sampler
+    model_dict = cobaya_gp_model_input(model.prior, gpr, sampled_parameter_names)
 
-    # Create a wrapper for the likelihood
-    sampled_params = model.parameterization.sampled_params()
-
-    def lkl(**kwargs):
-        values = [kwargs[name] for name in sampled_params]
-        return gpr.predict(np.atleast_2d(values)) \
-            - np.array(model.prior.logp(values))
-
-    # Replace the likelihood in the model by the GP surrogate
-    model_dict["likelihood"] = {"gp":
-                                {"external": lkl,
-                                 "input_params": sampled_params}
-                                }
 
     # Set the reference point of the prior to the sampled location with maximum
     # posterior value.
     max_location = gpr.X_train[np.argmax(gpr.y_train)]
-    for name, val in zip(list(sampled_params), max_location):
+    for name, val in zip(sampled_parameter_names, max_location):
         model_dict["params"][name]["ref"] = val
 
     if output is not None:
         model_dict["output"] = output
+
+    # Add the sampler
+    model_dict["sampler"] = sampler
 
     # Run the MCMC on the GP
     print("Starting MCMC")
