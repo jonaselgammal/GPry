@@ -314,7 +314,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             _save_callback(callback, model, gpr, acquisition, convergence, options)
 
     # Save
-    _save_callback(callback, model, gpr, acquisition, convergence, options)
+    if is_main_process:
+        _save_callback(callback, model, gpr, acquisition, convergence, options)
 
     if iter == n_iterations - 1 and is_main_process:
         warnings.warn("The maximum number of points was reached before "
@@ -324,10 +325,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     # Now that the run has converged we can return the gp and all other
     # relevant quantities which can then be processed with an MCMC or other
     # sampler
-    if is_main_process:
-        return model, gpr, acquisition, convergence, options
-    else:
-        return None
+    gpr, acquisition, convergence, options = mpi_comm.bcast(
+        (gpr, acquisition, convergence, options) if is_main_process else None)
+    return model, gpr, acquisition, convergence, options
 
 
 def mcmc(model, gp, convergence=None, options=None, output=None):
