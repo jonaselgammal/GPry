@@ -15,7 +15,6 @@ import warnings
 from random import choice
 import sys
 from gpry.tools import kl_norm
-import lhsmdu
 
 
 class ConvergenceCheckError(Exception):
@@ -306,6 +305,11 @@ class KL_from_draw_approx(ConvergenceCriterion):
             if self.method == "simple":
                 X_test = self.prior.sample(self.n_draws)
             elif self.method == "lhs":
+                try:
+                    import lhsmdu
+                except ImportError:
+                    raise ImportError(
+                        "You need to install 'lhsmdu' with pip to use this criterion")
                 # We need to chunk LHS (worse evenly-spacing guarantee) due to memory use
                 nchunk = min(100, self.n_draws)
                 X_test = None
