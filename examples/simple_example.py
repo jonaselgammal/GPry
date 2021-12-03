@@ -79,25 +79,37 @@ if is_main_process:
 # Validation part
 
 # MCMC run on the actual function
+# NB: we don't re-initialise the model, but use the one defined above
 
-from cobaya.run import run as cobaya_run
-info = {"likelihood": {"true_lkl": lkl}}
-info["params"] = {
-    "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
-    "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
+# Optional: define an output driver
+from cobaya.output import get_output
+out = get_output(prefix="chains/test", resume=False, force=True)
 
-info["sampler"] = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
-
-updated_info, sampler = cobaya_run(info)
+from cobaya.sampler import get_sampler
+info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
+mcmc_sampler = get_sampler(info_sampler, model=model, output=out)
+success = False
+try:
+    mcmc_sampler.run()
+    success = True
+except Exception as excpt:
+    print(f"Chain failed: {str(excpt)}")
+    pass
+success = all(mpi_comm.allgather(success))
+if not success and is_main_process:
+    print("Sampling failed!")
+    exit()
+all_chains = mpi_comm.gather(mcmc_sampler.products()["sample"], root=0)
 
 if is_main_process:
-    gdsamples_mcmc = MCSamplesFromCobaya(updated_info,
-                                         sampler.products()["sample"])
+    from getdist.mcsamples import MCSamplesFromCobaya
+    upd_info = model.info()
+    upd_info["sampler"] = {"mcmc": sampler.info()}
+    gdsamples_mcmc = MCSamplesFromCobaya(upd_info, all_chains)
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
     gdplot.triangle_plot(gdsamples_mcmc, ["x", "y"], filled=True)
     plt.savefig("images/Ground_truth_triangle.png", dpi=300)
-
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=True,
+    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=[False, True],
                          legend_labels=['MCMC', 'GP'])
     plt.savefig("images/Comparison_triangle.png", dpi=300)
