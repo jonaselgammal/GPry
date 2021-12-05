@@ -218,6 +218,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                              "than 0")
     max_init, max_points, n_points_per_acq = mpi_comm.bcast(
         (max_init, max_points, n_points_per_acq) if is_main_process else None)
+    convergence_is_MPI_aware = mpi_comm.bcast(
+        convergence.is_MPI_aware if is_main_process else None)
 
     # Set MPI-aware random state
     random_state = get_random_state()
@@ -308,7 +310,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             new_y = np.concatenate(all_new_y)
             gpr.append_to_data(new_X, new_y, fit=True)
         # Calculate convergence and break if the run has converged
-        if not convergence.is_MPI_aware:
+        if not convergence_is_MPI_aware:
             if is_main_process:
                 is_converged = convergence.is_converged(gpr, old_gpr)
             is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
