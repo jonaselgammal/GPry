@@ -5,6 +5,8 @@ This module contains general tools used in different parts of the code.
 import numpy as np
 from numpy import trace as tr
 from numpy.linalg import det
+from gpry.mpi import mpi_rank
+from cobaya.model import Model
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -69,3 +71,46 @@ def cobaya_gp_model_input(cobaya_prior, gpr):
     info = cobaya_input_prior(cobaya_prior)
     info.update(cobaya_input_likelihood(gpr, list(cobaya_prior.params)))
     return info
+
+
+def mcmc_info_from_run(model, gpr, convergence=None):
+    """
+    Creates appropriate MCMC sampler inputs from the results of a run.
+
+    Chaged ``model`` reference point to the best training sample
+    (or the rank-th best if running in parallel).
+    """
+    # Set the reference point of the prior to the sampled location with maximum
+    # posterior value
+    try:
+        i_max_location = np.argsort(gpr.y_train)[-mpi_rank]
+        max_location = gpr.X_train[i_max_location]
+    except IndexError:  # more MPI processes than training points: sample from prior
+        max_location = [None] * gpr.X_train.shape[-1]
+    model.prior.set_reference(dict(zip(model.prior.params, max_location)))
+    # Create sampler info
+    sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
+    # Check if convergence_criterion is given and if so try to extract the
+    # covariance matrix
+    if convergence is not None:
+        if isinstance(convergence, str):
+            _, _, _, convergence, _ = _read_callback(model)
+            if convergence is None:
+                raise RuntimeError("Could not load the convergence criterion "
+                                   "from callback")
+        elif not isinstance(model, Model):
+            raise TypeError("convergence needs to be a gpry "
+                            "Convergence_criterion instance.")
+        try:
+            covariance_matrix = convergence.cov
+        except AttributeError:
+            warnings.warn("The convergence criterion does not provide a "
+                          "covariance matrix. This will make the convergence "
+                          "of the sampler slower.")
+    else:
+        covariance_matrix = None
+    # Add the covariance matrix to the sampler if it exists
+    if covariance_matrix is not None:
+        sampler_info["mcmc"]["covmat"] = covariance_matrix
+        sampler_info["mcmc"]["covmat_params"] = model.prior.names
+    return sampler_info

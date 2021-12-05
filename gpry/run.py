@@ -9,9 +9,8 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 from gpry.kernels import ConstantKernel as C, RBF, Matern
-from gpry.tools import cobaya_gp_model_input
-from gpry.convergence import ConvergenceCriterion, KL_from_MC_training, \
-    KL_from_draw_approx
+from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run
+import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
@@ -23,8 +22,8 @@ import os
 
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
-        convergence_criterion="KL", options={},
-        callback=None, verbose=1):
+        convergence_criterion="ConvergenceCriterionGaussianMCMC",
+        convergence_options=None, options={}, callback=None, verbose=1):
     """
     This function takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. This is the easiest way to make use of the
@@ -59,6 +58,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         The convergence criterion. If None is given the KL-divergence between
         consecutive runs is calculated with an MCMC run and the run converges
         if KL<0.02 for two consecutive steps.
+
+    convergence_option: optional parameters passed to the convergence criterion.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -163,11 +164,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
         # Construct the convergence criterion
         if isinstance(convergence_criterion, str):
-            if convergence_criterion == "KL":
-                params = {"limit": 0.02}
-                convergence = KL_from_MC_training(model.prior,
-                                                  params)
-        elif isinstance(convergence_criterion, ConvergenceCriterion):
+            try:
+                conv_class = getattr(gpryconv, convergence_criterion)
+            except AttributeError:
+                raise ValueError(
+                    f"Unknown convergence criterion {convergence_criterion}. "
+                    f"Available convergence criteria: {gpryconv.builtin_names()}")
+            convergence = conv_class(model.prior, convergence_options or {})
+        elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
             convergence = convergence_criterion
         else:
             raise TypeError("convergence_criterion should be a "
@@ -441,49 +445,6 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
     updated_info["sampler"] = {list(sampler_info)[0]: sampler.info()}
 
     return updated_info, sampler
-
-def mcmc_info_from_run(model, gpr, convergence=None):
-    """
-    Creates appropriate MCMC sampler inputs from the results of a run.
-
-    Chaged ``model`` reference point to the best training sample
-    (or the rank-th best if running in parallel).
-    """
-    # Set the reference point of the prior to the sampled location with maximum
-    # posterior value
-    try:
-        i_max_location = np.argsort(gpr.y_train)[-mpi_rank]
-        max_location = gpr.X_train[i_max_location]
-    except IndexError:  # more MPI processes than training points: sample from prior
-        max_location = [None] * gpr.X_train.shape[-1]
-    model.prior.set_reference(dict(zip(model.prior.params, max_location)))
-    # Create sampler info
-    sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
-    # Check if convergence_criterion is given and if so try to extract the
-    # covariance matrix
-    if convergence is not None:
-        if isinstance(convergence, str):
-            _, _, _, convergence, _ = _read_callback(model)
-            if convergence is None:
-                raise RuntimeError("Could not load the convergence criterion "
-                                   "from callback")
-        elif not isinstance(model, Model):
-            raise TypeError("convergence needs to be a gpry "
-                            "Convergence_criterion instance.")
-        try:
-            covariance_matrix = convergence.cov
-        except AttributeError:
-            warnings.warn("The convergence criterion does not provide a "
-                          "covariance matrix. This will make the convergence "
-                          "of the sampler slower.")
-    else:
-        covariance_matrix = None
-    # Add the covariance matrix to the sampler if it exists
-    if covariance_matrix is not None:
-        sampler_info["mcmc"]["covmat"] = covariance_matrix
-        sampler_info["mcmc"]["covmat_params"] = model.prior.names
-    return sampler_info
-
 
 
 def _save_callback(path, model, gp, gp_acquisition, convergence_criterion, options):

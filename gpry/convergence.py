@@ -14,11 +14,23 @@ from scipy.special import logsumexp
 import warnings
 from random import choice
 import sys
-from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood
+import inspect
+from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
+    mcmc_info_from_run
 
 
 class ConvergenceCheckError(Exception):
     pass
+
+
+def builtin_names():
+    """
+    Lists all names of all built-in convergence criteria.
+    """
+    list_conv_names = [name for name, obj in inspect.getmembers(sys.modules[__name__])
+                       if (issubclass(obj.__class__, ConvergenceCriterion.__class__) and
+                           obj is not ConvergenceCriterion)]
+    return list_conv_names
 
 
 class ConvergenceCriterion(metaclass=ABCMeta):
