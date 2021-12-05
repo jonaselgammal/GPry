@@ -7,6 +7,7 @@ from numpy import trace as tr
 from numpy.linalg import det
 from gpry.mpi import mpi_rank
 from cobaya.model import Model
+import warnings
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -104,6 +105,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
         try:
             covariance_matrix = convergence.cov
         except AttributeError:
+            covariance_matrix = None
             warnings.warn("The convergence criterion does not provide a "
                           "covariance matrix. This will make the convergence "
                           "of the sampler slower.")

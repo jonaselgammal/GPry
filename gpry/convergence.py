@@ -102,6 +102,10 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """Returns the value of the convergence criterion for the current
         gp. If gp_2 is None the last GP is taken from the model instance."""
 
+    @property
+    def is_MPI_aware(self):
+        return False
+
 
 class KL_from_draw(ConvergenceCriterion):
     """
@@ -904,6 +908,10 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
 
 
 class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
+
+    @property
+    def is_MPI_aware(self):
+        return True
 
     def __init__(self, prior, params):
         self.values = []

@@ -308,11 +308,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             new_y = np.concatenate(all_new_y)
             gpr.append_to_data(new_X, new_y, fit=True)
         # Calculate convergence and break if the run has converged
-        if is_main_process:
+        if not convergence.is_MPI_aware:
+            if is_main_process:
+                is_converged = convergence.is_converged(gpr, old_gpr)
+            is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
+        else:  # run by all processes
             is_converged = convergence.is_converged(gpr, old_gpr)
-            if is_converged:
-                print("The run has converged, stopping the program...")
-        is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         if is_converged:
             break
         if is_main_process:
