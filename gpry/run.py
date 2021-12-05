@@ -13,7 +13,8 @@ from gpry.tools import cobaya_gp_model_input
 from gpry.convergence import ConvergenceCriterion, KL_from_MC_training, \
     KL_from_draw_approx
 from cobaya.model import Model, get_model
-from cobaya.run import run as cobaya_run
+from cobaya.output import get_output
+from cobaya.sampler import get_sampler
 from copy import deepcopy
 import numpy as np
 import warnings
@@ -331,7 +332,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     return model, gpr, acquisition, convergence, options
 
 
-def mcmc(model, gp, convergence=None, options=None, output=None):
+def mcmc(model_truth, gp, convergence=None, options=None, output=None):
     """
     This function is essentially just a wrapper for the Cobaya MCMC sampler
     (monte python) which runs an MCMC on the fitted GP regressor. It returns
@@ -343,7 +344,7 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
     Parameters
     ----------
 
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+    model_truth : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         Contains all information about the parameters in the likelihood and
         their priors as well as the likelihood itself. The likelihood is not
         used actively/it is replaced by the gp regressor so it does not need to
@@ -408,16 +409,56 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
         raise TypeError("The GP needs to be a gpry GP Regressor or a string "
                         "with a path to a callback file.")
 
-    # Check model
-    if isinstance(model, str):
-        model, _, _, _, _ = _read_callback(model)
-        if model is None:
+    # Check model_truth
+    if isinstance(model_truth, str):
+        model_truth, _, _, _, _ = _read_callback(model_truth)
+        if model_truth is None:
             raise RuntimeError("Could not load the model from callback")
-    elif not isinstance(model, Model):
-        raise TypeError("model needs to be a Cobaya model instance.")
+    elif not isinstance(model_truth, Model):
+        raise TypeError("model_truth needs to be a Cobaya model instance.")
 
-    sampled_parameter_names = list(model.parameterization.sampled_params())
+    sampled_parameter_names = list(model_truth.parameterization.sampled_params())
+    model_surrogate = get_model(
+        cobaya_gp_model_input(model_truth.prior, gpr, sampled_parameter_names))
 
+    # Check if options for the sampler are given else build the sampler
+    if options is None:
+        sampler_info = mcmc_info_from_run(model_surrogate, gp, convergence)
+    else:
+        sampler_info = options
+
+    out = None
+    if output is not None:
+        out = get_output(prefix=output, resume=False, force=True)
+
+    # Create the sampler
+    sampler = get_sampler(sampler_info, model=model_surrogate, output=out)
+
+    # Run the sampler on the GP
+    print("Starting sampler")
+    sampler.run()
+    updated_info = model_surrogate.info()
+    updated_info["sampler"] = {list(sampler_info)[0]: sampler.info()}
+
+    return updated_info, sampler
+
+def mcmc_info_from_run(model, gpr, convergence=None):
+    """
+    Creates appropriate MCMC sampler inputs from the results of a run.
+
+    Chaged ``model`` reference point to the best training sample
+    (or the rank-th best if running in parallel).
+    """
+    # Set the reference point of the prior to the sampled location with maximum
+    # posterior value
+    try:
+        i_max_location = np.argsort(gpr.y_train)[-mpi_rank]
+        max_location = gpr.X_train[i_max_location]
+    except IndexError:  # more MPI processes than training points: sample from prior
+        max_location = [None] * gpr.X_train.shape[-1]
+    model.prior.set_reference(dict(zip(model.prior.params, max_location)))
+    # Create sampler info
+    sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
     # Check if convergence_criterion is given and if so try to extract the
     # covariance matrix
     if convergence is not None:
@@ -427,7 +468,7 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
                 raise RuntimeError("Could not load the convergence criterion "
                                    "from callback")
         elif not isinstance(model, Model):
-            raise TypeError("convergence needs to be a grpy "
+            raise TypeError("convergence needs to be a gpry "
                             "Convergence_criterion instance.")
         try:
             covariance_matrix = convergence.cov
@@ -437,44 +478,12 @@ def mcmc(model, gp, convergence=None, options=None, output=None):
                           "of the sampler slower.")
     else:
         covariance_matrix = None
-
-    # Check if options for the sampler are given else build the sampler
-    if options is None:
-        sampler = {
-            "mcmc": {
-                "measure_speeds": False,
-                "max_tries": 100000
-            }
-        }
-    else:
-        sampler = options
-
     # Add the covariance matrix to the sampler if it exists
-    sampler_type = [*sampler][0]
-    if sampler_type == "mcmc" and covariance_matrix is not None:
-        sampler["mcmc"]["covmat"] = covariance_matrix
-        sampler["mcmc"]["covmat_params"] = sampled_parameter_names
+    if covariance_matrix is not None:
+        sampler_info["mcmc"]["covmat"] = covariance_matrix
+        sampler_info["mcmc"]["covmat_params"] = model.prior.names
+    return sampler_info
 
-    model_dict = cobaya_gp_model_input(model.prior, gpr, sampled_parameter_names)
-
-
-    # Set the reference point of the prior to the sampled location with maximum
-    # posterior value.
-    max_location = gpr.X_train[np.argmax(gpr.y_train)]
-    for name, val in zip(sampled_parameter_names, max_location):
-        model_dict["params"][name]["ref"] = val
-
-    if output is not None:
-        model_dict["output"] = output
-
-    # Add the sampler
-    model_dict["sampler"] = sampler
-
-    # Run the MCMC on the GP
-    print("Starting MCMC")
-    updated_info, sampler = cobaya_run(model_dict)
-
-    return updated_info, sampler
 
 
 def _save_callback(path, model, gp, gp_acquisition, convergence_criterion, options):
