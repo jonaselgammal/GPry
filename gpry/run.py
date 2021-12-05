@@ -220,6 +220,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         (max_init, max_points, n_points_per_acq) if is_main_process else None)
     convergence_is_MPI_aware = mpi_comm.bcast(
         convergence.is_MPI_aware if is_main_process else None)
+    if convergence_is_MPI_aware:
+        convergence = mpi_comm.bcast(convergence if is_main_process else None)
 
     # Set MPI-aware random state
     random_state = get_random_state()
@@ -312,10 +314,17 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
-                is_converged = convergence.is_converged(gpr, old_gpr)
+                try:
+                    is_converged = convergence.is_converged(gpr, old_gpr)
+                except gpryconv.ConvergenceCheckError:
+                    is_converged = False
             is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         else:  # run by all processes
-            is_converged = convergence.is_converged(gpr, old_gpr)
+            gpr, old_gpr =  mpi_comm.bcast((gpr, old_gpr) if is_main_process else None)
+            try:
+                is_converged = convergence.is_converged(gpr, old_gpr)
+            except gpryconv.ConvergenceCheckError as converr:
+                is_converged = False
         if is_converged:
             break
         if is_main_process:

@@ -15,6 +15,7 @@ import warnings
 from random import choice
 import sys
 import inspect
+from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
     mcmc_info_from_run
 
@@ -916,10 +917,6 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
     def __init__(self, prior, params):
         self.values = []
         self.n_posterior_evals = []
-        from cobaya.model import get_model
-        from cobaya.sampler import get_sampler
-        from cobaya.log import LoggedError
-        global get_model, get_sampler, LoggedError
         self.prior = prior
         self.mean = None
         self.cov = None
@@ -945,7 +942,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         # Prepare Cobaya's input
         self.cobaya_input = cobaya_input_prior(prior)
         # Save last sample
-        self._last_info = None
+        self._last_info = {}
         self._last_collection = None
 
     @property
@@ -993,17 +990,17 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             self.values.append(np.nan)
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
-        if gp_2 is None:
-            if self.mean is None or self.cov is None:
-                # Nothing to compare to! But save mean, cov for next call
-                self.mean, self.cov = mean_new, cov_new
-                self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
-                raise ConvergenceCheckError("No previous call: needs gp_2 to compare.")
-            else:
-                mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
+        if gp_2 is not None:
+            # TODO: Nothing yet to do with gp2
+            pass
+        if self.mean is None or self.cov is None:
+            # Nothing to compare to! But save mean, cov for next call
+            self.mean, self.cov = mean_new, cov_new
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            raise ConvergenceCheckError("No previous call: cannot compute criterion.")
         else:
-            raise NotImplementedError("Nothing yet to do with gp2")
+            mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
         # Compute the KL divergence (gaussian approx) with the previous iteration
         try:
             kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
@@ -1030,6 +1027,9 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 f"Could not compute mean and cov from MCMC: {excpt}")
 
     def _sample_mcmc(self, gp, covmat=None):
+        from cobaya.model import get_model
+        from cobaya.sampler import get_sampler
+        from cobaya.log import LoggedError
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
         self.cobaya_input.update(cobaya_input_likelihood(gp, self.cobaya_param_names))
         # Supress Cobaya's output
@@ -1064,7 +1064,18 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 # Tested the halving, but didn't work too well -- better fail
                 # most likely chain stuck!
                 pass
-        return model.info, mcmc_sampler.products()["sample"]
+        return model.info(), mcmc_sampler.products()["sample"]
+
+    # Safe copying and pickling
+    def __getstate__(self):
+        return deepcopy(self).__dict__
+
+    def __deepcopy__(self, memo=None):
+        self.cobaya_input.pop("likelihood", None)
+        self._last_info.pop("likelihood", None)
+        new = (lambda cls: cls.__new__(cls))(self.__class__)
+        new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items() if k != "log"}
+        return new
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
