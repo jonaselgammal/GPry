@@ -130,6 +130,7 @@ dmypy.json
 
 # test products
 examples/images/*
+examples/chains/*
 examples/new/*
 examples/*.pkl
 examples/*.png

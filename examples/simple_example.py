@@ -66,7 +66,7 @@ model, gpr, acquisition, convergence, options = run(model)
 
 # Run the MCMC and extract samples
 from gpry.run import mcmc
-updated_info, sampler = mcmc(model, gpr, convergence)
+updated_info, sampler = mcmc(model, gpr, convergence, output="chains/gp_model")
 
 # Plotting
 if is_main_process:
@@ -85,7 +85,7 @@ if is_main_process:
 
 # Optional: define an output driver
 from cobaya.output import get_output
-out = get_output(prefix="chains/test", resume=False, force=True)
+out = get_output(prefix="chains/truth", resume=False, force=True)
 
 from cobaya.sampler import get_sampler
 info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
