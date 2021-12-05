@@ -34,16 +34,14 @@ def check_params_names_len(sampled_parameter_names, dim):
     return sampled_parameter_names
 
 
-def cobaya_input_prior(cobaya_prior, sampled_parameter_names=None):
+def cobaya_input_prior(cobaya_prior):
     """
-    Returns a Cobaya-compatible prior input dict.
-    Generic parameter names used if not given.
+    Returns a Cobaya-compatible prior input dict for GP regression,
+    ignoring the prior density.
     """
-    sampled_parameter_names = check_params_names_len(
-        sampled_parameter_names, cobaya_prior.d())
     bounds = cobaya_prior.bounds(confidence_for_unbounded=0.99995)
     return {"params": {p: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
-                       for i, p in enumerate(sampled_parameter_names)}}
+                       for i, p in enumerate(cobaya_prior.params)}}
 
 
 def cobaya_input_likelihood(gpr, sampled_parameter_names=None):
@@ -62,12 +60,12 @@ def cobaya_input_likelihood(gpr, sampled_parameter_names=None):
         "external": lkl, "input_params": sampled_parameter_names}}}
 
 
-def cobaya_gp_model_input(cobaya_prior, gpr, sampled_parameter_names=None):
+def cobaya_gp_model_input(cobaya_prior, gpr):
     """
     Returns a Cobaya model input dict corresponding to a given true model and a gp
     surrogate model (which models both likelihood and the priors not defined in the
     ``params`` block.
     """
-    info = cobaya_input_prior(cobaya_prior, sampled_parameter_names)
-    info.update(cobaya_input_likelihood(gpr, sampled_parameter_names))
+    info = cobaya_input_prior(cobaya_prior)
+    info.update(cobaya_input_likelihood(gpr, list(cobaya_prior.params)))
     return info

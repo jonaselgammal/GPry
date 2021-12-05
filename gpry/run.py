@@ -419,7 +419,7 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
 
     sampled_parameter_names = list(model_truth.parameterization.sampled_params())
     model_surrogate = get_model(
-        cobaya_gp_model_input(model_truth.prior, gpr, sampled_parameter_names))
+        cobaya_gp_model_input(model_truth.prior, gpr))
 
     # Check if options for the sampler are given else build the sampler
     if options is None:
