@@ -114,5 +114,5 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     # Add the covariance matrix to the sampler if it exists
     if covariance_matrix is not None:
         sampler_info["mcmc"]["covmat"] = covariance_matrix
-        sampler_info["mcmc"]["covmat_params"] = model.prior.names
+        sampler_info["mcmc"]["covmat_params"] = list(model.prior.params)
     return sampler_info

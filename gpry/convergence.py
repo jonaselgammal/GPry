@@ -18,6 +18,7 @@ import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
     mcmc_info_from_run
+from gpry.mpi import mpi_rank
 
 
 class ConvergenceCheckError(Exception):
@@ -922,6 +923,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         self.cov = None
         self.values = []
         self.limit = params.get("limit", 1e-2)
+        self.limit_times = params.get("limit_times", 2)
         self.n_posterior_evals = []
         # Number of MCMC chains to generate samples
         if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
@@ -1053,7 +1055,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5)}}
         for i in range(5):
             # Reduce the covariance matrix size between tries
-            sampler_input["mcmc"]["covmat"] = covmat / 2**(2 * i)
+            if sampler_input["mcmc"].get("covmat") is not None:
+                sampler_input["mcmc"]["covmat"] = covmat / 2**(2 * i)
             mcmc_sampler = get_sampler(sampler_input, model)
             try:
                 mcmc_sampler.run()
@@ -1066,6 +1069,15 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 pass
         return model.info(), mcmc_sampler.products()["sample"]
 
+    def is_converged(self, gp, gp_2=None):
+        self.criterion_value(gp, gp_2)
+        try:
+            if np.all(np.array(self.values[-self.limit_times:]) < self.limit):
+                return True
+        except IndexError:
+            pass
+        return False
+
     # Safe copying and pickling
     def __getstate__(self):
         return deepcopy(self).__dict__
@@ -1076,10 +1088,3 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         new = (lambda cls: cls.__new__(cls))(self.__class__)
         new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items() if k != "log"}
         return new
-
-    def is_converged(self, gp, gp_2=None):
-        kl = self.criterion_value(gp, gp_2)
-        if kl < self.limit:
-            return True
-        else:
-            return False
