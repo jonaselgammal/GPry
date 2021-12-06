@@ -967,7 +967,6 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 reweights = weights * np.exp(logratio)
                 # Remove points with very small weight: more numerically stable
                 i_nonzero = np.argwhere(reweights > 1e-8).T[0]
-                print(i_nonzero)
                 reweights = reweights[i_nonzero]
                 points = points[i_nonzero]
                 mean_reweighted = np.average(points, weights=reweights, axis=0)
