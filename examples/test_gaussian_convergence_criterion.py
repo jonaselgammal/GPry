@@ -23,6 +23,7 @@ from gpry.convergence import KL_from_draw, KL_from_MC_training, KL_from_draw_app
     ConvergenceCheckError, KL_from_draw_approx_alt, ConvergenceCriterionGaussianMCMC
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.tools import kl_norm
+from gpry.mpi import is_main_process, mpi_comm
 from cobaya.model import get_model
 
 
@@ -61,13 +62,15 @@ data = pd.DataFrame(columns=(["i_run", "iter", "n_train"] +
 
 for n_r in range(n_repeats):
     # Create random gaussian
-    rng = default_rng()
-    std = rng.uniform(size=dim)
-    eigs = rng.uniform(size=dim)
-    eigs = eigs / np.sum(eigs) * dim
-    corr = random_correlation.rvs(eigs) if dim > 1 else [[1]]
-    cov = np.multiply(np.outer(std, std), corr)
-    mean = np.zeros_like(std)
+    if is_main_process:
+        rng = default_rng()
+        std = rng.uniform(size=dim)
+        eigs = rng.uniform(size=dim)
+        eigs = eigs / np.sum(eigs) * dim
+        corr = random_correlation.rvs(eigs) if dim > 1 else [[1]]
+        cov = np.multiply(np.outer(std, std), corr)
+        mean = np.zeros_like(std)
+    mean, std, cov = mpi_comm.bcast((mean, std, cov) if is_main_process else None)
     rv = multivariate_normal(mean, cov)
     # Interface with Gpry
     input_params = [f"x_{d}" for d in range(dim)]
@@ -98,7 +101,7 @@ for n_r in range(n_repeats):
                                   preprocessing_y=Normalize_y(),
                                   n_restarts_optimizer=5,
                                   noise_level=1e-3)
-    af = Log_exp(zeta=z)
+    af = Log_exp(zeta=z, dimension=dim)
     acquire = GP_Acquisition(bnds,
                              acq_func=af,
                              preprocessing_X=Normalize_bounds(bnds),
@@ -116,8 +119,9 @@ for n_r in range(n_repeats):
     n_points = dim
     y_s = init_y
     for i in range(n_iterations):
-        print(f"+++ Test {n_r + 1} (of {n_repeats}) "
-              f"-- Iteration {i + 1} (of {n_iterations}) +++++++++")
+        if is_main_process:
+            print(f"+++ Test {n_r + 1} (of {n_repeats}) "
+                  f"-- Iteration {i + 1} (of {n_iterations}) +++++++++")
         new_X, y_lies, acq_vals = acquire.multi_optimization(gp, n_points=n_points)
         if len(new_X) != 0:
             new_y = np.empty(new_X.shape[0])
@@ -148,17 +152,21 @@ for n_r in range(n_repeats):
                     KL_true_right = kl_norm(mean, cov, crit.mean, crit.cov)
                     KL_true = max(KL_true_left, KL_true_right)
                     row[f"crit_KL_true_{i_c}"] = KL_true
+                    if is_main_process:
+                        print(f"[criterion {i_c}: KL_true = {KL_true}")
             except ConvergenceCheckError:
                 row.update({f"crit_{i_c}": np.nan, f"crit_KL_true_{i_c}": np.nan,
                             f"time_{i_c}": np.nan, f"evals_{i_c}": np.nan})
         data.loc[len(data.index)] = row
-        print_cols = [col for col in data.columns if any(
-            col.startswith(pre) for pre in (
-                "crit_",
-                "crit_KL",
-                "time_",
+        if is_main_process:
+            print_cols = [col for col in data.columns if any(
+                col.startswith(pre) for pre in (
+                    "crit_",
+                    "crit_KL",
+                    "time_",
                 #"evals_"
-            ))]
-        print(data[print_cols])
-with open(file_name, "wb") as f:
-    pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+                ))]
+            print(data[print_cols])
+if is_main_process:
+    with open(file_name, "wb") as f:
+        pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)

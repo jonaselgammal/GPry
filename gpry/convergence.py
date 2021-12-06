@@ -18,7 +18,7 @@ import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
     mcmc_info_from_run
-from gpry.mpi import mpi_rank
+from gpry.mpi import mpi_rank, mpi_comm, is_main_process
 
 
 class ConvergenceCheckError(Exception):
@@ -953,36 +953,65 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
 
     def _get_new_mean_and_cov(self, gp):
         cov_mcmc = None
-        if self._last_collection is not None:
-            points = self._last_collection[self.cobaya_param_names].to_numpy(np.float64)
-            old_gp_values = -0.5 * \
-                self._last_collection["chi2"].to_numpy(np.float64)
-            new_gp_values = gp.predict(points)
-            weights = self._last_collection["weight"].to_numpy(np.float64)
-            logratio = new_gp_values - old_gp_values
-            logratio -= max(logratio)
-            reweights = weights * np.exp(logratio)
-            mean_reweighted = np.average(points, weights=reweights, axis=0)
-            cov_reweighted = np.cov(points.T, aweights=reweights)
-            cov_mcmc = cov_reweighted
-            # Use max of them
-            kl_reweight = max(
-                kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
-                kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
-            # If very small, we've probably found nothing yet, so nothing new
-            # But assume that if we have hit 10 * limit, we are right on track
-            min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
-            # If larger than the difference with the last one, bad
-            max_kl = self.values[-1]
-            if kl_reweight > min_kl and kl_reweight < max_kl and \
-               self.n_reused < self.max_reused:
-                self.n_reused += 1
-                return mean_reweighted, cov_reweighted
+        if is_main_process:
+            reused = False
+            if self._last_collection is not None:
+                points = \
+                    self._last_collection[self.cobaya_param_names].to_numpy(np.float64)
+                old_gp_values = -0.5 * \
+                    self._last_collection["chi2"].to_numpy(np.float64)
+                new_gp_values = gp.predict(points)
+                weights = self._last_collection["weight"].to_numpy(np.float64)
+                logratio = new_gp_values - old_gp_values
+                logratio -= max(logratio)
+                reweights = weights * np.exp(logratio)
+                # Remove points with very small weight: more numerically stable
+                i_nonzero = np.argwhere(reweights > 1e-8).T[0]
+                print(i_nonzero)
+                reweights = reweights[i_nonzero]
+                points = points[i_nonzero]
+                mean_reweighted = np.average(points, weights=reweights, axis=0)
+                cov_reweighted = np.cov(points.T, aweights=reweights)
+                cov_mcmc = cov_reweighted
+                # Use max of them
+                kl_reweight = max(
+                    kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
+                    kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
+                # If very small, we've probably found nothing yet, so nothing new
+                # But assume that if we have hit 10 * limit, we are right on track
+                min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
+                # If larger than the difference with the last one, bad
+                max_kl = self.values[-1]
+                if kl_reweight > min_kl and kl_reweight < max_kl and \
+                   self.n_reused < self.max_reused:
+                    self.n_reused += 1
+                    reused = True
+        reused = mpi_comm.bcast(reused if is_main_process else None)
+        if reused:
+            mean_reweighted, cov_reweighted = mpi_comm.bcast(
+                (mean_reweighted, cov_reweighted) if is_main_process else None)
+            return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
         self.n_reused = 0
-        self._last_info, self._last_collection = self._sample_mcmc(gp, covmat=cov_mcmc)
-        self._last_collection.detemper()
-        mean_new, cov_new = self._last_collection.mean(), self._last_collection.cov()
+        self._last_info, collection = self._sample_mcmc(gp, covmat=cov_mcmc)
+        all_collections = mpi_comm.gather(collection)
+        # Chains in process of rank 0 now!
+        # Compute mean and cov, and broadcast
+        if is_main_process:
+            for i, colect in enumerate(all_collections):
+                colect.detemper()
+                # Skip 1/3 of the chain
+                new_collection = colect[int(np.floor(len(colect) / 3)):]
+                if i == 0:
+                    single_collection = new_collection
+                else:
+                    single_collection.append(new_collection)
+            mean_new, cov_new = single_collection.mean(), single_collection.cov()
+            # Only main process caches this one, to save memory
+            self._last_collection = single_collection
+        # Broadcast results
+        mean_new, cov_new = mpi_comm.bcast(
+            (mean_new, cov_new) if is_main_process else None)
         return mean_new, cov_new
 
     def criterion_value(self, gp, gp_2=None):
@@ -1016,18 +1045,6 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
         return kl
 
-    def _mean_and_cov_from_mcmc(self, gp):
-        X_values, y_values = self._draw_from_mcmc(gp)
-        try:
-            # Compute the mean and covmat using appropriate weighting (if possible)
-            exp_y_new = np.exp(y_values - np.max(y_values))
-            mean = np.average(X_values, axis=0, weights=exp_y_new)
-            cov = np.cov(X_values.T, aweights=exp_y_new)
-            return (mean, cov)
-        except Exception as excpt:
-            raise ConvergenceCheckError(
-                f"Could not compute mean and cov from MCMC: {excpt}")
-
     def _sample_mcmc(self, gp, covmat=None):
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
@@ -1037,37 +1054,30 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
+        # Create model and sampler
         model = get_model(self.cobaya_input)
-        # If no covariance computed in last step, try to get one from a prior sample
-        if covmat is None:
-            if self.cov is None:
-                _, covmat = self._mean_and_cov_from_prior(gp)
-            else:
-                covmat = self.cov
+        sampler_info = mcmc_info_from_run(model, gp, convergence=self)
+        if covmat is not None:
+            # Prefer the one explicitly passed
+            sampler_info["mcmc"]["covmat"] = covmat
+        sampler_info["mcmc"]["temperature"] = self.temperature
         high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
-        sampler_input = {"mcmc": {
-            "covmat": covmat, "covmat_params": list(self.cobaya_param_names),
-            "temperature": self.temperature,
-            # Faster: no need to measure speeds, check convergence or learn proposal
-            "measure_speeds": False,
-            # Relax stopping criterion if not yet well converged
+        # Relax stopping criterion if not yet well converged
+        sampler_info["mcmc"].update({
             "Rminus1_stop": (0.01 if high_prec_threshold else 0.2),
-            "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5)}}
-        for i in range(5):
-            # Reduce the covariance matrix size between tries
-            if sampler_input["mcmc"].get("covmat") is not None:
-                sampler_input["mcmc"]["covmat"] = covmat / 2**(2 * i)
-            mcmc_sampler = get_sampler(sampler_input, model)
-            try:
-                mcmc_sampler.run()
-                break
-            except LoggedError:
-                raise ConvergenceCheckError
-                # Happens most often when the model is learning very fast
-                # Tested the halving, but didn't work too well -- better fail
-                # most likely chain stuck!
-                pass
-        return model.info(), mcmc_sampler.products()["sample"]
+            "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5)})
+        mcmc_sampler = get_sampler(sampler_info, model)
+        try:
+            mcmc_sampler.run()
+            success = True
+        except LoggedError:
+            success = False
+        success = all(mpi_comm.allgather(success))
+        if not success:
+            raise ConvergenceCheckError
+        updated_info = model.info()
+        updated_info["sampler"] = {"mcmc": mcmc_sampler.info()}
+        return updated_info, mcmc_sampler.products()["sample"]
 
     def is_converged(self, gp, gp_2=None):
         self.criterion_value(gp, gp_2)
@@ -1083,8 +1093,12 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         return deepcopy(self).__dict__
 
     def __deepcopy__(self, memo=None):
-        self.cobaya_input.pop("likelihood", None)
-        self._last_info.pop("likelihood", None)
+        # Remove non-picklable gp model likelihood
+        if self.cobaya_input and "likelihood" in self.cobaya_input:
+            like = list(self.cobaya_input["likelihood"])[0]
+            self.cobaya_input["likelihood"][like]["external"] = True
+            if self._last_info and "likelihood" in self._last_info:
+                self._last_info["likelihood"][like]["external"] = True
         new = (lambda cls: cls.__new__(cls))(self.__class__)
         new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items() if k != "log"}
         return new

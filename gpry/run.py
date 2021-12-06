@@ -320,6 +320,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                     is_converged = False
             is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         else:  # run by all processes
+            # NB: this assumes that when the criterion fails,
+            #     ALL processes raise ConvergenceCheckerror, not just rank 0
             gpr, old_gpr =  mpi_comm.bcast((gpr, old_gpr) if is_main_process else None)
             try:
                 is_converged = convergence.is_converged(gpr, old_gpr)
