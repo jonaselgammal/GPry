@@ -4,6 +4,7 @@ Example code for a simple GP Characterization of a likelihood.
 
 import os
 from gpry.mpi import is_main_process, mpi_comm
+from gpry.plots import getdist_add_training
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
@@ -74,7 +75,8 @@ if is_main_process:
     import getdist.plots as gdplt
     gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_gp, ["x", "y"], filled=True)
+    gdplot.triangle_plot(gdsamples_gp, list(info["params"]), filled=True)
+    getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Surrogate_triangle.png", dpi=300)
 
 #############################################################
@@ -109,9 +111,10 @@ if is_main_process:
     upd_info["sampler"] = {"mcmc": sampler.info()}
     gdsamples_mcmc = MCSamplesFromCobaya(upd_info, all_chains)
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_mcmc, ["x", "y"], filled=True)
+    gdplot.triangle_plot(gdsamples_mcmc, list(info["params"]), filled=True)
     plt.savefig("images/Ground_truth_triangle.png", dpi=300)
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=[False, True],
-                         legend_labels=['MCMC', 'GP'])
+    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], list(info["params"]),
+                         filled=[False, True], legend_labels=['MCMC', 'GP'])
+    getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Comparison_triangle.png", dpi=300)
