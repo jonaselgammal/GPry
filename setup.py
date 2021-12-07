@@ -34,5 +34,5 @@ setup(
         # that you indicate whether you support Python 2, Python 3 or both.
         'Programming Language :: Python :: 3',
         ],
-    install_requires=['numpy', 'scikit-learn']
+    install_requires=['numpy', 'scikit-learn', 'dill']
 )

@@ -1,11 +1,15 @@
 """
 Defining some helpers for parallelisation.
 """
-
+import dill
 from mpi4py import MPI
 import numpy as np
 from numpy.random import SeedSequence, default_rng
 
+# Use dill pickler (can seriealize more stuff, e.g. lambdas)
+MPI.pickle.__init__(dill.dumps, dill.loads)
+
+# Define some interfaces
 mpi_comm = MPI.COMM_WORLD
 mpi_size = mpi_comm.Get_size()
 mpi_rank = mpi_comm.Get_rank()

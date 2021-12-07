@@ -240,6 +240,16 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             print("SVM to account for infinities: %s"
                   % (account_for_inf is not None))
 
+    @property
+    def n(self):
+        """Number of points in the training set."""
+        return self.X_train.shape[0]
+
+    @property
+    def d(self):
+        """Dimension of the feature space."""
+        return self.X_train.shape[1]
+
     def append_to_data(self, X, y, noise_level=None, fit=True):
         """Append newly acquired data to the GP Model and updates it.
 
@@ -492,9 +502,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         if self.kernel == "RBF":  # Use an RBF kernel as default
             # check how many dimensions X has
-            n_dim = X.shape[-1]
             self.kernel = C(1.0, "dynamic") \
-                * RBF([1.0]*n_dim, "dynamic")
+                * RBF([1.0] * self.d, "dynamic")
         if not hasattr(self, 'kernel_'):
             self.kernel_ = clone(self.kernel)
 
