@@ -12,6 +12,8 @@ log-posterior distribution are finite.
 """
 
 import numpy as np
+from scipy.stats import chi2
+from scipy.special import erfc
 from sklearn.svm import SVC
 
 class SVM(SVC):
@@ -20,7 +22,11 @@ class SVM(SVC):
     to a GP regressor. This is done to classify the data into a "finite" group
     (values with a finite log-likelihood) and an "infinite" group. That way the
     GP can correctly recover the log-likelihood or log-posterior even if has
-    regions where it returns :math:`-\infty`.
+    regions where it returns :math:`-\infty` or very low log-likelihood values.
+    The threshold for what is considered infinite is either set by the
+    ``threshold_sigma`` parameter or by the ``threshold`` parameter. This is to
+    account for the fact that the log-likelihood can take very low values far
+    away from the mode which can confuse the GP.
     Also saves the training data internally and has a function to return all
     non-infinite values. Therefore it is supposed to be used inside of a GP
     Regressor.
@@ -30,7 +36,18 @@ class SVM(SVC):
 
     Parameters
     ----------
-    C : float, default=1.0
+    threshold_sigma : float or None, default=10
+        Distance to the mode which shall be considered finite in :math:`\sigma`
+        using a :math:`\chi^2` distribution. Either this or ``threshold`` have
+        to be specified while ``threshold_sigma`` it is overwritten by the
+        ``threshold`` parameter
+    threshold : float or None, default=None
+        threshold value for the posterior to be considered infinite. Any value
+        below this will be in the infinite category. Overwrites the
+        ``threshold_sigma`` parameter if specified. If you want to consider all
+        samples where the posterior returns a finite value set this to
+        ``-np.inf``.
+    C : float, default=1e7
         Regularization parameter. The strength of the regularization is
         inversely proportional to C. Must be strictly positive. The penalty
         is a squared l2 penalty.
@@ -150,11 +167,14 @@ class SVM(SVC):
 
     """
 
-    def __init__(self, C=1e7, kernel='rbf', degree=3, gamma='scale',
-        preprocessing_X=None, preprocessing_y=None,
+    def __init__(self, threshold_sigma=10, threshold=None, C=1e7, kernel='rbf',
+        degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
         coef0=0.0, shrinking=True, probability=False, tol=0.001,
         cache_size=200, class_weight=None, verbose=False, max_iter=-1,
         decision_function_shape='ovr', break_ties=False, random_state=None):
+
+        self.threshold_sigma = threshold_sigma
+        self.threshold = threshold
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
@@ -241,6 +261,16 @@ class SVM(SVC):
         self.X_train = np.copy(X)
         self.y_train = np.copy(y)
 
+        # Set threshold value
+        if self.threshold is None:
+            if self.threshold_sigma is None:
+                raise ValueError(
+                    "You either need to specify threshold or threshold_sigma."
+                    )
+            else:
+                self.threshold = -2*chi2.isf(
+                    erfc(self.threshold_sigma/np.sqrt(2)), X.shape[1])
+
         # preprocess if neccessary
         if self.preprocessing_X is not None:
             if fit_preprocessors:
@@ -253,11 +283,13 @@ class SVM(SVC):
             if fit_preprocessors:
                 self.preprocessing_y.fit(X, y)
             self.y_train_ = self.preprocessing_y.transform(y)
+            self.threshold_ = self.preprocessing_y.transform(self.threshold)
         else:
             self.y_train_ = y
+            self.threshold_ = self.threshold
 
         # turn into categorial values (1 for finite and 0 for infinite)
-        self.finite = np.isfinite(y)
+        self.finite = np.logical_and(np.isfinite(y), y > self.threshold_)
 
         # Check if all values belong to one class, in that case do not fit the
         # SVM but rather save this.
