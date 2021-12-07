@@ -46,8 +46,8 @@ class ConvergenceCriterion(metaclass=ABCMeta):
     it should be a class which inherits from this abstract class.
     This class needs to be of the format::
 
-        from Acquisition_functions import Acquisition_function
-        Class custom_acq_func(Acquisition_Function):
+        from gpry.convergence import ConvergenceCriterion
+        class Custom_convergence_criterion(ConvergenceCriterion):
             def __init__(self, prior, params):
                 # prior should be a prior object and contain the prior for all
                 # parameters
