@@ -249,9 +249,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             y_init_loop = np.empty(0)
             for j in range(n_to_sample_per_process):
                 # Draw point from prior and evaluate logposterior at that point
-                X = model.prior.sample(n=1, random_state=random_state)
-                y = model.logpost(X[0])
-                X_init_loop = np.append(X_init_loop, X, axis=0)
+                X = model.prior.reference(max_tries=np.inf, warn_if_tries="10d",
+                                          ignore_fixed=True, warn_if_no_ref=False)
+                print(f"Evaluating true posterior at {X}")
+                y = model.logpost(X)
+                print(f"Got {y}")
+                X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                 y_init_loop = np.append(y_init_loop, y)
             # Gather points and decide whether to break.
             all_points = mpi_comm.gather(X_init_loop)
@@ -266,6 +269,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             finished = mpi_comm.bcast(finished if is_main_process else None)
             if finished:
                 break
+            print("Done getting initial training samples.")
         if is_main_process:
             # Raise error if the number of initial samples hasn't been reached
             if not finished:
