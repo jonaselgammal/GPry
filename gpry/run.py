@@ -4,7 +4,7 @@ distribution and sample the GP to get chains.
 """
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes
+    split_number_for_parallel_processes, multiple_processes
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.preprocessing import Normalize_bounds, Normalize_y
@@ -216,12 +216,15 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if n_initial <= 0:
             raise ValueError("The number of initial samples needs to be bigger "
                              "than 0")
-    max_init, max_points, n_points_per_acq = mpi_comm.bcast(
-        (max_init, max_points, n_points_per_acq) if is_main_process else None)
-    convergence_is_MPI_aware = mpi_comm.bcast(
-        convergence.is_MPI_aware if is_main_process else None)
-    if convergence_is_MPI_aware:
-        convergence = mpi_comm.bcast(convergence if is_main_process else None)
+    if multiple_processes:
+        max_init, max_points, n_points_per_acq = mpi_comm.bcast(
+            (max_init, max_points, n_points_per_acq) if is_main_process else None)
+        convergence_is_MPI_aware = mpi_comm.bcast(
+            convergence.is_MPI_aware if is_main_process else None)
+        if convergence_is_MPI_aware:
+            convergence = mpi_comm.bcast(convergence if is_main_process else None)
+    else:
+        convergence_is_MPI_aware = convergence.is_MPI_aware
 
     # Set MPI-aware random state
     random_state = get_random_state()
@@ -238,8 +241,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         # Arrays to store the initial sample
         X_init = np.empty((0, n_d))
         y_init = np.empty(0)
-    n_to_sample_per_process = mpi_comm.bcast(
-        n_to_sample_per_process if is_main_process else None)
+    if multiple_processes:
+        n_to_sample_per_process = mpi_comm.bcast(
+            n_to_sample_per_process if is_main_process else None)
     if n_to_sample_per_process:
         n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
         # Initial samples loop. The initial samples are drawn from the prior
@@ -257,8 +261,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                 y_init_loop = np.append(y_init_loop, y)
             # Gather points and decide whether to break.
-            all_points = mpi_comm.gather(X_init_loop)
-            all_posts = mpi_comm.gather(y_init_loop)
+            if multiple_processes:
+                all_points = mpi_comm.gather(X_init_loop)
+                all_posts = mpi_comm.gather(y_init_loop)
+            else:
+                all_points = [X_init_loop]
+                all_posts = [y_init_loop]
             if is_main_process:
                 X_init = np.concatenate([X_init, np.concatenate(all_points)])
                 y_init = np.concatenate([y_init, np.concatenate(all_posts)])
@@ -266,7 +274,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 n_finite_new = sum(np.isfinite(y_init))
                 # Break loop if the desired number of initial samples is reached
                 finished = (n_finite_new >= n_still_needed)
-            finished = mpi_comm.bcast(finished if is_main_process else None)
+            if multiple_processes:
+                finished = mpi_comm.bcast(finished if is_main_process else None)
             if finished:
                 break
             print("Done getting initial training samples.")
@@ -287,7 +296,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     else:  # Enough pre-training
         print("The number of pretrained points exceeds the number of initial "
               "samples")
-    n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
+    if multiple_processes:
+        n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
+    else:
+        n_finite = len(gpr.y_train)
 
     # Run bayesian optimization loop
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
@@ -304,14 +316,18 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             new_X, y_lies, acq_vals = acquisition.multi_optimization(
                 gpr, n_points=n_points_per_acq)
         # Get logposterior value(s) for the acquired points (in parallel)
-        new_X = mpi_comm.bcast(new_X if is_main_process else None)
+        if multiple_processes:
+            new_X = mpi_comm.bcast(new_X if is_main_process else None)
         new_X_this_process = new_X[
             i_evals_this_process: i_evals_this_process + n_evals_this_process]
         new_y = np.empty(0)
         for x in new_X_this_process:
             new_y = np.append(new_y, model.logpost(x))
         # Collect (if parallel) and append to the current model
-        all_new_y = mpi_comm.gather(new_y)
+        if multiple_processes:
+            all_new_y = mpi_comm.gather(new_y)
+        else:
+            all_new_y = [new_y]
         if is_main_process:
             new_y = np.concatenate(all_new_y)
             gpr.append_to_data(new_X, new_y, fit=True)
@@ -322,11 +338,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                     is_converged = convergence.is_converged(gpr, old_gpr)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
-            is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
+            if multiple_processes:
+                is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         else:  # run by all processes
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
-            gpr, old_gpr =  mpi_comm.bcast((gpr, old_gpr) if is_main_process else None)
+            if multiple_processes:
+                gpr, old_gpr =  mpi_comm.bcast(
+                    (gpr, old_gpr) if is_main_process else None)
             try:
                 is_converged = convergence.is_converged(gpr, old_gpr)
             except gpryconv.ConvergenceCheckError as converr:
@@ -349,8 +368,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     # Now that the run has converged we can return the gp and all other
     # relevant quantities which can then be processed with an MCMC or other
     # sampler
-    gpr, acquisition, convergence, options = mpi_comm.bcast(
-        (gpr, acquisition, convergence, options) if is_main_process else None)
+    if multiple_processes:
+        gpr, acquisition, convergence, options = mpi_comm.bcast(
+            (gpr, acquisition, convergence, options) if is_main_process else None)
     return model, gpr, acquisition, convergence, options
 
 
