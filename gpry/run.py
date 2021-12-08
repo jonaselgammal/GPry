@@ -110,35 +110,15 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if is_main_process:
         # Construct GP if it's not already constructed
         if isinstance(gp, str):
-            if gp == "RBF":
-                # Construct RBF kernel
-                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                kernel = C(1.0, [0.001, 10000]) \
-                    * RBF([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
-                # Construct GP
-                gpr = GaussianProcessRegressor(
-                    kernel=kernel,
-                    n_restarts_optimizer=10,
-                    preprocessing_X=Normalize_bounds(prior_bounds),
-                    preprocessing_y=Normalize_y(),
-                    verbose=verbose
-                )
-            elif gp == "Matern":
-                # Construct RBF kernel
-                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                kernel = C(1.0, [0.001, 10000]) \
-                    * Matern([0.01] * n_d, "dynamic", prior_bounds=prior_bounds)
-                # Construct GP
-                gpr = GaussianProcessRegressor(
-                    kernel=kernel,
-                    n_restarts_optimizer=10,
-                    preprocessing_X=Normalize_bounds(),
-                    preprocessing_y=Normalize_y(),
-                    verbose=verbose
-                )
-            else:
-                raise ValueError("Currently only 'RBF' and 'Matern' are supported "
-                                 "as standard GPs. Got %s" % gp)
+            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+            gpr = GaussianProcessRegressor(
+                kernel=gp,
+                n_restarts_optimizer=10,
+                preprocessing_X=Normalize_bounds(prior_bounds),
+                preprocessing_y=Normalize_y(),
+                bounds=prior_bounds,
+                verbose=verbose
+            )
 
         elif isinstance(gp, GaussianProcessRegressor):
             gpr = gp

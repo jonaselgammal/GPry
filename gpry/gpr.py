@@ -8,8 +8,9 @@ from scipy.linalg import cholesky, cho_solve, solve_triangular
 import scipy.optimize
 
 # gpry kernels and SVM
-from gpry.kernels import RBF, ConstantKernel as C
+from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
+from gpry.preprocessing import Normalize_bounds, Normalize_y
 
 # sklearn GP and kernel utilities
 from sklearn.gaussian_process import GaussianProcessRegressor \
@@ -45,13 +46,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     ----------
 
     kernel : kernel object, optional (default: "RBF")
-        The kernel specifying the covariance function of the GP. If "RBF" is
-        passed, the asymmetric kernel::
+        The kernel specifying the covariance function of the GP. If
+        "RBF"/"Matern" is passed, the asymmetric kernel::
 
-            ConstantKernel(1, "dynamic") * RBF([1]*n_dim, "dynamic")
+            ConstantKernel(1, [0.001, 10000]) * RBF/Matern([0.01]*n_dim, "dynamic")
 
         is used as default where ``n_dim`` is the number of dimensions of the
-        training space. Note that the kernel's hyperparameters are optimized
+        training space. In this case you will have to provide the prior bounds
+        as the ``bounds`` parameter to the GP. For the Matern kernel
+        :math:`\nu=3/2`. Note that the kernel's hyperparameters are optimized
         during fitting.
 
     noise_level : float or array-like, optional (default: 1e-5)
@@ -111,6 +114,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         infinite values. This allows the GP to express values of -inf in the
         data (unphysical values). If all values are finite the SVM will just
         pass the data through itself and do nothing.
+
+    bounds : array-like, shape=(n_dims,2), optional
+        Array of bounds of the prior [lower, upper] along each dimension. Has
+        to be provided when the kernel shall be built automatically by the GP.
 
     copy_X_train : bool, optional (default: True)
         If True, a persistent copy of the training data is stored in the
@@ -199,7 +206,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     def __init__(self, kernel="RBF", noise_level=1e-2,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
-                 account_for_inf="SVM",
+                 account_for_inf="SVM", bounds=None,
                  copy_X_train=True, random_state=None,
                  verbose=1):
         self.newly_appended = 0
@@ -219,6 +226,33 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         else:
             self.account_for_inf = account_for_inf
 
+        self.bounds = bounds
+
+        # Auto-construct inbuilt kernels
+        if isinstance(kernel, str):
+            if self.bounds is None:
+                raise ValueError("You selected used the automatically "
+                                 f"constructed '{kernel}' kernel without "
+                                 "specifying prior bounds.")
+            # Transform prior bounds if neccessary
+            if self.preprocessing_X is not None:
+                self.bounds_ = self.preprocessing_X.transform_bounds(self.bounds)
+            else:
+                self.bounds_ = self.bounds
+            # Check if it's a supported kernel
+            if kernel not in ["RBF", "Matern"]:
+                raise ValueError("Currently only 'RBF' and 'Matern' are "
+                                 f"supported as standard kernels. Got {kernel}")
+            # Build kernel
+            elif kernel == "RBF":
+                kernel = C(1.0, [0.001, 10000]) \
+                    * RBF([0.01] * self.d, "dynamic",
+                          prior_bounds=self.bounds_)
+            elif kernel == "Matern":
+                kernel = C(1.0, [0.001, 10000]) \
+                    * Matern([0.01] * self.d, "dynamic",
+                             prior_bounds=self.bounds_)
+
         super(GaussianProcessRegressor, self).__init__(
             kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
@@ -230,8 +264,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             print("===========================================")
             print("Kernel:")
             if kernel == "RBF":
-                print("ConstantKernel(1, 'dynamic')"
-                      " * RBF([1]*n_dim, 'dynamic')")
+                print("ConstantKernel(1, [0.001, 10000])"
+                      " * RBF([0.01]*n_dim, 'dynamic')")
             else:
                 print(self.kernel.hyperparameters)
             print("Optimizer restarts: %i" % n_restarts_optimizer)
@@ -248,7 +282,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     @property
     def d(self):
         """Dimension of the feature space."""
-        return self.X_train.shape[1]
+        if self.bounds is None:
+            return self.X_train.shape[1]
+        else:
+            return self.bounds.shape[0]
 
     def append_to_data(self, X, y, noise_level=None, fit=True):
         """Append newly acquired data to the GP Model and updates it.
@@ -500,10 +537,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self
         """
 
-        if self.kernel == "RBF":  # Use an RBF kernel as default
-            # check how many dimensions X has
-            self.kernel = C(1.0, "dynamic") \
-                * RBF([1.0] * self.d, "dynamic")
         if not hasattr(self, 'kernel_'):
             self.kernel_ = clone(self.kernel)
 
@@ -954,6 +987,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             preprocessing_X=self.preprocessing_X,
             preprocessing_y=self.preprocessing_y,
             copy_X_train=self.copy_X_train,
+            bounds=self.bounds,
             random_state=self.random_state)
 
         # Initialize the X_train and y_train part
