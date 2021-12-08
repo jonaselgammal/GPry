@@ -7,6 +7,7 @@ from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_s
     split_number_for_parallel_processes
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
+from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 from gpry.kernels import ConstantKernel as C, RBF, Matern
 from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run
@@ -195,6 +196,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 warnings.warn("Callback files were found but are incomplete. "
                               "Ignoring those files...")
 
+        # Check if there's an SVM and if so read out it's threshold value
+        if isinstance(gpr.account_for_inf, SVM):
+            threshold = gpr.account_for_inf._return_threshold(n_d)
+        else:
+            threshold = -np.inf
+
         print("Model has been initialized")
 
         # Read in options for the run
@@ -260,7 +267,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 X_init = np.concatenate([X_init, np.concatenate(all_points)])
                 y_init = np.concatenate([y_init, np.concatenate(all_posts)])
                 # Only finite values contributes to the number of initial samples
-                n_finite_new = sum(np.isfinite(y_init))
+                n_finite_new = sum(np.logical_and(np.isfinite(y_init), y>threshold))
                 # Break loop if the desired number of initial samples is reached
                 finished = (n_finite_new >= n_still_needed)
             finished = mpi_comm.bcast(finished if is_main_process else None)

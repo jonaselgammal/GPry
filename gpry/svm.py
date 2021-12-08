@@ -175,6 +175,7 @@ class SVM(SVC):
 
         self.threshold_sigma = threshold_sigma
         self.threshold = threshold
+        self.threshold_ = None
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
@@ -263,13 +264,7 @@ class SVM(SVC):
 
         # Set threshold value
         if self.threshold is None:
-            if self.threshold_sigma is None:
-                raise ValueError(
-                    "You either need to specify threshold or threshold_sigma."
-                    )
-            else:
-                self.threshold = -2*chi2.isf(
-                    erfc(self.threshold_sigma/np.sqrt(2)), X.shape[1])
+            self.threshold = self._return_threshold(X.shape[1])
 
         # preprocess if neccessary
         if self.preprocessing_X is not None:
@@ -330,3 +325,21 @@ class SVM(SVC):
         if self.preprocessing_X is not None:
             X = self.preprocessing_X.transform(X)
         return super().predict(X)
+
+    def _return_threshold(self, n_dimensions):
+        """
+        Returns the threshold value which is used to determine whether a value
+        is considered to be -inf
+        """
+
+        # Set threshold value
+        if self.threshold is None:
+            if self.threshold_sigma is None:
+                raise ValueError(
+                    "You either need to specify threshold or threshold_sigma."
+                    )
+            else:
+                return -2*chi2.isf(
+                    erfc(self.threshold_sigma/np.sqrt(2)), n_dimensions)
+        else:
+            return self.threshold
