@@ -18,7 +18,7 @@ import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
     mcmc_info_from_run
-from gpry.mpi import mpi_rank, mpi_comm, is_main_process
+from gpry.mpi import mpi_rank, mpi_comm, is_main_process, multiple_processes
 
 
 class ConvergenceCheckError(Exception):
@@ -985,15 +985,20 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                    self.n_reused < self.max_reused:
                     self.n_reused += 1
                     reused = True
-        reused = mpi_comm.bcast(reused if is_main_process else None)
+        if multiple_processes:
+            reused = mpi_comm.bcast(reused if is_main_process else None)
         if reused:
-            mean_reweighted, cov_reweighted = mpi_comm.bcast(
-                (mean_reweighted, cov_reweighted) if is_main_process else None)
+            if multiple_processes:
+                mean_reweighted, cov_reweighted = mpi_comm.bcast(
+                    (mean_reweighted, cov_reweighted) if is_main_process else None)
             return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
         self.n_reused = 0
         self._last_info, collection = self._sample_mcmc(gp, covmat=cov_mcmc)
-        all_collections = mpi_comm.gather(collection)
+        if multiple_processes:
+            all_collections = mpi_comm.gather(collection)
+        else:
+            all_collections = [collection]
         # Chains in process of rank 0 now!
         # Compute mean and cov, and broadcast
         if is_main_process:
@@ -1009,8 +1014,9 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             # Only main process caches this one, to save memory
             self._last_collection = single_collection
         # Broadcast results
-        mean_new, cov_new = mpi_comm.bcast(
-            (mean_new, cov_new) if is_main_process else None)
+        if multiple_processes:
+            mean_new, cov_new = mpi_comm.bcast(
+                (mean_new, cov_new) if is_main_process else None)
         return mean_new, cov_new
 
     def criterion_value(self, gp, gp_2=None):
@@ -1071,7 +1077,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             success = True
         except LoggedError:
             success = False
-        success = all(mpi_comm.allgather(success))
+        if multiple_processes:
+            success = all(mpi_comm.allgather(success))
         if not success:
             raise ConvergenceCheckError
         updated_info = model.info()

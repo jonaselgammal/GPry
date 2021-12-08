@@ -112,7 +112,17 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     else:
         covariance_matrix = None
     # Add the covariance matrix to the sampler if it exists
-    if covariance_matrix is not None:
+    if covariance_matrix is not None and is_valid_covmat(covariance_matrix):
         sampler_info["mcmc"]["covmat"] = covariance_matrix
         sampler_info["mcmc"]["covmat_params"] = list(model.prior.params)
     return sampler_info
+
+
+def is_valid_covmat(covmat):
+    """Returns True for a Real, positive-definite, symmetric matrix."""
+    try:
+        if np.allclose(covmat.T, covmat) and np.all(np.linalg.eigvals(covmat) > 0):
+            return True
+        return False
+    except (AttributeError, np.linalg.LinAlgError):
+        return False

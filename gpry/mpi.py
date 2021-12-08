@@ -14,6 +14,7 @@ mpi_comm = MPI.COMM_WORLD
 mpi_size = mpi_comm.Get_size()
 mpi_rank = mpi_comm.Get_rank()
 is_main_process = not bool(mpi_rank)
+multiple_processes = mpi_size > 1
 
 
 def get_random_state(seed=None):
