@@ -299,7 +299,7 @@ class SVM(SVC):
         self.update_threshold(self.d)
 
         # Turn into categorial values (1 for finite and 0 for infinite)
-        self.finite = int(self.is_finite(self.y_train_))
+        self.finite = self.is_finite(self.y_train_)
 
         # Check if all values belong to one class, in that case do not fit the
         # SVM but rather save this.
@@ -312,12 +312,12 @@ class SVM(SVC):
             super().fit(self.X_train_, self.finite)
         return self.finite
 
-    def is_finite(self, y_preprocessed):
+    def is_finite(self, y, y_is_preprocessed=True):
         """
         Returns True for finite values above the current threshold, and False otherwise.
         """
-        return np.logical_and(np.isfinite(y_preprocessed),
-                              y_preprocessed > self.threshold_preprocessed)
+        threshold = self.threshold_preprocessed if y_is_preprocessed else self.threshold
+        return np.logical_and(np.isfinite(y), y > threshold)
 
     def predict(self, X):
         """
@@ -340,14 +340,14 @@ class SVM(SVC):
         # Check if all training values were finite, then just return one for
         # every value
         if self.all_finite:
-            return np.ones(self.n, dtype=bool)
+            return np.ones(X.shape[0], dtype=bool)
         # preprocess to the right dimensions if neccessary
         if self.preprocessing_X is not None:
             X = self.preprocessing_X.transform(X)
         return super().predict(X)
 
     @property
-    def threshold(self, n_dimensions):
+    def threshold(self):
         """
         Returns the threshold value which is used to determine whether a value
         is considered to be -inf.
@@ -355,24 +355,25 @@ class SVM(SVC):
         return self._threshold
 
     @property
-    def threshold_preprocessed(self, n_dimensions):
+    def threshold_preprocessed(self):
         """
         Returns the threshold value which is used to determine whether a value
         is considered to be -inf, that threshold having been preprocessed.
         """
         return self._threshold_
 
-    def update_threshold(self):
+    def update_threshold(self, dimension=None):
         """
         Sets the threshold value threshold for un-transformed y's.
         """
+        dimension = dimension or self.d
         if self._threshold is None:
             if self.init_threshold is None:
                 if self.threshold_sigma is None:
                     raise ValueError(
                         "You either need to specify threshold or threshold_sigma.")
                 self._threshold = \
-                    self.compute_threshold_given_sigma(self.threshold_sigma, self.d)
+                    self.compute_threshold_given_sigma(self.threshold_sigma, dimension)
             else:
                 self._threshold = self.init_threshold
         # Update threshold for preprocessed data

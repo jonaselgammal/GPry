@@ -9,7 +9,6 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
-from gpry.kernels import ConstantKernel as C, RBF, Matern
 from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run
 import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
@@ -74,8 +73,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             * max_points : Maximum number of points before the run fails
               (default: 1000)
             * max_init : Maximum number of points drawn at initialization
-              before the run fails (default: 10*number of dimensions). If the
-              run fails repeatadly at initialization try decreasing the volume
+              before the run fails (default: 10 * number of dimensions * n_initial).
+              If the run fails repeatadly at initialization try decreasing the volume
               of your prior.
 
     callback : str, optional (default=None)
@@ -176,12 +175,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 warnings.warn("Callback files were found but are incomplete. "
                               "Ignoring those files...")
 
-        # Check if there's an SVM and if so read out it's threshold value
-        if isinstance(gpr.account_for_inf, SVM):
-            threshold = gpr.account_for_inf._return_threshold(n_d)
-        else:
-            threshold = -np.inf
-
         print("Model has been initialized")
 
         # Read in options for the run
@@ -189,12 +182,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             options = {}
         n_initial = options.get("n_initial", 3 * n_d)
         max_points = options.get("max_points", 1000)
+        max_init = options.get("max_init", 10 * n_d * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
         if n_points_per_acq < mpi_size:
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
                   "not specified.")
-        max_init = options.get("max_init", 10 * n_d)
 
         # Sanity checks
         if n_initial >= max_points:
@@ -217,72 +210,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     random_state = get_random_state()
 
     # Define initial tranining set
+    get_initial_sample(model, gpr, n_initial)
     if is_main_process:
-        # Check if the GP already contains points. If so they are reused.
-        pretrained = 0
-        if hasattr(gpr, "y_train"):
-            if len(gpr.y_train) > 0:
-                pretrained = len(gpr.y_train)
-        n_still_needed = n_initial - pretrained
-        n_to_sample_per_process = int(np.ceil(n_still_needed / mpi_size))
-        # Arrays to store the initial sample
-        X_init = np.empty((0, n_d))
-        y_init = np.empty(0)
-    if multiple_processes:
-        n_to_sample_per_process = mpi_comm.bcast(
-            n_to_sample_per_process if is_main_process else None)
-    if n_to_sample_per_process:
-        n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
-        # Initial samples loop. The initial samples are drawn from the prior
-        # and according to the distribution of the prior.
-        for i in range(n_iterations_before_giving_up):
-            X_init_loop = np.empty((0, n_d))
-            y_init_loop = np.empty(0)
-            for j in range(n_to_sample_per_process):
-                # Draw point from prior and evaluate logposterior at that point
-                X = model.prior.reference(max_tries=np.inf, warn_if_tries="10d",
-                                          ignore_fixed=True, warn_if_no_ref=False)
-                print(f"Evaluating true posterior at {X}")
-                y = model.logpost(X)
-                print(f"Got {y}")
-                X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
-                y_init_loop = np.append(y_init_loop, y)
-            # Gather points and decide whether to break.
-            if multiple_processes:
-                all_points = mpi_comm.gather(X_init_loop)
-                all_posts = mpi_comm.gather(y_init_loop)
-            else:
-                all_points = [X_init_loop]
-                all_posts = [y_init_loop]
-            if is_main_process:
-                X_init = np.concatenate([X_init, np.concatenate(all_points)])
-                y_init = np.concatenate([y_init, np.concatenate(all_posts)])
-                # Only finite values contributes to the number of initial samples
-                n_finite_new = sum(np.logical_and(np.isfinite(y_init), y>threshold))
-                # Break loop if the desired number of initial samples is reached
-                finished = (n_finite_new >= n_still_needed)
-            if multiple_processes:
-                finished = mpi_comm.bcast(finished if is_main_process else None)
-            if finished:
-                break
-            print("Done getting initial training samples.")
-        if is_main_process:
-            # Raise error if the number of initial samples hasn't been reached
-            if not finished:
-                raise RuntimeError("The desired number of finite initial "
-                                   "samples hasn't been reached. Try "
-                                   "increasing max_init or decreasing the "
-                                   "volume of the prior")
-        if is_main_process:
-            # Append the initial samples to the gpr
-            gpr.append_to_data(X_init, y_init)
-            # Save callback
-            _save_callback(callback, model, gpr, acquisition, convergence, options)
-            print("Initial samples drawn, starting with Bayesian "
-                  "optimization loop.")
-    else:  # Enough pre-training
-        print("The number of pretrained points exceeds the number of initial "
-              "samples")
+        # Save callback
+        _save_callback(callback, model, gpr, acquisition, convergence, options)
+        print("Initial samples drawn, starting with Bayesian "
+              "optimization loop.")
     if multiple_processes:
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
@@ -294,6 +227,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         split_number_for_parallel_processes(n_points_per_acq)
     n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
     i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
+    iter = 0
     for iter in range(n_iterations):
         if is_main_process:
             print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
@@ -359,6 +293,89 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         gpr, acquisition, convergence, options = mpi_comm.bcast(
             (gpr, acquisition, convergence, options) if is_main_process else None)
     return model, gpr, acquisition, convergence, options
+
+
+def get_initial_sample(model, gpr, n_initial, max_init=None):
+    """
+    Draws an initial sample for the `gpr` GP model until it has a training set of size
+    `n_initial`, counting only finite-target points ("finite" here meaning over the
+    threshold of the SVM classifier, if present).
+
+    Will fail is it needed to evaluate the target more than `max_init` times (defaults
+    to 10 times the dimension of the problem times the number of initial samples
+    requested).
+
+    This function is MPI-aware.
+    """
+    n_d = model.prior.d()
+    max_init = 10 * n_d * n_initial
+    # Check if there's an SVM and if so read out it's threshold value
+    # We will compare it against y - max(y)
+    if isinstance(gpr.account_for_inf, SVM):
+        # Grab the threshold from the internal SVM (the non-preprocessed one)
+        gpr.account_for_inf.update_threshold(dimension=model.prior.d())
+        is_finite = lambda y: gpr.account_for_inf.is_finite(y, y_is_preprocessed=False)
+    else:
+        is_finite = lambda y: np.isfinite(y)
+    if is_main_process:
+        # Check if the GP already contains points. If so they are reused.
+        pretrained = 0
+        if hasattr(gpr, "y_train"):
+            if len(gpr.y_train) > 0:
+                pretrained = len(gpr.y_train)
+        n_still_needed = n_initial - pretrained
+        n_to_sample_per_process = int(np.ceil(n_still_needed / mpi_size))
+        # Arrays to store the initial sample
+        X_init = np.empty((0, n_d))
+        y_init = np.empty(0)
+    if multiple_processes:
+        n_to_sample_per_process = mpi_comm.bcast(
+            n_to_sample_per_process if is_main_process else None)
+    if n_to_sample_per_process == 0:  # Enough pre-training
+        print("The number of pretrained points exceeds the number of initial samples")
+        return
+    n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
+    # Initial samples loop. The initial samples are drawn from the prior
+    # and according to the distribution of the prior.
+    for i in range(n_iterations_before_giving_up):
+        X_init_loop = np.empty((0, n_d))
+        y_init_loop = np.empty(0)
+        for j in range(n_to_sample_per_process):
+            # Draw point from prior and evaluate logposterior at that point
+            X = model.prior.sample(n=1)[0]
+            print(f"Evaluating true posterior at {X}")
+            y = model.logpost(X)
+            print(f"Got {y}")
+            X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
+            y_init_loop = np.append(y_init_loop, y)
+        # Gather points and decide whether to break.
+        if multiple_processes:
+            all_points = mpi_comm.gather(X_init_loop)
+            all_posts = mpi_comm.gather(y_init_loop)
+        else:
+            all_points = [X_init_loop]
+            all_posts = [y_init_loop]
+        if is_main_process:
+            X_init = np.concatenate([X_init, np.concatenate(all_points)])
+            y_init = np.concatenate([y_init, np.concatenate(all_posts)])
+            # Only finite values contributes to the number of initial samples
+            n_finite_new = sum(is_finite(y_init - max(y_init)))
+            # Break loop if the desired number of initial samples is reached
+            finished = (n_finite_new >= n_still_needed)
+        if multiple_processes:
+            finished = mpi_comm.bcast(finished if is_main_process else None)
+        if finished:
+            break
+    print("Done getting initial training samples.")
+    if is_main_process:
+        # Append the initial samples to the gpr
+        gpr.append_to_data(X_init, y_init)
+        # Raise error if the number of initial samples hasn't been reached
+        if not finished:
+            raise RuntimeError("The desired number of finite initial "
+                               "samples hasn't been reached. Try "
+                               "increasing max_init or decreasing the "
+                               "volume of the prior")
 
 
 def mcmc(model_truth, gp, convergence=None, options=None, output=None):
