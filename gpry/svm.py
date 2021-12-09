@@ -351,9 +351,6 @@ class SVM(SVC):
         """
         Returns the threshold value which is used to determine whether a value
         is considered to be -inf.
-
-        This threshold is to be understood as relative to the current maximum
-        acquired target value.
         """
         return self._threshold
 
