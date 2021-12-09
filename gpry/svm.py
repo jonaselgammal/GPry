@@ -168,24 +168,44 @@ class SVM(SVC):
     """
 
     def __init__(self, threshold_sigma=10, threshold=None, C=1e7, kernel='rbf',
-        degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
-        coef0=0.0, shrinking=True, probability=False, tol=0.001,
-        cache_size=200, class_weight=None, verbose=False, max_iter=-1,
-        decision_function_shape='ovr', break_ties=False, random_state=None):
+                 degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
+                 coef0=0.0, shrinking=True, probability=False, tol=0.001,
+                 cache_size=200, class_weight=None, verbose=False, max_iter=-1,
+                 decision_function_shape='ovr', break_ties=False, random_state=None):
 
         self.threshold_sigma = threshold_sigma
-        self.threshold = threshold
-        self.threshold_ = None
+        self.init_threshold = threshold
+        # Current threshold (and preprocessed one ending in "_")
+        self._threshold = None
+        self._threshold_ = None
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
         self.all_finite = False
 
         super().__init__(C=C, kernel=kernel, degree=degree, gamma=gamma,
-            coef0=coef0, shrinking=shrinking, probability=probability, tol=tol,
-            cache_size=cache_size, class_weight=class_weight, verbose=verbose,
-            max_iter=max_iter, decision_function_shape=decision_function_shape,
-            break_ties=break_ties, random_state=random_state)
+                         coef0=coef0, shrinking=shrinking, probability=probability,
+                         tol=tol, cache_size=cache_size, class_weight=class_weight,
+                         verbose=verbose, max_iter=max_iter,
+                         decision_function_shape=decision_function_shape,
+                         break_ties=break_ties, random_state=random_state)
+
+    @property
+    def d(self):
+        """Dimension of the feature space."""
+        try:
+            return self.X_train.shape[1]
+        except AttributeError:
+            raise ValueError(
+                "You need to add some data before determining its dimension.")
+
+    @property
+    def n(self):
+        """Number of training points."""
+        try:
+            return self.X_train.shape[0]
+        except AttributeError:
+            return 0
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """
@@ -211,7 +231,6 @@ class SVM(SVC):
         -------
         self
         """
-
         # Copy stuff
         X = np.copy(X)
         y = np.copy(y)
@@ -262,41 +281,43 @@ class SVM(SVC):
         self.X_train = np.copy(X)
         self.y_train = np.copy(y)
 
-        # Set threshold value
-        if self.threshold is None:
-            self.threshold = self._return_threshold(X.shape[1])
-
-        # preprocess if neccessary
+        # Preprocess if neccessary
         if self.preprocessing_X is not None:
             if fit_preprocessors:
                 self.preprocessing_X.fit(X, y)
             self.X_train_ = self.preprocessing_X.transform(X)
         else:
             self.X_train_ = X
-
         if self.preprocessing_y is not None:
             if fit_preprocessors:
                 self.preprocessing_y.fit(X, y)
             self.y_train_ = self.preprocessing_y.transform(y)
-            self.threshold_ = self.preprocessing_y.transform(self.threshold)
         else:
             self.y_train_ = y
-            self.threshold_ = self.threshold
 
-        # turn into categorial values (1 for finite and 0 for infinite)
-        self.finite = np.logical_and(np.isfinite(y), y > self.threshold_)
+        # Update threshold value
+        self.update_threshold(self.d)
+
+        # Turn into categorial values (1 for finite and 0 for infinite)
+        self.finite = int(self.is_finite(self.y_train_))
 
         # Check if all values belong to one class, in that case do not fit the
         # SVM but rather save this.
         if np.all(self.finite):
             self.all_finite = True
-            return self.finite
         elif np.all(~self.finite):
-            raise ValueError("All values that have been passed are infinite. "\
-                "This cannot be tolerated as it breaks the GP.")
+            raise ValueError("All values that have been passed are infinite. "
+                             "This cannot be tolerated as it breaks the GP.")
         else:
             super().fit(self.X_train_, self.finite)
-            return self.finite
+        return self.finite
+
+    def is_finite(self, y_preprocessed):
+        """
+        Returns True for finite values above the current threshold, and False otherwise.
+        """
+        return np.logical_and(np.isfinite(y_preprocessed),
+                              y_preprocessed > self.threshold_preprocessed)
 
     def predict(self, X):
         """
@@ -315,31 +336,59 @@ class SVM(SVC):
         A boolean array which is True at locations predicted finite posterior
         and False at locations with predicted infinite posterior.
 
-
         """
         # Check if all training values were finite, then just return one for
         # every value
         if self.all_finite:
-            return np.ones(X.shape[0], dtype=bool)
+            return np.ones(self.n, dtype=bool)
         # preprocess to the right dimensions if neccessary
         if self.preprocessing_X is not None:
             X = self.preprocessing_X.transform(X)
         return super().predict(X)
 
-    def _return_threshold(self, n_dimensions):
+    @property
+    def threshold(self, n_dimensions):
         """
         Returns the threshold value which is used to determine whether a value
-        is considered to be -inf
-        """
+        is considered to be -inf.
 
-        # Set threshold value
-        if self.threshold is None:
-            if self.threshold_sigma is None:
-                raise ValueError(
-                    "You either need to specify threshold or threshold_sigma."
-                    )
+        This threshold is to be understood as relative to the current maximum
+        acquired target value.
+        """
+        return self._threshold
+
+    @property
+    def threshold_preprocessed(self, n_dimensions):
+        """
+        Returns the threshold value which is used to determine whether a value
+        is considered to be -inf, that threshold having been preprocessed.
+        """
+        return self._threshold_
+
+    def update_threshold(self):
+        """
+        Sets the threshold value threshold for un-transformed y's.
+        """
+        if self._threshold is None:
+            if self.init_threshold is None:
+                if self.threshold_sigma is None:
+                    raise ValueError(
+                        "You either need to specify threshold or threshold_sigma.")
+                self._threshold = \
+                    self.compute_threshold_given_sigma(self.threshold_sigma, self.d)
             else:
-                return -2*chi2.isf(
-                    erfc(self.threshold_sigma/np.sqrt(2)), n_dimensions)
+                self._threshold = self.init_threshold
+        # Update threshold for preprocessed data
+        if self.preprocessing_y is not None:
+            self._threshold_ = self.preprocessing_y.transform(self.threshold)
         else:
-            return self.threshold
+            self._threshold_ = self.threshold
+
+    @staticmethod
+    def compute_threshold_given_sigma(n_sigma, n_dimensions):
+        r"""
+        Computes threshold value given a number of :math:`\sigma` away from the maximum,
+        assuming a math:`\chi^2` distribution.
+        """
+        return -2 * chi2.isf(
+            erfc(n_sigma / np.sqrt(2)), n_dimensions)
