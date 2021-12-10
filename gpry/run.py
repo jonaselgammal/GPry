@@ -222,15 +222,17 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_finite = len(gpr.y_train)
 
     # Run bayesian optimization loop
-    n_iterations = int((max_points - n_finite) / n_points_per_acq)
+    n_iterations = 100000
+    #int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
         split_number_for_parallel_processes(n_points_per_acq)
     n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
     i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
-    iter = 0
-    for iter in range(n_iterations):
+    it = 0
+    n_left = max_points - n_finite
+    for it in range(n_iterations):
         if is_main_process:
-            print(f"+++ Iteration {iter} (of {n_iterations}) +++++++++")
+            print(f"+++ Iteration {it} ({n_left} points left) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
             # Get new point(s) from Bayesian optimization
@@ -252,6 +254,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if is_main_process:
             new_y = np.concatenate(all_new_y)
             gpr.append_to_data(new_X, new_y, fit=True)
+            n_left -= gpr.last_num_accepted
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
@@ -274,6 +277,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if is_converged:
             break
         if is_main_process:
+            if n_left <=0:
+              break
             # Save
             _save_callback(callback, model, gpr, acquisition, convergence, options)
 
@@ -281,10 +286,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if is_main_process:
         _save_callback(callback, model, gpr, acquisition, convergence, options)
 
-    if iter == n_iterations - 1 and is_main_process:
+    if n_left <=0 and is_main_process:
         warnings.warn("The maximum number of points was reached before "
                       "convergence. Either increase max_points or try to "
                       "choose a smaller prior.")
+    if it == n_iterations and is_main_process:
+        warnings.warn("Not enough points were accepted before "
+                      "reaching convergence/reaching the specified max_points.")
 
     # Now that the run has converged we can return the gp and all other
     # relevant quantities which can then be processed with an MCMC or other
@@ -342,7 +350,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
         y_init_loop = np.empty(0)
         for j in range(n_to_sample_per_process):
             # Draw point from prior and evaluate logposterior at that point
-            X = model.prior.sample(n=1)[0]
+            X = model.prior.reference()
             print(f"Evaluating true posterior at {X}")
             y = model.logpost(X)
             print(f"Got {y}")

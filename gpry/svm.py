@@ -317,7 +317,7 @@ class SVM(SVC):
         Returns True for finite values above the current threshold, and False otherwise.
         """
         threshold = self.threshold_preprocessed if y_is_preprocessed else self.threshold
-        return np.logical_and(np.isfinite(y), y > threshold)
+        return np.logical_and(np.isfinite(y), y-np.max(y) > threshold)
 
     def predict(self, X):
         """

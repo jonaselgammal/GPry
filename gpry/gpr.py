@@ -210,6 +210,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  copy_X_train=True, random_state=None,
                  verbose=1):
         self.newly_appended = 0
+        self.last_num_accepted = 0
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
@@ -426,6 +427,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         # The number of newly added points. Used for the update_model method
         self.newly_appended = y.shape[0]
+        self.last_num_accepted = y.shape[0]
 
         if fit:
             self.fit()
