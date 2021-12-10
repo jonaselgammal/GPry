@@ -1111,3 +1111,19 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         new = (lambda cls: cls.__new__(cls))(self.__class__)
         new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items() if k != "log"}
         return new
+
+class DontConverge(ConvergenceCriterion):
+
+    @property
+    def is_MPI_aware(self):
+        return True
+
+    def __init__(self, prior, params):
+        self.values = []
+        self.prior = prior
+
+    def criterion_value(self, gp, gp_2=None):
+        return np.nan
+
+    def is_converged(self, gp, gp_2=None):
+        return False
