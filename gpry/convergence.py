@@ -978,7 +978,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                         kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
                         kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
                 except np.linalg.LinAlgError as excpt:
-                    raise ConvergenceCheckError(f"Could not compute KL norm: {excpt}".)
+                    raise ConvergenceCheckError(f"Could not compute KL norm: {excpt}.")
                 # If very small, we've probably found nothing yet, so nothing new
                 # But assume that if we have hit 10 * limit, we are right on track
                 min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
