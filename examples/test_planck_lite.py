@@ -24,6 +24,7 @@ info["likelihood"].pop("planck_2018_highl_plik.TTTEEE")
 info["likelihood"]["planck_2018_highl_plik.TTTEEE_lite_native"] = None
 
 # Temporary solution: reduce priors: (CAMB case only)
+# See https://wiki.cosmos.esa.int/planck-legacy-archive/images/2/21/Baseline_params_table_2018_95pc_v2.pdf
 info["params"]["logA"]["prior"] = {"min": 2.9, "max": 3.2}
 info["params"]["ns"]["prior"] = {"min": 0.95, "max": 0.98}
 info["params"]["theta_MC_100"]["prior"] = {"min": 1.035, "max": 1.05}

@@ -308,7 +308,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
     This function is MPI-aware.
     """
     n_d = model.prior.d()
-    max_init = 10 * n_d * n_initial
+    max_init = max_init or 10 * n_d * n_initial
     # Check if there's an SVM and if so read out it's threshold value
     # We will compare it against y - max(y)
     if isinstance(gpr.account_for_inf, SVM):
@@ -366,6 +366,9 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
             finished = mpi_comm.bcast(finished if is_main_process else None)
         if finished:
             break
+        else:
+            # TODO: maybe re-fit SVM to shrink initial sample region
+            pass
     print("Done getting initial training samples.")
     if is_main_process:
         # Append the initial samples to the gpr

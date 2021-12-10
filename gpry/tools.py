@@ -14,6 +14,8 @@ def kl_norm(mean_0, cov_0, mean_1, cov_1):
     """
     Computes the KL divergence between two normal distributions defined by their means
     and covariance matrices.
+
+    May raise ``numpy.linalg.LinAlgError``.
     """
     cov_1_inv = np.linalg.inv(cov_1)
     dim = len(mean_0)

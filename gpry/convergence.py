@@ -17,7 +17,7 @@ import sys
 import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
-    mcmc_info_from_run
+    mcmc_info_from_run, is_valid_covmat
 from gpry.mpi import mpi_rank, mpi_comm, is_main_process, multiple_processes
 
 
@@ -973,9 +973,12 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
                 cov_reweighted = np.cov(points.T, aweights=reweights)
                 cov_mcmc = cov_reweighted
                 # Use max of them
-                kl_reweight = max(
-                    kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
-                    kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
+                try:
+                    kl_reweight = max(
+                        kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
+                        kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
+                except np.linalg.LinAlgError as excpt:
+                    raise ConvergenceCheckError(f"Could not compute KL norm: {excpt}".)
                 # If very small, we've probably found nothing yet, so nothing new
                 # But assume that if we have hit 10 * limit, we are right on track
                 min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
@@ -1062,7 +1065,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         # Create model and sampler
         model = get_model(self.cobaya_input)
         sampler_info = mcmc_info_from_run(model, gp, convergence=self)
-        if covmat is not None:
+        if covmat is not None and is_valid_covmat(covmat):
             # Prefer the one explicitly passed
             sampler_info["mcmc"]["covmat"] = covmat
         sampler_info["mcmc"]["temperature"] = self.temperature

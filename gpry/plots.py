@@ -30,6 +30,8 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
         i_within = np.argwhere(np.logical_and(mini < Xs[:, i], Xs[:, i] < maxi))
         Xs = np.squeeze(Xs[i_within])
         ys = np.squeeze(ys[i_within])
+    if not len(Xs):  # no points within plotting ranges
+        return
     # Create colormap with appropriate limits
     matplotlib.cm.get_cmap(colormap)
     norm = matplotlib.colors.Normalize(vmin=min(ys), vmax=max(ys))
