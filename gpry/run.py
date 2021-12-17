@@ -70,8 +70,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
-            * max_points : Maximum number of points before the run fails
-              (default: 1000)
+            * max_points : Maximum number of attempted sampling points before the run fails.
+              This is useful if you e.g. want to restrict the maximum computation resources (default: 1000)
+            * max_accepted : Maximum number of accepted sampling points before the run fails.
+              This might be useful if you use the DontConverge convergence criterion,
+              specifying exactly how many points you want to have in your GP (default: max_points)
             * max_init : Maximum number of points drawn at initialization
               before the run fails (default: 10 * number of dimensions * n_initial).
               If the run fails repeatadly at initialization try decreasing the volume
@@ -182,6 +185,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             options = {}
         n_initial = options.get("n_initial", 3 * n_d)
         max_points = options.get("max_points", 1000)
+        max_accepted = options.get("max_accepted", max_points)
         max_init = options.get("max_init", 10 * n_d * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
         if n_points_per_acq < mpi_size:
@@ -196,9 +200,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if n_initial <= 0:
             raise ValueError("The number of initial samples needs to be bigger "
                              "than 0")
+        if max_accepted > max_points:
+            raise ValueError("You manually set max_accepted > max_points, but "
+                             " you cannot have more accepted than sampled points")
     if multiple_processes:
-        max_init, max_points, n_points_per_acq = mpi_comm.bcast(
-            (max_init, max_points, n_points_per_acq) if is_main_process else None)
+        max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
+            (max_init, max_points, max_accepted, n_points_per_acq) if is_main_process else None)
         convergence_is_MPI_aware = mpi_comm.bcast(
             convergence.is_MPI_aware if is_main_process else None)
         if convergence_is_MPI_aware:
@@ -222,17 +229,19 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_finite = len(gpr.y_train)
 
     # Run bayesian optimization loop
-    n_iterations = 100000
-    #int((max_points - n_finite) / n_points_per_acq)
+    n_iterations = int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
         split_number_for_parallel_processes(n_points_per_acq)
     n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
     i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
     it = 0
-    n_left = max_points - n_finite
+    n_left = max_accepted - n_finite
     for it in range(n_iterations):
         if is_main_process:
-            print(f"+++ Iteration {it} ({n_left} points left) +++++++++")
+            if max_accepted != max_points:
+              print(f"+++ Iteration {it} (Accepting at most {n_left} more points) +++++++++")
+            else:
+              print(f"+++ Iteration {it} (of at most {n_iterations} iterations) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
             # Get new point(s) from Bayesian optimization
@@ -286,9 +295,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if is_main_process:
         _save_callback(callback, model, gpr, acquisition, convergence, options)
 
-    if n_left <=0 and is_main_process:
-        warnings.warn("The maximum number of points was reached before "
-                      "convergence. Either increase max_points or try to "
+    if n_left <=0 and not isinstance(convergence, gpryconv.DontConverge) and is_main_process:
+        warnings.warn("The maximum number of accepted points was reached before "
+                      "convergence. Either increase max_accepted or try to "
                       "choose a smaller prior.")
     if it == n_iterations and is_main_process:
         warnings.warn("Not enough points were accepted before "
