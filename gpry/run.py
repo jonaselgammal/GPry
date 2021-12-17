@@ -137,7 +137,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                                  prior_bounds),
                                              verbose=verbose)
         elif isinstance(gp_acquisition, GP_Acquisition):
-            acquisition = acquisition
+            acquisition = gp_acquisition
         else:
             raise TypeError("gp_acquisition should be an Acquisition object or "
                             "'Log_exp', got %s" % gp_acquisition)
