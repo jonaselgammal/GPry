@@ -270,7 +270,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if correct_counter:
               correct_counter.update(new_y,y_lies)
             gpr.append_to_data(new_X, new_y, fit=True)
-            n_left -= gpr.last_num_accepted
+            n_left = max_accepted - gpr.n_accepted_evals
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
