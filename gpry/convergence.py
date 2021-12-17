@@ -74,15 +74,6 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 # evaluations to the corresponding variables.
     """
 
-    def get_n_evals_from_gp(self, gp):
-        """Method which returns the number of posterior evaluations from the
-        gp."""
-        if gp.account_for_inf is None:
-            n_evals = len(gp.y_train)
-        else:
-            n_evals = len(gp.account_for_inf.y_train)
-        return n_evals
-
     def get_history(self):
         """Returns the two lists containing the values of the convergence
         criterion at each step as well as the number of posterior evaluations.
