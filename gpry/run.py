@@ -146,14 +146,19 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                             "'Log_exp', got %s" % gp_acquisition)
 
         # Construct the convergence criterion
+        correct_counter = None
         if isinstance(convergence_criterion, str):
-            try:
-                conv_class = getattr(gpryconv, convergence_criterion)
-            except AttributeError:
-                raise ValueError(
-                    f"Unknown convergence criterion {convergence_criterion}. "
-                    f"Available convergence criteria: {gpryconv.builtin_names()}")
-            convergence = conv_class(model.prior, convergence_options or {})
+            if ( convergence_criterion == "CorrectCounter" ):
+                correct_counter = gpryconv.CorrectCounter(convergence_options or {})
+                convergence = gpryconv.DontConverge
+            else:
+                try:
+                    conv_class = getattr(gpryconv, convergence_criterion)
+                except AttributeError:
+                    raise ValueError(
+                        f"Unknown convergence criterion {convergence_criterion}. "
+                        f"Available convergence criteria: {gpryconv.builtin_names()}")
+                convergence = conv_class(model.prior, convergence_options or {})
         elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
             convergence = convergence_criterion
         else:
@@ -262,6 +267,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             all_new_y = [new_y]
         if is_main_process:
             new_y = np.concatenate(all_new_y)
+            if correct_counter:
+              correct_counter.update(new_y,y_lies)
             gpr.append_to_data(new_X, new_y, fit=True)
             n_left -= gpr.last_num_accepted
         # Calculate convergence and break if the run has converged
@@ -283,6 +290,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 is_converged = convergence.is_converged(gpr, old_gpr)
             except gpryconv.ConvergenceCheckError as converr:
                 is_converged = False
+        if correct_counter:
+            is_converged = correct_counter.is_converged()
         if is_converged:
             break
         if is_main_process:
