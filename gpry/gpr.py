@@ -288,6 +288,38 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         else:
             return self.bounds.shape[0]
 
+    @property
+    def n_total_evals(self):
+        """
+        Extracts the total number of posterior evaluations (finite AND infinite)
+        from the gp.
+        """
+        if gp.account_for_inf is None:
+            if hasattr(gp, "y_train"):
+                n_evals = len(gp.y_train)
+            else:
+                n_evals = 0
+        else:
+            if hasattr(gp.account_for_inf, "y_train"):
+                n_evals = len(gp.account_for_inf.y_train)
+            elif hasattr(gp, "y_train"):
+                n_evals = len(gp.y_train)
+            else:
+                n_evals = 0
+        return n_evals
+
+    @property
+    def n_accepted_evals(self):
+        """
+        Extracts the number of accepted posterior evaluations (accepted means being
+        classified as *finite* by the GP).
+        """
+        if hasattr(gp, y_train):
+            n_evals = len(gp.y_train)
+        else:
+            n_evals = 0
+        return n_evals
+
     def append_to_data(self, X, y, noise_level=None, fit=True):
         """Append newly acquired data to the GP Model and updates it.
 
