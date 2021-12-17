@@ -940,7 +940,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         # MCMC temperature
         self.temperature = params.get("temperature", 2)
         # Max times a sample can be reweighted and reused (we may miss new high regions)
-        self.max_reused = 4
+        self.max_reused = params.get("max_reused", 4)
         # Prepare Cobaya's input
         self.cobaya_input = cobaya_input_prior(prior)
         # Save last sample
