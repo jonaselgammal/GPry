@@ -14,7 +14,8 @@ import sys
 import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
-    mcmc_info_from_run, is_valid_covmat
+    mcmc_info_from_run, is_valid_covmat, get_total_evals_from_gp, \
+    get_accepted_evals_from_gp
 from gpry.mpi import mpi_rank, mpi_comm, is_main_process, multiple_processes
 
 
@@ -54,10 +55,12 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 # at which the algorithm is considered to have converged.
                 # Furthermore this method should initialize empty lists in
                 # which we can write the values of the convergence criterion
-                # as well as the number of posterior evaluations. This allows
-                # for easy tracking/plotting of the convergence.
+                # as well as the total number of posterior evaluations and the
+                # number of accepted posterior evaluations. This allows for
+                # easy tracking/plotting of the convergence.
                 self.values = []
                 self.n_posterior_evals = []
+                self.n_accepted_evals = []
                 self.limit = ... # stores the limit for convergence
 
             def is_converged(self, gp):
@@ -143,6 +146,7 @@ class KL_from_draw(ConvergenceCriterion):
 
         self.values = []
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
@@ -184,7 +188,8 @@ class KL_from_draw(ConvergenceCriterion):
                 # gp_2 is not a GP so we do not calculate anything...
                 self.gp_2 = gp
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
         else:
             if not hasattr(gp_2, "X_train"):
@@ -235,7 +240,8 @@ class KL_from_draw(ConvergenceCriterion):
                 kl = np.nan
 
             self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.accepted_evals)
 
             return kl
 
@@ -272,6 +278,7 @@ class KL_from_draw_approx(ConvergenceCriterion):
 
         self.values = []
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
@@ -313,7 +320,8 @@ class KL_from_draw_approx(ConvergenceCriterion):
                 # gp_2 is not a GP so we do not calculate anything...
                 self.gp_2 = gp
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
         else:
             if not hasattr(gp_2, "X_train"):
@@ -370,19 +378,22 @@ class KL_from_draw_approx(ConvergenceCriterion):
                 self.mean = None
                 self.cov = None
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
             # Compute the KL divergence (gaussian approx) with the previous iteration
             try:
                 kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
                 self.values.append(kl)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return kl
             except Exception as e:
                 print("KL divergence couldn't be calculated.")
                 print(e)
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
 
 
@@ -414,6 +425,7 @@ class KL_from_training(ConvergenceCriterion):
 
         self.values = []
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
@@ -506,7 +518,8 @@ class KL_from_training(ConvergenceCriterion):
                 self.mean = None
                 self.cov = None
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
 
             # Calculate the mean and cov of surrogate model 2
@@ -524,21 +537,24 @@ class KL_from_training(ConvergenceCriterion):
                       "calculated.")
                 print(e)
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
 
             # Actually calculate the KL divergence
             try:
                 kl = kl_norm(mean_1, cov_1, mean_2, cov_2)
                 self.values.append(kl)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return kl
 
             except Exception as e:
                 print("KL divergence couldn't be calculated.")
                 print(e)
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 return np.nan
 
 
@@ -610,8 +626,9 @@ class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
         self.mean = None
         self.cov = None
         self.values = []
-        self.limit = params.get("limit", 1e-2)
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
+        self.limit = params.get("limit", 1e-2)
         # Number of MCMC chains to generate samples
         if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
             raise ValueError(
@@ -690,7 +707,8 @@ class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
         return kl
 
     def _mean_and_cov_from_mcmc(self, gp):
@@ -813,6 +831,7 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
 
         self.values = []
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
 
     def is_converged(self, gp, gp_2=None):
         kl = self.criterion_value(gp, gp_2)
@@ -852,20 +871,23 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
                 X_test = self._sparse_sample_from_gaussian()
             except ConvergenceCheckError as excpt:
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         try:
             mean_new, cov_new = self._mean_and_cov(X_test, gp)
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         if gp_2 is None:
             if self.mean is None or self.cov is None:
                 # Nothing to compare to! But save mean, cov for next call
                 self.mean, self.cov = mean_new, cov_new
                 self.values.append(np.nan)
-                self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+                self.n_posterior_evals.append(gp.n_total_evals)
+                self.n_accepted_evals.append(gp.n_accepted_evals)
                 raise ConvergenceCheckError("No previous call: needs gp_2 to compare.")
             else:
                 mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
@@ -881,7 +903,8 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
         return kl
 
     def _sparse_sample_from_gaussian(self, mean=None, cov=None, n_draws=None):
@@ -927,10 +950,11 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         self.prior = prior
         self.mean = None
         self.cov = None
-        self.values = []
         self.limit = params.get("limit", 1e-2)
         self.limit_times = params.get("limit_times", 2)
+        self.values = []
         self.n_posterior_evals = []
+        self.n_accepted_evals = []
         # Number of MCMC chains to generate samples
         if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
             raise ValueError(
@@ -1033,7 +1057,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             mean_new, cov_new = self._get_new_mean_and_cov(gp)
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.accepted_evals)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         if gp_2 is not None:
             # TODO: Nothing yet to do with gp2
@@ -1042,7 +1067,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             # Nothing to compare to! But save mean, cov for next call
             self.mean, self.cov = mean_new, cov_new
             self.values.append(np.nan)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.accepted_evals)
             raise ConvergenceCheckError("No previous call: cannot compute criterion.")
         else:
             mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
@@ -1056,7 +1082,8 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(self.get_n_evals_from_gp(gp))
+            self.n_posterior_evals.append(gp.n_total_evals)
+            self.n_accepted_evals.append(gp.accepted_evals)
         return kl
 
     def _sample_mcmc(self, gp, covmat=None):
@@ -1126,9 +1153,14 @@ class DontConverge(ConvergenceCriterion):
 
     def __init__(self, prior, params):
         self.values = []
+        self.n_posterior_evals = []
+        self.n_accepted_evals = []
         self.prior = prior
 
     def criterion_value(self, gp, gp_2=None):
+        self.values.append(np.nan)
+        self.n_posterior_evals.append(gp.n_total_evals)
+        self.n_accepted_evals.append(gp.n_accepted_evals)
         return np.nan
 
     def is_converged(self, gp, gp_2=None):
