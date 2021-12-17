@@ -2,9 +2,6 @@
 This module contains several classes and methods for calculating different
 convergence criterions which can be used to determine if the BQ algorithm has
 converged.
-
-**This part of the code is still not complete as further studies are needed to
-find a suitable convergence criterion for our purposes...**
 """
 
 from abc import ABCMeta, abstractmethod
@@ -87,6 +84,15 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """Returns the two lists containing the values of the convergence
         criterion at each step as well as the number of posterior evaluations.
         """
+        try:
+            values = self.values
+            n_posterior_evals = self.n_posterior_evals
+        except:
+            raise AttributeError("The convergence criterion does not save it's "
+                                 "convergence history.")
+        if len(values) < 1 or len(n_posterior_evals) < 1:
+            raise ValueError("Make sure to call the convergence criterion "
+                             "before getting it's history.")
         return self.values, self.n_posterior_evals
 
     @abstractmethod
