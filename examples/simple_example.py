@@ -18,6 +18,21 @@ rv = multivariate_normal(mean, cov)
 def lkl(x, y):
     return np.log(rv.pdf(np.array([x, y]).T))
 
+
+def callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion):
+    print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
+    print(current_gpr)
+    print(previous_gpr)
+    print("New points")
+    for x, y in zip(new_X, new_y):
+        print(x, y)
+    print(convergence_criterion)
+    print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
+
+
+# Uncomment this line to disable the example callback function above
+callback = None
+
 #############################################################
 # Plotting the likelihood
 
@@ -63,7 +78,7 @@ model = get_model(info)
 
 # Run the GP
 from gpry.run import run
-model, gpr, acquisition, convergence, options = run(model)
+model, gpr, acquisition, convergence, options = run(model, callback=callback)
 
 # Run the MCMC and extract samples
 from gpry.run import mcmc

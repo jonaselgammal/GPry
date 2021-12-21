@@ -23,6 +23,7 @@ import os
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="ConvergenceCriterionGaussianMCMC",
+        callback=None,
         convergence_options=None, options={}, checkpoint=None, verbose=1):
     """
     This function takes care of constructing the Bayesian quadrature/likelihood
@@ -80,6 +81,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
               If the run fails repeatadly at initialization try decreasing the volume
               of your prior.
 
+    callback: callable, optional (default=None)
+        Function run each iteration after adapting the recently acquired points and
+        the computation of the convergence criterion. This function should take arguments
+        ``callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion)``.
+        When running in parallel, the function is run by the main process only.
+
     checkpoint : str, optional (default=None)
         Path for storing checkpointing information from which to resume in case the
         algorithm crashes. If None is given no checkpoint is saved.
@@ -107,7 +114,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     options : dict
         The options dict used for the active sampling loop.
     """
-
     n_d = model.prior.d()
     if is_main_process:
         # Construct GP if it's not already constructed
@@ -271,6 +277,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
               correct_counter.update(new_y,y_lies)
             gpr.append_to_data(new_X, new_y, fit=True)
             n_left = max_accepted - gpr.n_accepted_evals
+            if callback:
+                callback(gpr, old_gpr, new_X, new_y, convergence)
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
