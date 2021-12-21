@@ -14,8 +14,7 @@ import sys
 import inspect
 from copy import deepcopy
 from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
-    mcmc_info_from_run, is_valid_covmat, get_total_evals_from_gp, \
-    get_accepted_evals_from_gp
+    mcmc_info_from_run, is_valid_covmat
 from gpry.mpi import mpi_rank, mpi_comm, is_main_process, multiple_processes
 
 
@@ -76,18 +75,20 @@ class ConvergenceCriterion(metaclass=ABCMeta):
 
     def get_history(self):
         """Returns the two lists containing the values of the convergence
-        criterion at each step as well as the number of posterior evaluations.
+        criterion at each step as well as the total number of evaluations and
+        the number of accepted evaluations.
         """
         try:
             values = self.values
             n_posterior_evals = self.n_posterior_evals
+            n_accepted_evals = self.n_accepted_evals
         except:
             raise AttributeError("The convergence criterion does not save it's "
                                  "convergence history.")
         if len(values) < 1 or len(n_posterior_evals) < 1:
             raise ValueError("Make sure to call the convergence criterion "
                              "before getting it's history.")
-        return self.values, self.n_posterior_evals
+        return values, n_posterior_evals, n_accepted_evals
 
     @abstractmethod
     def __init__(self, prior, params):
@@ -232,7 +233,7 @@ class KL_from_draw(ConvergenceCriterion):
 
             self.values.append(kl)
             self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.accepted_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
 
             return kl
 
@@ -1049,7 +1050,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
             self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.accepted_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         if gp_2 is not None:
             # TODO: Nothing yet to do with gp2
@@ -1059,7 +1060,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             self.mean, self.cov = mean_new, cov_new
             self.values.append(np.nan)
             self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.accepted_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
             raise ConvergenceCheckError("No previous call: cannot compute criterion.")
         else:
             mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
@@ -1074,7 +1075,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
             self.cov = cov_new
             self.values.append(kl)
             self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.accepted_evals)
+            self.n_accepted_evals.append(gp.n_accepted_evals)
         return kl
 
     def _sample_mcmc(self, gp, covmat=None):
