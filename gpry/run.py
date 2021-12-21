@@ -23,7 +23,7 @@ import os
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="ConvergenceCriterionGaussianMCMC",
-        convergence_options=None, options={}, callback=None, verbose=1):
+        convergence_options=None, options={}, checkpoint=None, verbose=1):
     """
     This function takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. This is the easiest way to make use of the
@@ -80,9 +80,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
               If the run fails repeatadly at initialization try decreasing the volume
               of your prior.
 
-    callback : str, optional (default=None)
-        Path for storing callback information from which to resume in case the
-        algorithm crashes. If None is given no callback is saved.
+    checkpoint : str, optional (default=None)
+        Path for storing checkpointing information from which to resume in case the
+        algorithm crashes. If None is given no checkpoint is saved.
 
     Returns
     -------
@@ -166,21 +166,21 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                             "Convergence_criterion object or KL, got %s"
                             % convergence_criterion)
 
-        # Check if a callback exists already and if so resume from there
-        callback_files = _check_callback(callback)
-        if np.any(callback_files):
-            if np.all(callback_files):
+        # Check if a checkpoint exists already and if so resume from there
+        checkpoint_files = _check_checkpoint(checkpoint)
+        if np.any(checkpoint_files):
+            if np.all(checkpoint_files):
                 print("#########################################")
-                print("Callback found. Resuming from there...")
+                print("Checkpoint found. Resuming from there...")
                 print("If this behaviour is unintentional either")
-                print("turn the callback option off or rename it")
+                print("turn the checkpoint option off or rename it")
                 print("to a file which doesn't exist.")
                 print("#########################################")
 
-                model, gpr, acquisition, convergence, options = _read_callback(
-                    callback)
+                model, gpr, acquisition, convergence, options = _read_checkpoint(
+                    checkpoint)
             else:
-                warnings.warn("Callback files were found but are incomplete. "
+                warnings.warn("Checkpoint files were found but are incomplete. "
                               "Ignoring those files...")
 
         print("Model has been initialized")
@@ -224,8 +224,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     # Define initial tranining set
     get_initial_sample(model, gpr, n_initial)
     if is_main_process:
-        # Save callback
-        _save_callback(callback, model, gpr, acquisition, convergence, options)
+        # Save checkpoint
+        _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
         print("Initial samples drawn, starting with Bayesian "
               "optimization loop.")
     if multiple_processes:
@@ -298,11 +298,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if n_left <=0:
               break
             # Save
-            _save_callback(callback, model, gpr, acquisition, convergence, options)
+            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
 
     # Save
     if is_main_process:
-        _save_callback(callback, model, gpr, acquisition, convergence, options)
+        _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
 
     if n_left <=0 and not isinstance(convergence, gpryconv.DontConverge) and is_main_process:
         warnings.warn("The maximum number of accepted points was reached before "
@@ -424,22 +424,22 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
         their priors as well as the likelihood itself. The likelihood is not
         used actively/it is replaced by the gp regressor so it does not need to
         be correct and can be replaced by a dummy function. Alternatively a
-        string containing a path with the location of a saved GP run (callback)
-        can be provided (the same path that was used to save the callback
+        string containing a path with the location of a saved GP run (checkpoint)
+        can be provided (the same path that was used to save the checkpoint
         in the ``run`` function).
 
     gp : GaussianProcessRegressor, which has been fit to data and returned from
         the ``run`` function.
         Alternatively a string containing a path with the
-        location of a saved GP run (callback) can be provided (the same path
-        that was used to save the callback in the ``run`` function).
+        location of a saved GP run (checkpoint) can be provided (the same path
+        that was used to save the checkpoint in the ``run`` function).
 
     convergence : Convergence_criterion, optional
         The convergence criterion which has been used to fit the GP. This is
         used to extract the covariance matrix if it is available from the
         Convergence_criterion class. Alternatively a string containing a path
-        with the location of a saved GP run (callback) can be provided (the
-        same path that was used to save the callback in the ``run`` function).
+        with the location of a saved GP run (checkpoint) can be provided (the
+        same path that was used to save the checkpoint in the ``run`` function).
 
     options: dict, optional
         Containing the options for the mcmc sampler
@@ -474,21 +474,21 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
             warnings.warn("The provided GP hasn't been trained to data "
                           "before. This is likely unintentional...")
     elif isinstance(gp, str):
-        _, gpr, _, _, _ = _read_callback(gp)
+        _, gpr, _, _, _ = _read_checkpoint(gp)
         if gpr is None:
-            raise RuntimeError("Could not load the GP regressor from callback")
+            raise RuntimeError("Could not load the GP regressor from checkpoint")
         if not hasattr(gpr, "y_train"):
             warnings.warn("The provided GP hasn't been trained to data "
                           "before. This is likely unintentional...")
     else:
         raise TypeError("The GP needs to be a gpry GP Regressor or a string "
-                        "with a path to a callback file.")
+                        "with a path to a checkpoint file.")
 
     # Check model_truth
     if isinstance(model_truth, str):
-        model_truth, _, _, _, _ = _read_callback(model_truth)
+        model_truth, _, _, _, _ = _read_checkpoint(model_truth)
         if model_truth is None:
-            raise RuntimeError("Could not load the model from callback")
+            raise RuntimeError("Could not load the model from checkpoint")
     elif not isinstance(model_truth, Model):
         raise TypeError("model_truth needs to be a Cobaya model instance.")
 
@@ -518,13 +518,13 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
     return updated_info, sampler
 
 
-def _save_callback(path, model, gp, gp_acquisition, convergence_criterion, options):
+def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, options):
     """
     This function is used to save all relevant parts of the GP loop for reuse
-    as callback in case the procedure crashes.
+    as checkpoint in case the procedure crashes.
     This function saves 5 files as .pkl files which contain the instances
     of the different modules.
-    The files can be loaded with the _read_callback function.
+    The files can be loaded with the _read_checkpoint function.
 
     Parameters
     ----------
@@ -561,13 +561,13 @@ def _save_callback(path, model, gp, gp_acquisition, convergence_criterion, optio
             with open(os.path.join(path, "opt.pkl"), 'wb') as f:
                 pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)
         except Exception as excpt:
-            raise RuntimeError("Couldn't save the callback. Check if the path "
+            raise RuntimeError("Couldn't save the checkpoint. Check if the path "
                                "is correct and exists. Error message: " + str(excpt))
 
 
-def _check_callback(path):
+def _check_checkpoint(path):
     """
-    Checks if there are callback files in a specific location and if so if they
+    Checks if there are checkpoint files in a specific location and if so if they
     are complete. Returns a list of bools.
 
     Parameters
@@ -583,19 +583,19 @@ def _check_callback(path):
     [model, gp, acquisition, convergence, options]
     """
     if path is not None:
-        callback_files = [os.path.exists(os.path.join(path, "mod.pkl")),
-                          os.path.exists(os.path.join(path, "gpr.pkl")),
-                          os.path.exists(os.path.join(path, "acq.pkl")),
-                          os.path.exists(os.path.join(path, "con.pkl")),
-                          os.path.exists(os.path.join(path, "opt.pkl"))]
+        checkpoint_files = [os.path.exists(os.path.join(path, "mod.pkl")),
+                            os.path.exists(os.path.join(path, "gpr.pkl")),
+                            os.path.exists(os.path.join(path, "acq.pkl")),
+                            os.path.exists(os.path.join(path, "con.pkl")),
+                            os.path.exists(os.path.join(path, "opt.pkl"))]
     else:
-        callback_files = [False] * 5
-    return callback_files
+        checkpoint_files = [False] * 5
+    return checkpoint_files
 
 
-def _read_callback(path):
+def _read_checkpoint(path):
     """
-    Loads callback files to be able to resume a run or save the results for
+    Loads checkpoint files to be able to resume a run or save the results for
     further processing.
 
     Parameters
@@ -610,25 +610,25 @@ def _read_callback(path):
     If any of the files does not exist or cannot be read the function will
     return None instead.
     """
-    # Check if a file exists in the callback and if so resume from there.
-    callback_files = _check_callback(path)
-    # Read in callback
+    # Check if a file exists in the checkpoint and if so resume from there.
+    checkpoint_files = _check_checkpoint(path)
+    # Read in checkpoint
     with open(os.path.join(path, "mod.pkl"), 'rb') as i:
-        model = pickle.load(i) if callback_files[0] else None
+        model = pickle.load(i) if checkpoint_files[0] else None
         # Convert model from dict to model object
         model = get_model(model)
     with open(os.path.join(path, "gpr.pkl"), 'rb') as i:
-        gpr = pickle.load(i) if callback_files[1] else None
+        gpr = pickle.load(i) if checkpoint_files[1] else None
     with open(os.path.join(path, "acq.pkl"), 'rb') as i:
-        acquisition = pickle.load(i) if callback_files[2] else None
+        acquisition = pickle.load(i) if checkpoint_files[2] else None
     with open(os.path.join(path, "con.pkl"), 'rb') as i:
-        if callback_files[3]:
+        if checkpoint_files[3]:
             convergence = pickle.load(i)
             convergence.prior = model.prior
         else:
             convergence = None
 
     with open(os.path.join(path, "opt.pkl"), 'rb') as i:
-        options = pickle.load(i) if callback_files[4] else None
+        options = pickle.load(i) if checkpoint_files[4] else None
 
     return model, gpr, acquisition, convergence, options

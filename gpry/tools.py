@@ -97,10 +97,10 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     # covariance matrix
     if convergence is not None:
         if isinstance(convergence, str):
-            _, _, _, convergence, _ = _read_callback(model)
+            _, _, _, convergence, _ = _read_checkpoint(model)
             if convergence is None:
                 raise RuntimeError("Could not load the convergence criterion "
-                                   "from callback")
+                                   "from checkpoint")
         elif not isinstance(model, Model):
             raise TypeError("convergence needs to be a gpry "
                             "Convergence_criterion instance.")
