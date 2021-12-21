@@ -294,16 +294,16 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Extracts the total number of posterior evaluations (finite AND infinite)
         from the gp.
         """
-        if gp.account_for_inf is None:
-            if hasattr(gp, "y_train"):
-                n_evals = len(gp.y_train)
+        if self.account_for_inf is None:
+            if hasattr(self, "y_train"):
+                n_evals = len(self.y_train)
             else:
                 n_evals = 0
         else:
-            if hasattr(gp.account_for_inf, "y_train"):
-                n_evals = len(gp.account_for_inf.y_train)
-            elif hasattr(gp, "y_train"):
-                n_evals = len(gp.y_train)
+            if hasattr(self.account_for_inf, "y_train"):
+                n_evals = len(self.account_for_inf.y_train)
+            elif hasattr(self, "y_train"):
+                n_evals = len(self.y_train)
             else:
                 n_evals = 0
         return n_evals
@@ -314,8 +314,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Extracts the number of accepted posterior evaluations (accepted means being
         classified as *finite* by the GP).
         """
-        if hasattr(gp, y_train):
-            n_evals = len(gp.y_train)
+        if hasattr(self, "y_train"):
+            n_evals = len(self.y_train)
         else:
             n_evals = 0
         return n_evals
