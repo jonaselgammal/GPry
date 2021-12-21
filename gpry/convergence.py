@@ -62,7 +62,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 self.n_accepted_evals = []
                 self.limit = ... # stores the limit for convergence
 
-            def is_converged(self, gp):
+            def is_converged(self, gp, gp_old=None, new_X=None, new_y=None, pred_y=None):
                 # Basically a wrapper for the 'criterion_value' method which
                 # returns True if the convergence criterion is met and False
                 # otherwise.
@@ -95,7 +95,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """sets all relevant initial parameters from the 'params' dict"""
 
     @abstractmethod
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_old=None, new_X=None, new_y=None, pred_y=None):
         """Returns False if the algorithm hasn't converged and
         True if it has. If gp_2 is None the last GP is taken from the
         model instance."""
@@ -140,7 +140,7 @@ class KL_from_draw(ConvergenceCriterion):
         self.n_posterior_evals = []
         self.n_accepted_evals = []
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         kl = self.criterion_value(gp, gp_2)
         print(kl)
         if kl < self.limit:
@@ -272,7 +272,7 @@ class KL_from_draw_approx(ConvergenceCriterion):
         self.n_posterior_evals = []
         self.n_accepted_evals = []
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         kl = self.criterion_value(gp, gp_2)
         print(kl)
         if kl < self.limit:
@@ -419,7 +419,7 @@ class KL_from_training(ConvergenceCriterion):
         self.n_posterior_evals = []
         self.n_accepted_evals = []
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         kl = self.criterion_value(gp, gp_2)
         print(kl)
         if kl < self.limit:
@@ -652,7 +652,7 @@ class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
     def n_steps(self):
         return self.n_steps_per_dim * self.prior.d()
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         try:
             if np.all(np.array(self.values[-2:]) < self.limit):
                 return True
@@ -825,7 +825,7 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
         self.n_posterior_evals = []
         self.n_accepted_evals = []
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         kl = self.criterion_value(gp, gp_2)
         print(kl)
         if kl < self.limit:
@@ -1113,7 +1113,7 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         updated_info["sampler"] = {"mcmc": mcmc_sampler.info()}
         return updated_info, mcmc_sampler.products()["sample"]
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         self.criterion_value(gp, gp_2)
         try:
             if np.all(np.array(self.values[-self.limit_times:]) < self.limit):
@@ -1155,7 +1155,7 @@ class DontConverge(ConvergenceCriterion):
         self.n_accepted_evals.append(gp.n_accepted_evals)
         return np.nan
 
-    def is_converged(self, gp, gp_2=None):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         return False
 
 
@@ -1181,5 +1181,5 @@ class CorrectCounter():
             if verbose > 0:
               print("Mispredict...")
 
-    def is_converged(self):
+    def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         return self.n_pred > self.ncorrect

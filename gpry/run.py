@@ -215,8 +215,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             raise ValueError("You manually set max_accepted > max_points, but "
                              " you cannot have more accepted than sampled points")
     if multiple_processes:
-        max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
-            (max_init, max_points, max_accepted, n_points_per_acq) if is_main_process else None)
+        n_initial, max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
+            (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
+            if is_main_process else None)
+        gpr = mpi_comm.bcast(gpr if is_main_process else None)
         convergence_is_MPI_aware = mpi_comm.bcast(
             convergence.is_MPI_aware if is_main_process else None)
         if convergence_is_MPI_aware:
@@ -256,7 +258,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
             # Get new point(s) from Bayesian optimization
-            new_X, y_lies, acq_vals = acquisition.multi_optimization(
+            new_X, y_pred, acq_vals = acquisition.multi_optimization(
                 gpr, n_points=n_points_per_acq)
         # Get logposterior value(s) for the acquired points (in parallel)
         if multiple_processes:
@@ -274,7 +276,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if is_main_process:
             new_y = np.concatenate(all_new_y)
             if correct_counter:
-              correct_counter.update(new_y,y_lies)
+              correct_counter.update(new_y, y_pred)
             gpr.append_to_data(new_X, new_y, fit=True)
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
@@ -283,7 +285,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if not convergence_is_MPI_aware:
             if is_main_process:
                 try:
-                    is_converged = convergence.is_converged(gpr, old_gpr)
+                    is_converged = convergence.is_converged(
+                        gpr, old_gpr, new_X, new_y, y_pred)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
             if multiple_processes:
@@ -292,10 +295,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
             if multiple_processes:
-                gpr, old_gpr =  mpi_comm.bcast(
-                    (gpr, old_gpr) if is_main_process else None)
+                gpr, old_gpr, new_X, new_y, y_pred =  mpi_comm.bcast(
+                    (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
-                is_converged = convergence.is_converged(gpr, old_gpr)
+                is_converged = convergence.is_converged(
+                    gpr, old_gpr, new_X, new_y, y_pred)
             except gpryconv.ConvergenceCheckError as converr:
                 is_converged = False
         if correct_counter:
