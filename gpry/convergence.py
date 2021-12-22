@@ -1159,27 +1159,31 @@ class DontConverge(ConvergenceCriterion):
         return False
 
 
-class CorrectCounter():
+class CorrectCounter(ConvergenceCriterion):
 
-    def __init__(self, params):
+    def __init__(self, prior, params):
         self.ncorrect = params.get("n_correct", 5)
         self.threshold = params.get("threshold", 0.01)
         self.verbose = params.get("verbose", 0)
         self.conv_value = 1.
         self.n_pred = 0
 
-    def update(self, y_new, y_lies):
+    def _update(self, y_new, y_pred):
         n_new = len(y_new)
-        assert(n_new == len(y_lies))
-        for yn,yl in zip(y_new,y_lies):
+        assert(n_new == len(y_pred))
+        for yn,yl in zip(y_new,y_pred):
           if(np.abs(yl/yn-1.) < self.threshold):
             self.n_pred += 1
-            if verbose > 0:
+            if self.verbose > 0:
               print("Already {} correctly predicted \n".format(self.n_pred))
           else:
             self.n_pred = 0
-            if verbose > 0:
+            if self.verbose > 0:
               print("Mispredict...")
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
+        self._update(new_y, pred_y)
         return self.n_pred > self.ncorrect
+
+    def criterion_value(self, gp, gp_2=None):
+        return self.n_pred

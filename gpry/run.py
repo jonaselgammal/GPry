@@ -152,19 +152,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                             "'Log_exp', got %s" % gp_acquisition)
 
         # Construct the convergence criterion
-        correct_counter = None
         if isinstance(convergence_criterion, str):
-            if ( convergence_criterion == "CorrectCounter" ):
-                correct_counter = gpryconv.CorrectCounter(convergence_options or {})
-                convergence = gpryconv.DontConverge
-            else:
-                try:
-                    conv_class = getattr(gpryconv, convergence_criterion)
-                except AttributeError:
-                    raise ValueError(
-                        f"Unknown convergence criterion {convergence_criterion}. "
-                        f"Available convergence criteria: {gpryconv.builtin_names()}")
-                convergence = conv_class(model.prior, convergence_options or {})
+            try:
+                conv_class = getattr(gpryconv, convergence_criterion)
+            except AttributeError:
+                raise ValueError(
+                    f"Unknown convergence criterion {convergence_criterion}. "
+                    f"Available convergence criteria: {gpryconv.builtin_names()}")
+            convergence = conv_class(model.prior, convergence_options or {})
         elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
             convergence = convergence_criterion
         else:
@@ -275,8 +270,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             all_new_y = [new_y]
         if is_main_process:
             new_y = np.concatenate(all_new_y)
-            if correct_counter:
-              correct_counter.update(new_y, y_pred)
             gpr.append_to_data(new_X, new_y, fit=True)
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
@@ -302,8 +295,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                     gpr, old_gpr, new_X, new_y, y_pred)
             except gpryconv.ConvergenceCheckError as converr:
                 is_converged = False
-        if correct_counter:
-            is_converged = correct_counter.is_converged()
         if is_converged:
             break
         if is_main_process:
