@@ -25,16 +25,16 @@ from cobaya.run import run
 from gpry.run import mcmc
 import gpry.run
 
-dim = 8
+dim = 20
 
 # Number of times that each combination of d and zeta is run with different
 # gaussians
 n_repeats = 5
 rminusone = 0.01
-plot_every_N = 10
+plot_every_N = 50
 
 # Ratio of prior size to (2x)std of mode
-prior_size_in_std = 5
+prior_size_in_std = 3
 
 # Print always full dataframes
 pd.set_option('display.max_rows', None)
@@ -103,5 +103,7 @@ for n_r in range(n_repeats):
       gdplot.triangle_plot([gdsamples1,gdsamples2], [f"x_{i}" for i in range(dim)], filled=[True,False], legend_labels = ['TRUE', 'GP'])
       #plt.show()
       plt.savefig(f"triangle_{dim}d_repeat{n_r}_{gpr.n_accepted_evals}.pdf")
+      plt.close()
+      del s2, sampler2, gdsamples2, gdplot
 
-    gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,callback = plot_if_necessary)
+    gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,callback = plot_if_necessary,options={'max_accepted':2000, 'max_points':10000})
