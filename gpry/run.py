@@ -24,7 +24,7 @@ import os
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="ConvergenceCriterionGaussianMCMC",
         callback=None,
-        convergence_options=None, options={}, checkpoint=None, verbose=1):
+        convergence_options=None, options={}, checkpoint=None, verbose=3):
     """
     This function takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. This is the easiest way to make use of the
@@ -91,6 +91,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         Path for storing checkpointing information from which to resume in case the
         algorithm crashes. If None is given no checkpoint is saved.
 
+    verbose : 1, 2, 3, optional (default: 3)
+        Level of verbosity. 3 prints Infos, Warnings and Errors, 2
+        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
+        problems arise. Is passed to the GP, Acquisition and Convergence
+        criterion if they are built automatically.
+
     Returns
     -------
 
@@ -121,7 +127,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             gpr = GaussianProcessRegressor(
                 kernel=gp,
-                n_restarts_optimizer=10,
+                n_restarts_optimizer=5*n_d,
                 preprocessing_X=Normalize_bounds(prior_bounds),
                 preprocessing_y=Normalize_y(),
                 bounds=prior_bounds,
@@ -141,7 +147,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 acquisition = GP_Acquisition(prior_bounds,
                                              acq_func="Log_exp",
                                              acq_optimizer="fmin_l_bfgs_b",
-                                             n_restarts_optimizer=5,
+                                             n_restarts_optimizer=5*n_d,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
                                              verbose=verbose)
@@ -194,7 +200,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         max_accepted = options.get("max_accepted", max_points)
         max_init = options.get("max_init", 10 * n_d * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
-        if n_points_per_acq < mpi_size:
+        if n_points_per_acq < mpi_size and verbose>1:
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
                   "not specified.")
@@ -225,12 +231,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     random_state = get_random_state()
 
     # Define initial tranining set
-    get_initial_sample(model, gpr, n_initial)
+    get_initial_sample(model, gpr, n_initial, verbose=verbose)
     if is_main_process:
         # Save checkpoint
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-        print("Initial samples drawn, starting with Bayesian "
-              "optimization loop.")
+        if verbose > 2:
+            print("Initial samples drawn, starting with Bayesian "
+                  "optimization loop.")
     if multiple_processes:
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
@@ -246,10 +253,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     n_left = max_accepted - n_finite
     for it in range(n_iterations):
         if is_main_process:
-            if max_accepted != max_points:
-              print(f"+++ Iteration {it} (Accepting at most {n_left} more points) +++++++++")
-            else:
-              print(f"+++ Iteration {it} (of at most {n_iterations} iterations) +++++++++")
+            if verbose > 2:
+                if max_accepted != max_points:
+                  print(f"+++ Iteration {it} (Accepting at most {n_left} more points) +++++++++")
+                else:
+                  print(f"+++ Iteration {it} (of at most {n_iterations} iterations) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
             # Get new point(s) from Bayesian optimization
@@ -307,11 +315,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
 
-    if n_left <=0 and not isinstance(convergence, gpryconv.DontConverge) and is_main_process:
+    if n_left <=0 and not isinstance(convergence, gpryconv.DontConverge) \
+        and is_main_process and verbose > 1:
         warnings.warn("The maximum number of accepted points was reached before "
                       "convergence. Either increase max_accepted or try to "
                       "choose a smaller prior.")
-    if it == n_iterations and is_main_process:
+    if it == n_iterations and is_main_process and verbose > 1:
         warnings.warn("Not enough points were accepted before "
                       "reaching convergence/reaching the specified max_points.")
 
@@ -324,17 +333,45 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     return model, gpr, acquisition, convergence, options
 
 
-def get_initial_sample(model, gpr, n_initial, max_init=None):
+def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     """
     Draws an initial sample for the `gpr` GP model until it has a training set of size
     `n_initial`, counting only finite-target points ("finite" here meaning over the
     threshold of the SVM classifier, if present).
 
-    Will fail is it needed to evaluate the target more than `max_init` times (defaults
-    to 10 times the dimension of the problem times the number of initial samples
-    requested).
+    Parameters
+    ----------
 
     This function is MPI-aware.
+
+    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Contains all information about the parameters in the likelihood and
+        their priors as well as the likelihood itself. Cobaya is only used here
+        as a wrapper to get the logposterior etc.
+
+    gpr : GaussianProcessRegressor
+        From the GP only the threshold of the SVM classifier is used to
+        identify samples as "finite" and "infinite".
+
+    n_initial : int
+        The number of initial (finite) samples that shall be drawn from the
+        log-posterior.
+
+    max_init : int, optional (default=None)
+        Will fail is it needed to evaluate the target more than `max_init`
+        times (defaults to 10 times the dimension of the problem times the
+        number of initial samples requested).
+
+    verbose : 1, 2, 3, optional (default: 3)
+        Level of verbosity. 3 prints Infos, Warnings and Errors, 2
+        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
+        problems arise.
+
+    Returns
+    -------
+
+    The gpr with the samples appended to (possibly already existing) samples
+    and refit hyperparameters.
     """
     n_d = model.prior.d()
     max_init = max_init or 10 * n_d * n_initial
@@ -360,8 +397,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
     if multiple_processes:
         n_to_sample_per_process = mpi_comm.bcast(
             n_to_sample_per_process if is_main_process else None)
-    if n_to_sample_per_process == 0:  # Enough pre-training
-        print("The number of pretrained points exceeds the number of initial samples")
+    if n_to_sample_per_process == 0 and verbose > 1:  # Enough pre-training
+        warnings.warn("The number of pretrained points exceeds the number of initial samples")
         return
     n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
     # Initial samples loop. The initial samples are drawn from the prior
@@ -372,9 +409,11 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
         for j in range(n_to_sample_per_process):
             # Draw point from prior and evaluate logposterior at that point
             X = model.prior.reference()
-            print(f"Evaluating true posterior at {X}")
+            if verbose > 2:
+                print(f"Evaluating true posterior at {X}")
             y = model.logpost(X)
-            print(f"Got {y}")
+            if verbose > 2:
+                print(f"Got {y}")
             X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
             y_init_loop = np.append(y_init_loop, y)
         # Gather points and decide whether to break.
@@ -398,7 +437,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
         else:
             # TODO: maybe re-fit SVM to shrink initial sample region
             pass
-    print("Done getting initial training samples.")
+    if verbose > 2:
+        print("Done getting initial training samples.")
     if is_main_process:
         # Append the initial samples to the gpr
         gpr.append_to_data(X_init, y_init)
@@ -408,6 +448,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None):
                                "samples hasn't been reached. Try "
                                "increasing max_init or decreasing the "
                                "volume of the prior")
+
+    return gpr
 
 
 def mcmc(model_truth, gp, convergence=None, options=None, output=None):
