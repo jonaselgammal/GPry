@@ -82,7 +82,7 @@ for n_r in range(n_repeats):
     info["params"] = param_dict
     # Initialise stuff
     model = get_model(info)
-    
+
     ###############################
     ### RUN THE COMPARISON MCMC ###
     ###############################
@@ -95,6 +95,7 @@ for n_r in range(n_repeats):
     s1mean, s1cov = s1.mean(), s1.cov()
     x_values = s1.data[s1.sampled_params]
     logp = s1['minuslogpost']
+    logp = -logp
     weights = s1['weight']
     history = {'KL_truth':[],'KL_gauss_wrt_true':[],'KL_gauss_wrt_gp':[],'step':[]}
     true_hist = {'KL_gauss_wrt_true' : kl_norm(mean,cov, s1mean, s1cov),'KL_gauss_wrt_gp':kl_norm(s1mean,s1cov, mean, cov),'KL_truth':0} # The truth doesn't change, so the history has len==1
@@ -133,4 +134,3 @@ for n_r in range(n_repeats):
             pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
     gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,callback = print_if_necessary,options={'max_accepted':2000, 'max_points':10000})
-    
