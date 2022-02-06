@@ -104,4 +104,4 @@ def plot_convergence(convergence_criterion, evaluations="total", marker="_"):
     print(values)
     print(n_posterior_evals)
     print(n_accepted_evals)
-    return fig
+    return fig, ax
