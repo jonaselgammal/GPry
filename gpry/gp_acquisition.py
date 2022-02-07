@@ -198,60 +198,44 @@ class GP_Acquisition(object):
         fval : numpy.ndarray, shape = (n_points,)
             The values of the acquisition function at X_opt
         """
-
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(
                 "n_points should be int > 0, got " + str(n_points)
             )
-
         # Initialize arrays for storing the optimized points
         X_opts = np.empty((n_points,
                            gpr.d))
         y_lies = np.empty(n_points)
         acq_vals = np.empty(n_points)
-        # Mask for deleting points which are already contained in the GP
-        already_sampled = np.ones(n_points, dtype="bool")
-
         # Copy the GP instance as it is modified during
         # the optimization. The GP will be reset after the
         # Acquisition is done.
         gpr_ = deepcopy(gpr)
-
         for i in range(n_points):
             # Optimize the acquisition function to get the next proposal point
             X_opt, acq_val = self.optimize_acq_func(gpr_,
                                                     n_cores=n_cores,
                                                     fit_preprocessor=False)
-
-            # Check that the point found is not already in the GP.
-            if X_opt is not None:
-                # Get the "lie" (prediction of the GP at X)
-                y_lie = gpr_.predict(X_opt)
-
-                # No need to append if it's the last iteration
-                if i < n_points-1:
-                    # Take the mean of errors as supposed measurement error
-                    if np.iterable(gpr_.noise_level):
-                        lie_noise_level = np.array(
-                            [np.mean(gpr_.noise_level)])
-                        gpr_.append_to_data(
-                            X_opt, y_lie, noise_level=lie_noise_level,
-                            fit=False)
-                    else:
-                        gpr_.append_to_data(X_opt, y_lie, fit=False)
-                # Append the points found to the array
-                X_opts[i] = X_opt[0]
-                y_lies[i] = y_lie[0]
-                acq_vals[i] = acq_val
-                already_sampled[i] = False
-            else:
-                already_sampled[i] = True
-
-        # Delete all points which have been acquired multiple times
-        X_opts = X_opts[~already_sampled]
-        y_lies = y_lies[~already_sampled]
-        acq_vals = acq_vals[~already_sampled]
+            # Get the "lie" (prediction of the GP at X)
+            y_lie = gpr_.predict(X_opt)
+            # No need to append if it's the last iteration
+            if i < n_points-1:
+                # Take the mean of errors as supposed measurement error
+                if np.iterable(gpr_.noise_level):
+                    lie_noise_level = np.array(
+                        [np.mean(gpr_.noise_level)])
+                    # Add lie to GP
+                    gpr_.append_to_data(
+                        X_opt, y_lie, noise_level=lie_noise_level,
+                        fit=False)
+                else:
+                    # Add lie to GP
+                    gpr_.append_to_data(X_opt, y_lie, fit=False)
+            # Append the points found to the array
+            X_opts[i] = X_opt[0]
+            y_lies[i] = y_lie[0]
+            acq_vals[i] = acq_val
 
         return X_opts, y_lies, acq_vals
 
@@ -383,13 +367,6 @@ class GP_Acquisition(object):
             X_opt = np.atleast_2d(optima_X[0])
             acq_val = np.array([optima_acq_func[0]])
 
-        # Check whether the acquired point already exists in the GP and if so
-        # exclude it.
-        """
-        if self._has_already_been_sampled(gpr, X_opt):
-            return None, acq_val
-        else:
-        """
         return X_opt, acq_val
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
