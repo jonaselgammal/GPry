@@ -100,7 +100,7 @@ class GP_Acquisition(object):
     Attributes
     ----------
 
-    surrogate_model_ : GaussianProcessRegressor
+    gpr_ : GaussianProcessRegressor
             The GP Regressor which is currently used for optimization.
     """
 
@@ -160,7 +160,7 @@ class GP_Acquisition(object):
         self.mean_ = None
         self.cov = None
 
-    def multi_optimization(self, surrogate_model, n_points=1, n_cores=1):
+    def multi_optimization(self, gpr, n_points=1, n_cores=1):
         """Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
@@ -173,7 +173,7 @@ class GP_Acquisition(object):
         Parameters
         ----------
 
-        surrogate_model : GaussianProcessRegressor
+        gpr : GaussianProcessRegressor
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
@@ -205,14 +205,14 @@ class GP_Acquisition(object):
                 "n_points should be int > 0, got " + str(n_points)
             )
 
-        # Check whether surrogate_model is a GP regressor
-        if not is_regressor(surrogate_model):
+        # Check whether gpr is a GP regressor
+        if not is_regressor(gpr):
             raise ValueError(
                 "surrogate model has to be a GP Regressor. "
-                "Got %s instead." % surrogate_model)
+                "Got %s instead." % gpr)
 
         # Check whether the GP has been fit to data before
-        if not hasattr(surrogate_model, "X_train_"):
+        if not hasattr(gpr, "X_train_"):
             raise AttributeError(
                 "The model which is given has not been fed "
                 "any points. Please make sure, that the model already "
@@ -221,7 +221,7 @@ class GP_Acquisition(object):
 
         # Initialize arrays for storing the optimized points
         X_opts = np.empty((n_points,
-                           surrogate_model.X_train_.shape[1]))
+                           gpr.d))
         y_lies = np.empty(n_points)
         acq_vals = np.empty(n_points)
         # Mask for deleting points which are already contained in the GP
@@ -230,30 +230,30 @@ class GP_Acquisition(object):
         # Copy the GP instance as it is modified during
         # the optimization. The GP will be reset after the
         # Acquisition is done.
-        surrogate_model = deepcopy(surrogate_model)
+        gpr_ = deepcopy(gpr)
 
         for i in range(n_points):
             # Optimize the acquisition function to get the next proposal point
-            X_opt, acq_val = self.optimize_acq_func(surrogate_model,
+            X_opt, acq_val = self.optimize_acq_func(gpr_,
                                                     n_cores=n_cores,
                                                     fit_preprocessor=False)
 
             # Check that the point found is not already in the GP.
             if X_opt is not None:
                 # Get the "lie" (prediction of the GP at X)
-                y_lie = surrogate_model.predict(X_opt)
+                y_lie = gpr_.predict(X_opt)
 
                 # No need to append if it's the last iteration
                 if i < n_points-1:
                     # Take the mean of errors as supposed measurement error
-                    if np.iterable(surrogate_model.noise_level):
+                    if np.iterable(gpr_.noise_level):
                         lie_noise_level = np.array(
-                            [np.mean(surrogate_model.noise_level)])
-                        surrogate_model.append_to_data(
+                            [np.mean(gpr_.noise_level)])
+                        gpr_.append_to_data(
                             X_opt, y_lie, noise_level=lie_noise_level,
                             fit=False)
                     else:
-                        surrogate_model.append_to_data(X_opt, y_lie, fit=False)
+                        gpr_.append_to_data(X_opt, y_lie, fit=False)
                 # Append the points found to the array
                 X_opts[i] = X_opt[0]
                 y_lies[i] = y_lie[0]
@@ -269,14 +269,14 @@ class GP_Acquisition(object):
 
         return X_opts, y_lies, acq_vals
 
-    def optimize_acq_func(self, surrogate_model,
+    def optimize_acq_func(self, gpr,
                           n_cores=1, fit_preprocessor=True):
         """Exposes the optimization method for the acquisition function.
 
         Parameters
         ----------
 
-        surrogate_model : GaussianProcessRegressor
+        gpr : GaussianProcessRegressor
             The GP Regressor which is used as surrogate model.
 
         n_cores : int, optional (default=1)
@@ -301,13 +301,13 @@ class GP_Acquisition(object):
         if self.n_restarts_optimizer == 0:
             n_cores = 1
 
-        # Check whether surrogate_model is a GP regressor
-        if not is_regressor(surrogate_model):
+        # Check whether gpr is a GP regressor
+        if not is_regressor(gpr):
             raise ValueError("surrogate model has to be a GP Regressor. "
-                             "Got %s instead." % surrogate_model)
+                             "Got %s instead." % gpr)
 
         # Check whether the GP has been fit to data before
-        if not hasattr(surrogate_model, "X_train_"):
+        if not hasattr(gpr, "X_train_"):
             raise AttributeError(
                 "The model which is given has not been fed "
                 "any points. Please make sure, that the model already "
@@ -318,8 +318,8 @@ class GP_Acquisition(object):
         if self.preprocessing_X is not None:
             if fit_preprocessor:
                 # Fit preprocessor
-                X_train = surrogate_model.X_train
-                y_train = surrogate_model.y_train
+                X_train = gpr.X_train
+                y_train = gpr.y_train
                 self.preprocessing_X.fit(X_train, y_train)
             # Transform bounds
             transformed_bounds = self.preprocessing_X.transform_bounds(
@@ -329,7 +329,7 @@ class GP_Acquisition(object):
 
         # Make the surrogate instance so it can be used in the objective
         # function
-        self.surrogate_model_ = surrogate_model
+        self.gpr_ = gpr
 
         def obj_func(X, eval_gradient=False):
 
@@ -343,19 +343,19 @@ class GP_Acquisition(object):
                 X = self.preprocessing_X.inverse_transform(X)
 
             if eval_gradient:
-                acq, grad = self.acq_func(X, self.surrogate_model_,
+                acq, grad = self.acq_func(X, self.gpr_,
                                           eval_gradient=True)
                 return -1*acq, -1*grad
             else:
-                return -1 * self.acq_func(X, self.surrogate_model_,
+                return -1 * self.acq_func(X, self.gpr_,
                                           eval_gradient=False)
 
         optima_X = np.empty((self.n_restarts_optimizer+1,
-                             self.surrogate_model_.X_train_.shape[1]))
+                             self.gpr_.X_train_.shape[1]))
         optima_acq_func = np.empty(self.n_restarts_optimizer+1)
 
         # Perform first run from last training point
-        x0 = self.surrogate_model_.X_train[-1]
+        x0 = self.gpr_.X_train[-1]
         if self.preprocessing_X is not None:
             x0 = self.preprocessing_X.transform(x0)
         optima_X[0], optima_acq_func[0] = \
@@ -371,7 +371,7 @@ class GP_Acquisition(object):
                 np.random.uniform(self.bounds[:, 0],
                                   self.bounds[:, 1],
                                   size=(n_points, len(self.bounds[:, 0])))
-            values = self.acq_func(X_initial, self.surrogate_model_)
+            values = self.acq_func(X_initial, self.gpr_)
             x0 = X_initial[np.argsort(values)[-self.n_restarts_optimizer:]]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
@@ -400,7 +400,7 @@ class GP_Acquisition(object):
         # Check whether the acquired point already exists in the GP and if so
         # exclude it.
         """
-        if self._has_already_been_sampled(surrogate_model, X_opt):
+        if self._has_already_been_sampled(gpr, X_opt):
             return None, acq_val
         else:
         """
@@ -428,7 +428,7 @@ class GP_Acquisition(object):
 
         return theta_opt, func_min
 
-    def _has_already_been_sampled(self, gp, new_X):
+    def _has_already_been_sampled(self, gpr, new_X):
         """
         Method for determining whether points which have been found by the
         acquisition algorithm are already in the GP. This is called from the
@@ -436,7 +436,7 @@ class GP_Acquisition(object):
         sampled multiple times which could break the GP.
         This is meant to be used for a **single** point new_X.
         """
-        X_train = np.copy(gp.X_train)
+        X_train = np.copy(gpr.X_train)
 
         for i, xi in enumerate(X_train):
             if np.allclose(new_X, xi):
