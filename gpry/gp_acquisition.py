@@ -205,20 +205,6 @@ class GP_Acquisition(object):
                 "n_points should be int > 0, got " + str(n_points)
             )
 
-        # Check whether gpr is a GP regressor
-        if not is_regressor(gpr):
-            raise ValueError(
-                "surrogate model has to be a GP Regressor. "
-                "Got %s instead." % gpr)
-
-        # Check whether the GP has been fit to data before
-        if not hasattr(gpr, "X_train_"):
-            raise AttributeError(
-                "The model which is given has not been fed "
-                "any points. Please make sure, that the model already "
-                "contains data when trying to optimize an acquisition "
-                "function on it as optimizing priors is not supported yet.")
-
         # Initialize arrays for storing the optimized points
         X_opts = np.empty((n_points,
                            gpr.d))
