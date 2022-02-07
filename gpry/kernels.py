@@ -188,7 +188,6 @@ class Kernel(sk_Kernel):
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
-            print(bounds)
             return np.log(np.vstack(bounds))
         else:
             return np.array([])
