@@ -1,5 +1,6 @@
 # general purpose stuff
 import warnings
+from copy import deepcopy
 from operator import itemgetter
 
 # numpy and scipy
@@ -1048,7 +1049,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if hasattr(self, "kernel_"):
             c.kernel_ = self.kernel_
         if hasattr(self, "account_for_inf"):
-            c.account_for_inf = self.account_for_inf
+            c.account_for_inf = deepcopy(self.account_for_inf)
         return c
 
     def _constrained_optimization(self, obj_func, initial_theta, bounds):
