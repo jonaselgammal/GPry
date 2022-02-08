@@ -85,7 +85,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         except:
             raise AttributeError("The convergence criterion does not save it's "
                                  "convergence history.")
-        if len(values) < 1 or len(n_posterior_evals) < 1:
+        if len(values) == 0 or len(n_posterior_evals) == 0:
             raise ValueError("Make sure to call the convergence criterion "
                              "before getting it's history.")
         return values, n_posterior_evals, n_accepted_evals
@@ -247,12 +247,19 @@ class KL_from_draw_approx(ConvergenceCriterion):
     Parameters
     ----------
 
+    prior : model prior instance
+        The prior of the model used.
+
     params : dict
         Dict with the following keys:
 
-        * ``"prior"``: prior object. Needs to be supplied.
-        * ``"limit"``: Number, optional (default=1e-2)
-        * ``"n_draws"``: int, optional (default=5000)
+        * ``"limit"``: Value of KL required for convergence (default=1e-2)
+        * ``"limit_times"``: The number of times the limit has to be hit in
+          consecutive steps (default=2)
+        * ``"n_draws"``: Number of samples for calculating the mean and cov
+          (default=5000)
+        * ``"method"``: The sampling method (``"simple"``=sample from prior,
+          ``"lhs"``=latin hypercube sample)
 
     """
 
@@ -263,6 +270,7 @@ class KL_from_draw_approx(ConvergenceCriterion):
         self.limit = params.get("limit", 1e-2)
         self.n_draws = params.get("n_draws", 5000)
         self.method = params.get("method", "simple").lower()
+        self.limit_times = params.get("limit_times", 2)
         self.gp_2 = None
 
         self.mean = None
@@ -274,11 +282,12 @@ class KL_from_draw_approx(ConvergenceCriterion):
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         kl = self.criterion_value(gp, gp_2)
-        print(kl)
-        if kl < self.limit:
-            return True
-        else:
-            return False
+        try:
+            if np.all(np.array(self.values[-self.limit_times:]) < self.limit):
+                return True
+        except IndexError:
+            pass
+        return False
 
     def criterion_value(self, gp, gp_2=None):
         """Calculate the Kullback-Liebler (KL) divergence between different
@@ -796,17 +805,22 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
     """
     Class to calculate the KL divergence between two steps of the algorithm
     by computing the KL divergence between estimations of the mean and
-    covariance matrix of the previous and current surrogate models.
+    covariance matrix of the previous and current surrogate models. The mean
+    and covariance are computed using either a sample from the prior or a
+    sample from a set multiple of the last mean and covariance.
 
     Parameters
     ----------
 
+    prior : model prior instance
+        The prior of the model used.
+
     params : dict
         Dict with the following keys:
 
-        * ``"prior"``: prior object. Needs to be supplied.
-        * ``"limit"``: Number, optional (default=1e-2)
-        * ``"n_draws"``: int, optional (default=5000)
+        * ``"limit"``: Value of KL required for convergence (default=1e-2)
+        * ``"n_draws"``: Number of samples for calculating the mean and cov (default=5000)
+        * ``"cov_multiple"``: The number by which the covariance is multiplied when sampling from it (default=1)
 
     """
 
@@ -1138,6 +1152,12 @@ class ConvergenceCriterionGaussianMCMC(ConvergenceCriterionGaussianApprox):
         return new
 
 class DontConverge(ConvergenceCriterion):
+    """
+    This convergence criterion is mainly for testing purposes and always
+    returns False when ``is_converged`` is called. Use this method together
+    with the `max_points` and `max_accepted` keys in the options dict to stop
+    the BO loop at a set number of iterations.
+    """
 
     @property
     def is_MPI_aware(self):
@@ -1156,34 +1176,62 @@ class DontConverge(ConvergenceCriterion):
         return np.nan
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
+        self.criterion_value(gp, gp_2)
         return False
 
 
 class CorrectCounter(ConvergenceCriterion):
+    """
+    This convergence criterion is the standard one used by GPry. It determines
+    convergence by requiring that the GP's predictions of the posterior values
+    in the last :math:`n` steps are correct up to a certain percentage.
+    We set the "value" of the criterion to be the maximum difference of the GP
+    prediction and the true posterior in the last batch of accepted evaluations.
+
+    Parameters
+    ----------
+
+    prior : model prior instance
+        The prior of the model used. This is not needed in this specific
+        convergence criterion so you may pass anything here.
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"n_correct"``: Value of KL required for convergence (default=1e-2)
+        * ``"threshold"``: Number of samples for calculating the mean and cov (default=5000)
+        * ``"cov_multiple"``: The number by which the covariance is multiplied when sampling from it (default=1)
+
+    """
 
     def __init__(self, prior, params):
         self.ncorrect = params.get("n_correct", 5)
         self.threshold = params.get("threshold", 0.01)
         self.verbose = params.get("verbose", 0)
-        self.conv_value = 1.
+        self.values = []
+        self.n_posterior_evals = []
+        self.n_accepted_evals = []
         self.n_pred = 0
 
-    def _update(self, y_new, y_pred):
-        n_new = len(y_new)
-        assert(n_new == len(y_pred))
-        for yn,yl in zip(y_new,y_pred):
-          if(np.abs(yl/yn-1.) < self.threshold):
-            self.n_pred += 1
-            if self.verbose > 0:
-              print("Already {} correctly predicted \n".format(self.n_pred))
-          else:
-            self.n_pred = 0
-            if self.verbose > 0:
-              print("Mispredict...")
-
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
-        self._update(new_y, pred_y)
+        self.criterion_value(gp, new_y=new_y, pred_y=pred_y)
         return self.n_pred > self.ncorrect
 
-    def criterion_value(self, gp, gp_2=None):
-        return self.n_pred
+    def criterion_value(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
+        n_new = len(new_y)
+        assert(n_new == len(pred_y))
+        max_val = 0
+        for yn,yl in zip(new_y, pred_y):
+            rel_difference = np.abs(yl/yn-1.)
+            max_val = np.max(rel_difference, max_val)
+            if rel_difference < self.threshold:
+                self.n_pred += 1
+                if self.verbose > 0:
+                    print(f"Already {self.n_pred} correctly predicted \n")
+            else:
+                self.n_pred = 0
+                if self.verbose > 0:
+                    print("Mispredict...")
+        self.values.append(max_val if n_new>0 else self.values[-1])
+        self.n_accepted_evals.append(gp.n_accepted_evals)
+        self.n_posterior_evals.append(gp.n_total_evals)
