@@ -49,7 +49,7 @@ posterior distribution:
 * The **options** dictionary setting the parameters for the actualy Bayesian
   optimization.
 
-This is followed by a call to the run function which 
+This is followed by a call to the run function which
 
 The Model
 =========
@@ -68,7 +68,7 @@ log-likelihood::
 For building the parts of our BO-loop we will need the dimensionality and the
 prior bounds of our model which we get in the following way::
 
-    dim = model.prior.d()
+    n_d = model.prior.d()
     prior_bounds = model.prior.bounds()
 
 If you have unbounded priors (like a normal distribution) use the keyword
@@ -91,8 +91,7 @@ a Matèrn kernel with :math:`\nu=5/2` multiplied with a Constant kernel (and
 non-dynamic, i.e. fixed bounds)::
 
     from gpry.kernels import Matern, ConstantKernel as C
-
-    kernel = C(1.0, (1e-3, 1e3)) * Matern([0.1]*dim, [[1e-5, 1e5]]*dim, nu=2.5)
+    kernel = C(1.0, (1e-3, 1e3)) * Matern([0.1]*n_d, [[1e-5, 1e5]]*n_d, nu=2.5)
 
 For details on the kernel construction see :mod:`kernels`.
 
@@ -115,11 +114,12 @@ a unit hypercube as is done as standard when calling the :meth:`run.run`
 function::
 
     from gpry.gpr import GaussianProcessRegressor
-    from gpry.preprocessing import Normalize_bounds
-
-    gpr = GaussianProcessRegressor(kernel=kernel,
-    	                           n_restarts_optimizer=20,
-                                   preprocessing_X=Normalize_bounds(prior_bounds))
+    from gpry.preprocessing import Normalize_bounds, Normalize_y
+    gpr = GaussianProcessRegressor(
+        kernel=kernel,
+        n_restarts_optimizer=20,
+        preprocessing_X=Normalize_bounds(prior_bounds)
+        )
 
 Details can be found in the :mod:`gpr` and :mod:`preprocessing` modules.
 
@@ -153,7 +153,8 @@ use the standard :class:`acquisition_functions.Log_exp` acquisition function
 with a :math:`\zeta` value of 0.05 to encourage exploration (as we know that
 the shape of the posterior distribution is not very gaussian)::
 
-  	af = Log_exp(zeta=0.05)
+    from gpry.acquisition_functions import Log_exp
+    af = Log_exp(zeta=0.1)
 
 Then it is time for the actual GP Acquisition. For this we need to
 build our instance of the :class:`gp_acquisition.GP_Acquisition` class which
@@ -164,9 +165,13 @@ it is usually a good idea to scale the prior bounds to a unit hypercube
 dimension) as the optimizer tends to struggle with very different scales across
 different dimensions::
 
-    acquisition = GP_Acquisition(prior_bounds,
-    			                   acq_func=af,
-                                 preprocessing_X=Normalize_bounds(prior_bounds))
+    from gpry.gp_acquisition import GP_Acquisition
+    acq = GP_Acquisition(
+        prior_bounds,
+        acq_func=af,
+        n_restarts_optimizer=10,
+        preprocessing_X=Normalize_bounds(prior_bounds)
+        )
 
 Convergence
 ===========
@@ -176,166 +181,122 @@ the correct posterior distribution. This is set using the :mod:`convergence`
 module which offers a base :class:`convergence.ConvergenceCriterion` class
 of which several inbuilt convergence criteria inherit. Using this base class
 it is also possible to construct custom convergence criteria.
-Here we will use the :class:`convergence.CorrectCounter` convergence criterion
-which uses the accuracy of the GP at the next sampling location to assess
-convergence::
 
-    convergence =
+The standard :class:`convergence.CorrectCounter` convergence criterion works
+best in most cases and I highly recommend using it. For educational purposes
+we will use :class:`convergence.KL_from_draw_approx` which computes the KL
+divergence assuming that the target distribution is a multivariate gaussian.
+The KL divergence is computed by evaluating the GP at a number of sampling
+locations which are drawn from the prior. This method is very "brute force" and
+not very efficient though.
 
-Training options
-================
+All convergence criteria are passed a prior object which is part of the model
+instance and an options dict. The options that can be set depend on the choice
+of the convergence criterion. In our case we set the KL divergence we want to
+reach to :math:`10^{-2}`::
 
-Now that we have set all the
+    from gpry.convergence import KL_from_draw_approx
+    conv = KL_from_draw_approx(model.prior, {"limit": 1e-2})
+
+Training parameters
+===================
+
+The training parameters which control the bayesian optimization loop are set in
+the ``options`` dict. There we can also manually set the number of Kriging
+believer steps per iteration and the maximum number of samples that the
+algorithm draws from the posterior distribution before failing::
+
+    options = {"max_init": 100, "max_points": 200,
+               "n_initial": 8, "n_points_per_acq": 2}
+
+.. note::
+    If ``"n_points_per_acq"`` isn't set it defaults to the number of MPI
+    processes to utilize the parallel evaluation of the posterior with Kriging
+    believer.
 
 Training
 ========
 
-We start by random-generating 3 initial points from which to start
-our exploration of the function::
+Running the Bayesian optimization loop is very simple. We just have to plug the
+instances we have created into the :meth:`run.run` function and let it do it's
+thing!::
 
-    init_1 = np.random.uniform(bnds[0,0], bnds[0,1], 3)
-    init_2 = np.random.uniform(bnds[1,0], bnds[1,1], 3)
+    from gpry.run import run
+    model, gpr, acquisition, convergence, options = run(
+        model, gp=gpr, gp_acquisition=acq,
+        convergence_criterion=conv, options=options)
 
+MCMC
+====
 
-    init_X = np.stack((init_1, init_2), axis=1)
-    init_y = f(init_X)
+After having trained our GP we want to extract marginal parameters from it and
+plot them. For this we run an MCMC on the GP which we do using the
+:meth:`run.mcmc` function. Again we pass an options dictionary which contains
+the training parameters. This uses the `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_::
 
-    gp.append_to_data(init_X, init_y, fit=True)
+    from gpry.run import mcmc
+    options = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
+    updated_info, sampler = mcmc(model, gpr, convergence, options=options)
+
+Validation
+==========
 
 .. note::
-    The part where initial values are drawn and fit to the GP will
-    be automated later.
+    This part is optional and only relevant for validating the contours that
+    GPry produces. In a realistic scenario you would obviously not run a full
+    MCMC on the likelihood.
 
-Now it is time to train our model. We will do this manually with
-a loop::
+For validating we run an MCMC on the true posterior. This is done by just
+adding a sampler block to our initial model and then running the MCMC through
+Cobaya::
 
-    n_points = 2
-    for _ in range(5):
-        new_X, y_lies, acq_vals = acquire.multi_optimization(n_points=n_points)
-        new_y = f(new_X)
-        acquire.surrogate_model.append_to_data(new_X, new_y)
+    from cobaya.run import run as cobaya_run
+    info["sampler"] = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
+    updated_info_mcmc, sampler_mcmc = cobaya_run(info)
 
-Let us look at this step by step:
+Plotting with GetDist
+=====================
 
-    * First we specify how many points shall be
-      acquired per step (here it's 2)
-    * We want to do 5 acquisition runs (therefore the ``range(5)``)
-    * The :meth:`acquire.multi_optimization` method optimizes the
-      acquisition function and returns the 2 points to query ``new_X``
-      as well as the "fake" values of the surrogate model at these points.
-    * The next line calls the real values of the function
-    * These new values are appended to the training points of the model
-      nested inside the :class:`gp_acquisition.GP_Acquisition` object.
+Finally we want to generate a triangle plot with our marginal quantities. For
+that we first need to extract the chains from our samplers (For both GPry and
+the standard MCMC) which is done in the following way::
 
-Let us now see how the model has performed by plotting the GP prediction
-(again we plot the negative prediction because of the log-scale)::
-
-    # Getting the prediction
-    gp = acquire.surrogate_model
-    x_gp = gp.X_train_[:,0]
-    y_gp = gp.X_train_[:,1]
-    y_fit, std_fit = gp.predict(x, return_std=True)
-    y_fit = -1 * y_fit.reshape(xdim[:-1])
-
-    # Plot surrogate
-    fig = plt.figure()
-    im = plt.pcolor(A, B, y_fit, norm=LogNorm())
-    plt.scatter(x_gp[:5], y_gp[:5], color="purple")
-    plt.scatter(x_gp[5:], y_gp[5:], color="black")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$y$")
-    plt.xlim((-10, 10))
-    plt.ylim((-10, 10))
-    fig.subplots_adjust(right=0.8)
-    cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
-    cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
-
-.. image:: images/Surrogate.png
-   :width: 600
-
-Here the purple dots are the initial samples we drew randomly while the black
-dots are acquired points. The red dot (barely visible) is the real minimum.
-
-Plotting with Cobaya
-====================
-
-Let us now compare triangle plots generated by Cobaya with
-
- #. The actual function
- #. The surrogate model
-
- For this we first need to import the modules::
-
-    from cobaya.run import run
     from getdist.mcsamples import MCSamplesFromCobaya
+    gdsamples_gp = MCSamplesFromCobaya(updated_info_gp,
+                                       sampler_gp.products()["sample"])
+    gdsamples_mcmc = MCSamplesFromCobaya(updated_info_mcmc,
+                                         sampler_mcmc.products()["sample"])
+
+Finally we want to generate the triangle plot to which we can add the training
+samples using the :meth:`plots.getdist_add_training` method::
+
     import getdist.plots as gdplt
-
-1. Actual function
-******************
-
-Since the true function (and thus also the surrogate model) are defined
-on the log-likelihood we can just go ahead and define a function which Cobaya
-understands. This means basically just copying from the Cobaya examples::
-
-    def true_func(x,y):
-        return f(np.array([[x,y]]))
-
-    info = {"likelihood": {"true_func": true_func}}
-    info["params"] = {
-        "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
-        "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
-
-    info["sampler"] = {"mcmc": {"Rminus1_stop": 0.001, "max_tries": 1000}}
-
-    updated_info, sampler = run(info)
-
-    gdsamples_mcmc = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    from gpry.plots import getdist_add_training
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_mcmc, ["x", "y"], filled=True)
+    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp],
+                         ["x_1", "x_2"], filled=[False, True],
+                         legend_labels=['MCMC', 'GPry'])
+    getdist_add_training(gdplot, model, gpr)
 
-.. image:: images/Ground_truth_triangle.png
+Furthermore we can simply plot the convergence history (value of KL divergence
+vs number of posterior evaluations) using the :meth:`plots.plot_convergence`
+method (here we plot against the number of accepted, i.e. *finite* points)::
+
+    from gpry.plots import plot_convergence
+    plot_convergence(convergence, evaluations="accepted")
+
+As you can see the contours generated by GPry agree very well with the MCMC.
+Furthermore you can see that the points spread apart rather far. This is due
+to the relatively low choice of :math:`\zeta` in the acquisition function which
+pushes the algorithm to favour exploration over exploitation.
+
+.. image:: images/advanced_triangle.png
    :width: 600
 
-.. note::
+Furthermore we see that the convergence criterion we chose is relatively
+unstable. This was to be expected though as the choice wasn't really optimal.
 
-    We set the precision parameters (specifically ``Rminus1_stop``) to be very
-    accurate. In most examples a value of 0.005-0.01 would be enough.
-
-2. Surrogate model
-******************
-
-For comparison we produce a triangle plot of the surrogate model
-(Again with Cobaya)::
-
-    def callonmodel(x,y):
-        return gp.predict(np.array([[x,y]]))
-
-    info = {"likelihood": {"gpsurrogate": callonmodel}}
-    info["params"] = {
-        "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
-        "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
-
-    info["sampler"] = {"mcmc": {"Rminus1_stop": 0.001, "max_tries": 1000}}
-
-    updated_info, sampler = run(info)
-
-    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
-    gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_gp, ["x", "y"], filled=True)
-
-.. image:: images/Surrogate_triangle.png
+.. image:: images/advanced_convergence.png
    :width: 600
 
-Now we can compare the two to see if our GP finds the same contours as the MCMC::
-
-    gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=True,
-        legend_labels=['MCMC', 'GP'])
-
-.. image:: images/Comparison_triangle.png
-   :width: 600
-
-As you can see the two agree almost perfectly! And we achieved this with just 13
-evaluations of the Posterior distribution!
-
-The code for the example is available at :download:`../../examples/simple_example.py`
+The code for the example is available at :download:`../../examples/advanced_example.py`
