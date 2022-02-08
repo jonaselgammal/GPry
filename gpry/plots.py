@@ -101,7 +101,4 @@ def plot_convergence(convergence_criterion, evaluations="total", marker="_"):
     ax.set_ylabel("Value of convergence criterion")
     ax.set_yscale("log")
     ax.grid()
-    print(values)
-    print(n_posterior_evals)
-    print(n_accepted_evals)
     return fig, ax
