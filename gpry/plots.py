@@ -66,7 +66,7 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
     # TODO: actually add colorbar (see GetDist add_colorbar method)
     return getdist_plot
 
-def plot_convergence(convergence_criterion, evaluations="total", marker="_"):
+def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     """
     Plots the value of the convergence criterion as function of the number of
     (accepted) training points.
@@ -81,7 +81,7 @@ def plot_convergence(convergence_criterion, evaluations="total", marker="_"):
         Whether to plot the total number of posterior evaluations or only the
         accepted steps.
 
-    marker : matplotlib marker, optional (default=".")
+    marker : matplotlib marker, optional (default="")
 
     Returns
     -------
