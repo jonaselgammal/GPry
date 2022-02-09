@@ -1200,7 +1200,7 @@ class CorrectCounter(ConvergenceCriterion):
 
         * ``"n_correct"``: Value of KL required for convergence (default=1e-2)
         * ``"threshold"``: Number of samples for calculating the mean and cov (default=5000)
-        * ``"cov_multiple"``: The number by which the covariance is multiplied when sampling from it (default=1)
+        * ``"verbose"``: Verbosity
 
     """
 
@@ -1214,7 +1214,7 @@ class CorrectCounter(ConvergenceCriterion):
         self.n_pred = 0
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
-        self.criterion_value(gp, new_y=new_y, pred_y=pred_y)
+        self.criterion_value(gp, new_X=new_X, new_y=new_y, pred_y=pred_y)
         return self.n_pred > self.ncorrect
 
     def criterion_value(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -1235,3 +1235,4 @@ class CorrectCounter(ConvergenceCriterion):
         self.values.append(max_val if n_new>0 else self.values[-1])
         self.n_accepted_evals.append(gp.n_accepted_evals)
         self.n_posterior_evals.append(gp.n_total_evals)
+        return max_val if n_new>0 else self.values[-1]
