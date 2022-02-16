@@ -1223,7 +1223,7 @@ class CorrectCounter(ConvergenceCriterion):
         max_val = 0
         for yn,yl in zip(new_y, pred_y):
             rel_difference = np.abs(yl/yn-1.)
-            max_val = np.max(rel_difference, max_val)
+            max_val = max(np.max(rel_difference), max_val)
             if rel_difference < self.threshold:
                 self.n_pred += 1
                 if self.verbose > 0:
