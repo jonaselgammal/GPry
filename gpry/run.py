@@ -84,7 +84,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     callback: callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
-        ``callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion)``.
+        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options,
+        previous_gpr, new_X, new_y, pred_y)``.
         When running in parallel, the function is run by the main process only.
 
     checkpoint : str, optional (default=None)
@@ -120,80 +121,96 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     options : dict
         The options dict used for the active sampling loop.
     """
-    n_d = model.prior.d()
     if is_main_process:
-        # Construct GP if it's not already constructed
-        if isinstance(gp, str):
-            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-            gpr = GaussianProcessRegressor(
-                kernel=gp,
-                n_restarts_optimizer=5*n_d,
-                preprocessing_X=Normalize_bounds(prior_bounds),
-                preprocessing_y=Normalize_y(),
-                bounds=prior_bounds,
-                verbose=verbose
-            )
-
-        elif isinstance(gp, GaussianProcessRegressor):
-            gpr = gp
-        else:
-            raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern', got "
-                            "%s" % gp)
-
-        # Construct the acquisition object if it's not already constructed
-        if isinstance(gp_acquisition, str):
-            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-            if gp_acquisition == "Log_exp":
-                acquisition = GP_Acquisition(prior_bounds,
-                                             acq_func="Log_exp",
-                                             acq_optimizer="fmin_l_bfgs_b",
-                                             n_restarts_optimizer=5*n_d,
-                                             preprocessing_X=Normalize_bounds(
-                                                 prior_bounds),
-                                             verbose=verbose)
-        elif isinstance(gp_acquisition, GP_Acquisition):
-            acquisition = gp_acquisition
-        else:
-            raise TypeError("gp_acquisition should be an Acquisition object or "
-                            "'Log_exp', got %s" % gp_acquisition)
-
-        # Construct the convergence criterion
-        if isinstance(convergence_criterion, str):
-            try:
-                conv_class = getattr(gpryconv, convergence_criterion)
-            except AttributeError:
-                raise ValueError(
-                    f"Unknown convergence criterion {convergence_criterion}. "
-                    f"Available convergence criteria: {gpryconv.builtin_names()}")
-            convergence = conv_class(model.prior, convergence_options or {})
-        elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
-            convergence = convergence_criterion
-        else:
-            raise TypeError("convergence_criterion should be a "
-                            "Convergence_criterion object or KL, got %s"
-                            % convergence_criterion)
-
         # Check if a checkpoint exists already and if so resume from there
+        if checkpoint is not None and verbose > 2:
+            print("Checking for checkpoint to resume from...")
         checkpoint_files = _check_checkpoint(checkpoint)
-        if np.any(checkpoint_files):
-            if np.all(checkpoint_files):
+        if np.all(checkpoint_files):
+            model, gpr, acquisition, convergence, options = _read_checkpoint(
+                checkpoint)
+            n_d = model.prior.d()
+            if verbose > 2:
                 print("#########################################")
                 print("Checkpoint found. Resuming from there...")
                 print("If this behaviour is unintentional either")
                 print("turn the checkpoint option off or rename it")
                 print("to a file which doesn't exist.")
                 print("#########################################")
+        else:
+            if np.any(checkpoint_files) and verbose > 1:
+                print("warning: Found checkpoint files but they were "
+                      "incomplete. Ignoring them...")
 
-                model, gpr, acquisition, convergence, options = _read_checkpoint(
-                    checkpoint)
+            # Check model
+            if not isinstance(model, Model):
+                raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+            try:
+                n_d = model.prior.d()
+                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+            except:
+                raise RuntimeError("There seems to be something wrong with "
+                                   "the model instance...")
+
+            # Construct GP if it's not already constructed
+            if isinstance(gp, str):
+                if gp not in ["RBF", "Matern"]:
+                    raise ValueError("Supported standard kernels are 'RBF' "
+                                     f"and Matern, got {gp}")
+                gpr = GaussianProcessRegressor(
+                    kernel=gp,
+                    n_restarts_optimizer=5*n_d,
+                    preprocessing_X=Normalize_bounds(prior_bounds),
+                    preprocessing_y=Normalize_y(),
+                    bounds=prior_bounds,
+                    verbose=verbose
+                )
+
+            elif isinstance(gp, GaussianProcessRegressor):
+                gpr = gp
             else:
-                warnings.warn("Checkpoint files were found but are incomplete. "
-                              "Ignoring those files...")
+                raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern'"
+                                f", got {gp}")
 
-        print("Model has been initialized")
+            # Construct the acquisition object if it's not already constructed
+            if isinstance(gp_acquisition, str):
+                if gp_acquisition not in ["Log_exp"]:
+                    raise ValueError("Supported acquisition function is "
+                                     f"'Log_exp', got {gp_acquisition}")
+                acquisition = GP_Acquisition(prior_bounds,
+                                             acq_func=gp_acquisition,
+                                             acq_optimizer="fmin_l_bfgs_b",
+                                             n_restarts_optimizer=5*n_d,
+                                             preprocessing_X=Normalize_bounds(
+                                                 prior_bounds),
+                                             verbose=verbose)
+            elif isinstance(gp_acquisition, GP_Acquisition):
+                acquisition = gp_acquisition
+            else:
+                raise TypeError("gp_acquisition should be an Acquisition "
+                                f"object or 'Log_exp', got {gp_acquisition}")
+
+            # Construct the convergence criterion
+            if isinstance(convergence_criterion, str):
+                try:
+                    conv_class = getattr(gpryconv, convergence_criterion)
+                except AttributeError:
+                    raise ValueError(
+                        f"Unknown convergence criterion {convergence_criterion}. "
+                        f"Available convergence criteria: {gpryconv.builtin_names()}")
+                convergence = conv_class(model.prior, convergence_options or {})
+            elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
+                convergence = convergence_criterion
+            else:
+                raise TypeError("convergence_criterion should be a "
+                                "Convergence_criterion object or "
+                                f"{gpryconv.builtin_names()}, got "
+                                f"{convergence_criterion}")
 
         # Read in options for the run
         if options is None:
+            if verbose>2:
+                print("No options dict found. Defaulting to standard parameters.")
             options = {}
         n_initial = options.get("n_initial", 3 * n_d)
         max_points = options.get("max_points", 1000)
@@ -204,6 +221,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
                   "not specified.")
+        if n_points_per_acq > 2*n_d and verbose>1:
+            print("Warning: The number kriging believer samples per "
+                  "acquisition step is larger than 2x number of dimensions of "
+                  "the feature space. This may lead to slow convergence."
+                  "Consider running it with less cores or decreasing "
+                  "n_points_per_acq manually.")
+
 
         # Sanity checks
         if n_initial >= max_points:
@@ -215,6 +239,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if max_accepted > max_points:
             raise ValueError("You manually set max_accepted > max_points, but "
                              " you cannot have more accepted than sampled points")
+
+        # Print resume
+        if verbose > 2:
+            print("Initialized GPry.")
+            print("Starting by drawing initial samples.")
     if multiple_processes:
         n_initial, max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
             (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
@@ -281,7 +310,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             gpr.append_to_data(new_X, new_y, fit=True)
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
-                callback(gpr, old_gpr, new_X, new_y, convergence)
+                callback(model, gpr, gp_acquisition, convergence, options,
+                    old_gpr, new_X, new_y, y_pred)
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
@@ -543,7 +573,7 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
 
     # Check if options for the sampler are given else build the sampler
     if options is None:
-        sampler_info = mcmc_info_from_run(model_surrogate, gp, convergence)
+        sampler_info = mcmc_info_from_run(model_surrogate, gpr, convergence)
     else:
         sampler_info = options
 
