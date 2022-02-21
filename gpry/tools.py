@@ -45,7 +45,10 @@ def cobaya_input_prior(cobaya_prior):
     ignoring the prior density.
     """
     bounds = cobaya_prior.bounds(confidence_for_unbounded=0.99995)
-    return {"params": {p: {"prior": {"min": bounds[i, 0], "max": bounds[i, 1]}}
+    epsilon = [1e-3*(bounds[i, 1]-bounds[i, 0]) for i in range(cobaya_prior.d())]
+    return {"params": {p: {"prior": {
+                            "min": bounds[i, 0]-epsilon[i],
+                            "max": bounds[i, 1]+epsilon[i]}}
                        for i, p in enumerate(cobaya_prior.params)}}
 
 
