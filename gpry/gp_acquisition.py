@@ -41,8 +41,8 @@ class GP_Acquisition(object):
 
     Parameters
     ----------
-    bounds : array-like, shape=(n_dims,2)
-        Array of bounds of the prior [lower, upper] along each dimension.
+    model : Cobaya model containing a prior object from which to extract the
+        bounds in which to optimize the acquistion function
 
     acq_func : GPry Acquisition Function, optional (default: "Log_exp")
         Acquisition function to maximize/minimize. If none is given the
@@ -97,14 +97,20 @@ class GP_Acquisition(object):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
+    verbose : 1, 2, 3, optional (default: 1)
+        Level of verbosity. 3 prints Infos, Warnings and Errors, 2
+        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
+        problems arise.
+
     Attributes
     ----------
 
     gpr_ : GaussianProcessRegressor
             The GP Regressor which is currently used for optimization.
+
     """
 
-    def __init__(self, bounds,
+    def __init__(self, model,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
@@ -112,7 +118,9 @@ class GP_Acquisition(object):
                  random_state=None,
                  verbose=1):
 
-        self.bounds = bounds
+        self.model = model
+        self.bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+        self.n_d = model.prior.d()
 
         self.rng = check_random_state(random_state)
 
@@ -121,7 +129,7 @@ class GP_Acquisition(object):
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(dimension=len(bounds))
+            self.acq_func = Log_exp(dimension=self.n_d)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
                             "or 'Log_exp', instead got %s" % acq_func)
@@ -321,7 +329,7 @@ class GP_Acquisition(object):
                                           eval_gradient=False)
 
         optima_X = np.empty((self.n_restarts_optimizer+1,
-                             self.gpr_.X_train_.shape[1]))
+                             self.n_d))
         optima_acq_func = np.empty(self.n_restarts_optimizer+1)
 
         # Perform first run from last training point
@@ -336,13 +344,32 @@ class GP_Acquisition(object):
         if self.n_restarts_optimizer > 0:
             # Draw a number of random initial points and choose the best ones
             # to start the optimizer from there
-            n_points = 100 * self.bounds.shape[0]
-            X_initial = \
-                np.random.uniform(self.bounds[:, 0],
-                                  self.bounds[:, 1],
-                                  size=(n_points, len(self.bounds[:, 0])))
-            values = self.acq_func(X_initial, self.gpr_)
-            x0 = X_initial[np.argsort(values)[-self.n_restarts_optimizer:]]
+            n_starting_points_left = self.n_restarts_optimizer
+            x0 = np.empty((self.n_restarts_optimizer,
+                           self.n_d))
+            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
+            while n_starting_points_left > 0:
+                X_initial = np.empty((n_tries, self.n_d))
+                for i in range(n_tries):
+                    X_initial[i] = self.model.prior.reference(
+                        max_tries=n_tries,warn_if_no_ref=False)
+                values = self.acq_func(X_initial, self.gpr_)
+                mask = np.isfinite(values)
+                X_initial = X_initial[mask]
+                values = values[mask]
+                if len(X_initial) >= n_starting_points_left:
+                    x0[-n_starting_points_left:] = \
+                        X_initial[np.argsort(values)[-n_starting_points_left:]]
+                    n_starting_points_left -= len(X_initial)
+                elif len(X_initial) > 0:
+                    x0[-n_starting_points_left:-n_starting_points_left+len(X_initial)] = \
+                        X_initial
+                    n_starting_points_left -= len(X_initial)
+                else:
+                    if self.verbose > 1:
+                        print(f"warning: of {n_tries} initial samples for the "
+                              "acquisition optimizer none returned a finite value")
+
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
 
