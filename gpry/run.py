@@ -177,7 +177,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 if gp_acquisition not in ["Log_exp"]:
                     raise ValueError("Supported acquisition function is "
                                      f"'Log_exp', got {gp_acquisition}")
-                acquisition = GP_Acquisition(prior_bounds,
+                acquisition = GP_Acquisition(model,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
                                              n_restarts_optimizer=5*n_d,
@@ -438,7 +438,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
         y_init_loop = np.empty(0)
         for j in range(n_to_sample_per_process):
             # Draw point from prior and evaluate logposterior at that point
-            X = model.prior.reference()
+            X = model.prior.reference(warn_if_no_ref=False)
             if verbose > 2:
                 print(f"Evaluating true posterior at {X}")
             y = model.logpost(X)
