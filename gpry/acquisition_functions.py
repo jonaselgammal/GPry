@@ -951,7 +951,7 @@ class Log_exp(Acquisition_Function):
 
         zeta = self.zeta
 
-        mask = (std > sigma_n)
+        mask = (std > sigma_n) & np.isfinite(mu)
         values = np.zeros_like(std)
         if np.any(mask):
             values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
