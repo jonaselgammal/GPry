@@ -365,7 +365,7 @@ class GP_Acquisition(object):
 
         else:
             X_opt = np.atleast_2d(optima_X[0])
-            acq_val = np.array([optima_acq_func[0]])
+            acq_val = -1 * np.array([optima_acq_func[0]])
 
         return X_opt, acq_val
 
