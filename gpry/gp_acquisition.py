@@ -21,6 +21,7 @@ from gpry.acquisition_functions import is_acquisition_function
 from gpry.gpr import GaussianProcessRegressor
 
 from copy import deepcopy
+from functools import partial
 
 import pdb
 
@@ -126,11 +127,16 @@ class GP_Acquisition(object):
 
         self.bounds = bounds
         self.n_d = np.shape(bounds)[0]
-        if proposal is None:
-          proposal = partial(np.random.uniform,low=self.bounds[:,0],high=self.bounds[:,1],size=self.n_d)
         self.proposal = proposal
 
         self.rng = check_random_state(random_state)
+
+        # If nothing is provided for the proposal, we use a uniform sampling
+        if self.proposal is None:
+          self.proposal = partial(np.random.uniform,
+                                  low=self.bounds[:,0],
+                                  high=self.bounds[:,1],
+                                  size=self.n_d)
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func

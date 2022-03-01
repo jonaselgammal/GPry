@@ -126,7 +126,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if checkpoint is not None and verbose > 2:
             print("Checking for checkpoint to resume from...")
         checkpoint_files = _check_checkpoint(checkpoint)
-        if np.all(checkpoint_files):
+        comes_from_checkpoint = np.all(checkpoint_files)
+        if comes_from_checkpoint:
             model, gpr, acquisition, convergence, options = _read_checkpoint(
                 checkpoint)
             n_d = model.prior.d()
@@ -247,7 +248,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         # Print resume
         if verbose > 2:
             print("Initialized GPry.")
-            print("Starting by drawing initial samples.")
+            if not comes_from_checkpoint:
+                print("Starting by drawing initial samples.")
     if multiple_processes:
         n_initial, max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
             (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
@@ -257,20 +259,22 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             convergence.is_MPI_aware if is_main_process else None)
         if convergence_is_MPI_aware:
             convergence = mpi_comm.bcast(convergence if is_main_process else None)
+        comes_from_checkpoint = mpi_comm.bcast(comes_from_checkpoint
+            if is_main_process else None)
     else:
         convergence_is_MPI_aware = convergence.is_MPI_aware
 
-    # Set MPI-aware random state
-    random_state = get_random_state()
-
-    # Define initial tranining set
-    get_initial_sample(model, gpr, n_initial, verbose=verbose)
-    if is_main_process:
-        # Save checkpoint
-        _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-        if verbose > 2:
-            print("Initial samples drawn, starting with Bayesian "
-                  "optimization loop.")
+    if not comes_from_checkpoint:
+        # Set MPI-aware random state
+        random_state = get_random_state()
+        # Define initial tranining set
+        get_initial_sample(model, gpr, n_initial, verbose=verbose)
+        if is_main_process:
+            # Save checkpoint
+            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
+            if verbose > 2:
+                print("Initial samples drawn, starting with Bayesian "
+                      "optimization loop.")
     if multiple_processes:
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
@@ -623,7 +627,10 @@ def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, opt
 
     options : dict
     """
-    import dill as pickle
+    try:
+      import dill as pickle
+    except ImportError as e:
+      raise ImportError("Could not find the 'dill' package. This is not a strict requirement for gpry, but without it the checkpoint functionality does not work.") from e
     if path is not None:
         try:
             with open(os.path.join(path, "mod.pkl"), 'wb') as f:
@@ -692,6 +699,10 @@ def _read_checkpoint(path):
     If any of the files does not exist or cannot be read the function will
     return None instead.
     """
+    try:
+      import dill as pickle
+    except ImportError as e:
+      raise ImportError("Could not find the 'dill' package. This is not a strict requirement for gpry, but without it the checkpoint functionality does not work.") from e
     # Check if a file exists in the checkpoint and if so resume from there.
     checkpoint_files = _check_checkpoint(path)
     # Read in checkpoint
