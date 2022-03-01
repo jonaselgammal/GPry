@@ -177,7 +177,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 if gp_acquisition not in ["Log_exp"]:
                     raise ValueError("Supported acquisition function is "
                                      f"'Log_exp', got {gp_acquisition}")
-                acquisition = GP_Acquisition(model,
+
+                bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                prop = model.prior.reference
+                acquisition = GP_Acquisition(bounds,
+                                             proposal=prop,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
                                              n_restarts_optimizer=5*n_d,
@@ -482,7 +486,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     return gpr
 
 
-def mcmc(model_truth, gp, convergence=None, options=None, output=None):
+def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options = None):
     """
     This function is essentially just a wrapper for the Cobaya MCMC sampler
     (monte python) which runs an MCMC on the fitted GP regressor. It returns
@@ -576,6 +580,8 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None):
         sampler_info = mcmc_info_from_run(model_surrogate, gpr, convergence)
     else:
         sampler_info = options
+    if add_options is not None:
+        sampler_info.update(add_options)
 
     out = None
     if output is not None:
@@ -617,6 +623,7 @@ def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, opt
 
     options : dict
     """
+    import dill as pickle
     if path is not None:
         try:
             with open(os.path.join(path, "mod.pkl"), 'wb') as f:

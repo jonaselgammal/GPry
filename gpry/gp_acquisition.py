@@ -41,8 +41,13 @@ class GP_Acquisition(object):
 
     Parameters
     ----------
-    model : Cobaya model containing a prior object from which to extract the
-        bounds in which to optimize the acquistion function
+    bounds : array
+        Bounds in which to optimize the acquisition function,
+        assumed to be of shape (d,2) for d dimensional prior
+    
+    proposal : python function, optional (default: uniform sampling in prior)
+        A function to generate samples for the acquisition function. 
+        Should return a single point upon each call, i.e. a shape (d,)-array
 
     acq_func : GPry Acquisition Function, optional (default: "Log_exp")
         Acquisition function to maximize/minimize. If none is given the
@@ -110,7 +115,8 @@ class GP_Acquisition(object):
 
     """
 
-    def __init__(self, model,
+    def __init__(self, bounds, 
+                 proposal = None,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
@@ -118,9 +124,11 @@ class GP_Acquisition(object):
                  random_state=None,
                  verbose=1):
 
-        self.model = model
-        self.bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-        self.n_d = model.prior.d()
+        self.bounds = bounds
+        self.n_d = np.shape(bounds)[0]
+        if proposal is None:
+          proposal = partial(np.random.uniform,low=self.bounds[:,0],high=self.bounds[:,1],size=self.n_d)
+        self.proposal = proposal
 
         self.rng = check_random_state(random_state)
 
@@ -351,8 +359,7 @@ class GP_Acquisition(object):
             while n_starting_points_left > 0:
                 X_initial = np.empty((n_tries, self.n_d))
                 for i in range(n_tries):
-                    X_initial[i] = self.model.prior.reference(
-                        max_tries=n_tries,warn_if_no_ref=False)
+                    X_initial[i] = self.proposal()
                 values = self.acq_func(X_initial, self.gpr_)
                 mask = np.isfinite(values)
                 X_initial = X_initial[mask]
