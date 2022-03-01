@@ -42,3 +42,21 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
     slots[:n] = 1
     slots = slots.reshape((int(len(slots) / n_proc), n_proc))
     return np.sum(slots, axis=0)
+    
+def multi_gather_array(arrs):
+    """
+    Gathers (possibly a list of) arrays from all processes into the main process
+    """
+    if not isinstance(arrs,(list,tuple)):
+        arrs = [arrs]
+    Nobj = len(arrs)
+    if multiple_processes:
+        all_arrs = mpi_comm.gather(arrs)
+        if is_main_process:
+            arrs = [np.concatenate([all_arrs[r][i] for r in range(mpi_size)]) for i in range(Nobj)]
+            return arrs
+        else:
+            return [None for i in range(Nobj)]
+    else:
+        return arrs
+    

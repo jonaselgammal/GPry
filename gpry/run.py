@@ -4,7 +4,7 @@ distribution and sample the GP to get chains.
 """
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes, multiple_processes
+    split_number_for_parallel_processes, multiple_processes, multi_gather_array
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
@@ -160,7 +160,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"and Matern, got {gp}")
                 gpr = GaussianProcessRegressor(
                     kernel=gp,
-                    n_restarts_optimizer=5*n_d,
+                    n_restarts_optimizer=10+2*n_d,
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     preprocessing_y=Normalize_y(),
                     bounds=prior_bounds,
@@ -255,6 +255,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
             if is_main_process else None)
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
+        acquisition = mpi_comm.bcast(acquisition if is_main_process else None)
         convergence_is_MPI_aware = mpi_comm.bcast(
             convergence.is_MPI_aware if is_main_process else None)
         if convergence_is_MPI_aware:
@@ -279,7 +280,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
         n_finite = len(gpr.y_train)
-
     # Run bayesian optimization loop
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
@@ -298,8 +298,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
             # Get new point(s) from Bayesian optimization
-            new_X, y_pred, acq_vals = acquisition.multi_optimization(
-                gpr, n_points=n_points_per_acq)
+            #new_X, y_pred, acq_vals = acquisition.multi_optimization(
+            #    gpr, n_points=n_points_per_acq)
+        # Acquite new points in parallel with MPI-aware random state
+        new_X, y_pred, acq_vals = acquisition.multi_add(
+          gpr, n_points=n_points_per_acq, 
+          random_state = get_random_state())
+        if is_main_process:
+            print("run.py :: New X/y_lie/acq = ",new_X,y_pred,acq_vals)
         # Get logposterior value(s) for the acquired points (in parallel)
         if multiple_processes:
             new_X = mpi_comm.bcast(new_X if is_main_process else None)

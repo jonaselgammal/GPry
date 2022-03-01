@@ -20,6 +20,9 @@ from gpry.acquisition_functions import Log_exp
 from gpry.acquisition_functions import is_acquisition_function
 from gpry.gpr import GaussianProcessRegressor
 
+from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
+    split_number_for_parallel_processes, multi_gather_array
+
 from copy import deepcopy
 from functools import partial
 
@@ -128,6 +131,7 @@ class GP_Acquisition(object):
         self.bounds = bounds
         self.n_d = np.shape(bounds)[0]
         self.proposal = proposal
+        self.obj_func = None
 
         self.rng = check_random_state(random_state)
 
@@ -181,6 +185,181 @@ class GP_Acquisition(object):
 
         self.mean_ = None
         self.cov = None
+
+    def propose(self, gpr, i, random_state=None):
+
+        # If we do a first-time run, use this
+        if not self.obj_func:
+
+            # Check whether gpr is a GP regressor
+            if not is_regressor(gpr):
+                raise ValueError("surrogate model has to be a GP Regressor. "
+                                 "Got %s instead." % gpr)
+
+            # Check whether the GP has been fit to data before
+            if not hasattr(gpr, "X_train_"):
+                raise AttributeError(
+                    "The model which is given has not been fed "
+                    "any points. Please make sure, that the model already "
+                    "contains data when trying to optimize an acquisition "
+                    "function on it as optimizing priors is not supported yet.")
+
+            # Make the surrogate instance so it can be used in the objective
+            # function
+            self.gpr_ = gpr
+
+            def obj_func(X, eval_gradient=False):
+
+                # Check inputs
+                X = np.asarray(X)
+                X = np.expand_dims(X, axis=0)
+                if X.ndim != 2:
+                    raise ValueError("X is {}-dimensional, however, "
+                                     "it must be 2-dimensional.".format(X.ndim))
+                if self.preprocessing_X is not None:
+                    X = self.preprocessing_X.inverse_transform(X)
+
+                if eval_gradient:
+                    acq, grad = self.acq_func(X, self.gpr_,
+                                              eval_gradient=True)
+                    return -1*acq, -1*grad
+                else:
+                    return -1 * self.acq_func(X, self.gpr_,
+                                              eval_gradient=False)
+
+            self.obj_func = obj_func
+
+        # Preprocessing
+        if self.preprocessing_X is not None:
+            transformed_bounds = self.preprocessing_X.transform_bounds(
+                self.bounds)
+        else:
+            transformed_bounds = self.bounds
+
+        if i==0:
+            # Perform first run from last training point
+            x0 = self.gpr_.X_train[-1]
+            if self.preprocessing_X is not None:
+                x0 = self.preprocessing_X.transform(x0)
+            return self._constrained_optimization(self.obj_func, x0,
+                                                  transformed_bounds)
+        else:
+            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
+            #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
+            for n_try in range(n_tries):
+                x0 = self.proposal(random_state = random_state)
+                #print("Proposed ",x0," at index ",i," and iteration ",n_try)
+                value = self.acq_func(x0, self.gpr_)
+                if not np.isfinite(value):
+                    continue
+                if self.preprocessing_X is not None:
+                    x0 = self.preprocessing_X.transform(x0)
+                return self._constrained_optimization(self.obj_func, x0,
+                                                      transformed_bounds)
+            else:
+                raise Exception(f"of {n_tries} initial samples for the "
+                          "acquisition optimizer none returned a finite value")
+
+    def multi_add(self, gpr, n_points = 1, random_state = None):
+        """Method to query multiple points where the objective function
+        shall be evaluated. The strategy which is used to query multiple
+        points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
+        changing the hyperparameters of the model.
+
+        This is done to increase speed since then the blockwise matrix
+        inversion lemma can be used to invert the K matrix. The optimization
+        for a single point is done using the :meth:`optimize_acq_func` method.
+
+        Parameters
+        ----------
+
+        gpr : GaussianProcessRegressor
+            The GP Regressor which is used as surrogate model.
+
+        n_points : int, optional (default=1)
+            Number of points returned by the optimize method
+            If the value is 1, a single point to evaluate is returned.
+
+            Otherwise a list of points to evaluate is returned of size
+            n_points. This is useful if you can evaluate your objective
+            in parallel, and thus obtain more objective function evaluations
+            per unit of time.
+
+        Returns
+        -------
+
+        X : numpy.ndarray, shape = (X_dim, n_points)
+            The X values of the found optima
+        fval : numpy.ndarray, shape = (n_points,)
+            The values of the acquisition function at X_opt
+        """
+        
+        # Check if n_points is positive and an integer
+        if not (isinstance(n_points, int) and n_points > 0):
+            raise ValueError(
+                "n_points should be int > 0, got " + str(n_points)
+            )
+        if is_main_process:
+            # Initialize arrays for storing the optimized points
+            X_opts = np.empty((n_points,
+                               gpr.d))
+            y_lies = np.empty(n_points)
+            acq_vals = np.empty(n_points)
+            # Copy the GP instance as it is modified during
+            # the optimization. The GP will be reset after the
+            # Acquisition is done.
+            gpr_ = deepcopy(gpr)
+        gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
+        n_acq_per_process = \
+          split_number_for_parallel_processes(self.n_restarts_optimizer)
+        n_acq_this_process = n_acq_per_process[mpi_rank]
+        i_acq_this_process = sum(n_acq_per_process[:mpi_rank])
+        print("Hi, I am rank ",mpi_rank,"and have been assigned i = ",i_acq_this_process,"to",i_acq_this_process+n_acq_this_process)
+        proposal_X = np.empty((n_acq_this_process,gpr_.d))
+        acq_X = np.empty((n_acq_this_process,))
+        for ipoint in range(n_points):
+            # Optimize the acquisition function to get a few possible next proposal points (done in parallel)
+            for i in range(n_acq_this_process):
+                proposal_X[i],acq_X[i] = self.propose(gpr_, i+i_acq_this_process, random_state = random_state)
+            proposal_X_main, acq_X_main = multi_gather_array([proposal_X, acq_X])
+            # Now take the best and add it to the gpr (done in sequence)
+            if is_main_process:
+                # Find out which one of these is the beest
+                max_pos = np.argmin(acq_X_main)
+                X_opt = proposal_X_main[max_pos]
+                # Transform X and clip to bounds
+                if self.preprocessing_X is not None:
+                    X_opt = self.preprocessing_X.inverse_transform(X_opt,
+                                                                   copy=True)
+                X_opt = np.clip(X_opt, self.bounds[:, 0], self.bounds[:, 1])
+
+                # Get the value of the acquisition function at the optimum value
+                acq_val = -1 * acq_X_main[max_pos]
+                X_opt = np.array([X_opt])
+                # Get the "lie" (prediction of the GP at X)
+                y_lie = gpr_.predict(X_opt)
+                # Try to append the lie to change uncertainties (and thus acq func)
+                # (no need to append if it's the last iteration)
+                if i < n_points-1:
+                    # Take the mean of errors as supposed measurement error
+                    if np.iterable(gpr_.noise_level):
+                        lie_noise_level = np.array(
+                            [np.mean(gpr_.noise_level)])
+                        # Add lie to GP
+                        gpr_.append_to_data(
+                            X_opt, y_lie, noise_level=lie_noise_level,
+                            fit=False)
+                    else:
+                        # Add lie to GP
+                        gpr_.append_to_data(X_opt, y_lie, fit=False)
+                # Append the points found to the array
+                X_opts[ipoint] = X_opt[0]
+                y_lies[ipoint] = y_lie[0]
+                acq_vals[ipoint] = acq_val
+            # Send this new gpr_ instance to all mpi
+            gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
+
+        return ((X_opts, y_lies, acq_vals) if is_main_process else (None,None,None))
 
     def multi_optimization(self, gpr, n_points=1, n_cores=1):
         """Method to query multiple points where the objective function
