@@ -266,8 +266,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_is_MPI_aware = convergence.is_MPI_aware
 
     if not comes_from_checkpoint:
-        # Set MPI-aware random state
-        random_state = get_random_state()
         # Define initial tranining set
         get_initial_sample(model, gpr, n_initial, verbose=verbose)
         if is_main_process:
