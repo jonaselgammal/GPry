@@ -8,6 +8,7 @@ from numpy.linalg import det
 from gpry.mpi import mpi_rank
 from cobaya.model import Model
 import warnings
+from scipy.linalg import eigh
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -89,7 +90,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     # Set the reference point of the prior to the sampled location with maximum
     # posterior value
     try:
-        i_max_location = np.argsort(gpr.y_train)[-mpi_rank]
+        i_max_location = np.argsort(gpr.y_train)[-mpi_rank-1]
         max_location = gpr.X_train[i_max_location]
     except IndexError:  # more MPI processes than training points: sample from prior
         max_location = [None] * gpr.X_train.shape[-1]
@@ -116,6 +117,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
                           "of the sampler slower.")
     else:
         covariance_matrix = None
+    covariance_matrix = np.cov(gpr.X_train, rowvar = False)
     # Add the covariance matrix to the sampler if it exists
     if covariance_matrix is not None and is_valid_covmat(covariance_matrix):
         sampler_info["mcmc"]["covmat"] = covariance_matrix
@@ -126,7 +128,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
 def is_valid_covmat(covmat):
     """Returns True for a Real, positive-definite, symmetric matrix."""
     try:
-        if np.allclose(covmat.T, covmat) and np.all(np.linalg.eigvals(covmat) > 0):
+        if np.allclose(covmat.T, covmat) and np.all(eigh(covmat, eigvals_only=True) > 0):
             return True
         return False
     except (AttributeError, np.linalg.LinAlgError):
