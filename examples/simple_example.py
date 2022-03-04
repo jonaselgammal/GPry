@@ -101,42 +101,47 @@ if is_main_process:
 #############################################################
 # Validation part
 
-# MCMC run on the actual function
-# NB: we don't re-initialise the model, but use the one defined above
+# TODO: remove: we can use getdist's Gaussian mixtures for this
 
-# Optional: define an output driver
-from cobaya.output import get_output
-out = get_output(prefix="chains/truth", resume=False, force=True)
+# # MCMC run on the actual function
+# # NB: we don't re-initialise the model, but use the one defined above
 
-from cobaya.sampler import get_sampler
-if mc_sampler.lower() == "mcmc":
-    info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
-elif mc_sampler.lower() == "polychord":
-    info_sampler = {"polychord": {"nlive": "50d", "num_repeats": "5d"}}
-mcmc_sampler = get_sampler(info_sampler, model=model, output=out)
-success = False
-try:
-    mcmc_sampler.run()
-    success = True
-except Exception as excpt:
-    print(f"Chain failed: {str(excpt)}")
-    pass
-success = all(mpi_comm.allgather(success))
-if not success and is_main_process:
-    print("Sampling failed!")
-    exit()
-all_chains = mpi_comm.gather(mcmc_sampler.products()["sample"], root=0)
+# # Optional: define an output driver
+# from cobaya.output import get_output
+# out = get_output(prefix="chains/truth", resume=False, force=True)
+
+# from cobaya.sampler import get_sampler
+# if mc_sampler.lower() == "mcmc":
+#     info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
+# elif mc_sampler.lower() == "polychord":
+#     info_sampler = {"polychord": {"nlive": "50d", "num_repeats": "5d"}}
+# mcmc_sampler = get_sampler(info_sampler, model=model, output=out)
+# success = False
+# try:
+#     mcmc_sampler.run()
+#     success = True
+# except Exception as excpt:
+#     print(f"Chain failed: {str(excpt)}")
+#     pass
+# success = all(mpi_comm.allgather(success))
+# if not success and is_main_process:
+#     print("Sampling failed!")
+#     exit()
+# all_chains_truth = mpi_comm.gather(mcmc_sampler.products()["sample"], root=0)
 
 if is_main_process:
-    from getdist.mcsamples import MCSamplesFromCobaya
-    upd_info = model.info()
-    upd_info["sampler"] = {"mcmc": sampler.info()}
-    gdsamples_mcmc = MCSamplesFromCobaya(upd_info, all_chains)
+    # from getdist.mcsamples import MCSamplesFromCobaya
+    # upd_info = model.info()
+    # upd_info["sampler"] = {"mcmc": sampler.info()}
+    # gdsamples_truth = MCSamplesFromCobaya(upd_info, all_chains_truth)
+    from getdist.gaussian_mixtures import GaussianND
+    gdsamples_truth = GaussianND(mean, cov, names=list(info["params"]))
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_mcmc, list(info["params"]), filled=True)
+    gdplot.triangle_plot(gdsamples_truth, list(info["params"]), filled=True)
     plt.savefig("images/Ground_truth_triangle.png", dpi=300)
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], list(info["params"]),
-                         filled=[False, True], legend_labels=['MCMC', 'GP'])
+    gdplot.triangle_plot([gdsamples_truth, gdsamples_gp], list(info["params"]),
+                         filled=[False, True],
+                         legend_labels=['Truth', 'MC from GP'])
     getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Comparison_triangle.png", dpi=300)

@@ -51,8 +51,8 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
     ys = np.copy(gpr.y_train)
     for i, (mini, maxi) in enumerate(bounds):
         i_within = np.argwhere(np.logical_and(mini < Xs[:, i], Xs[:, i] < maxi))
-        Xs = np.squeeze(Xs[i_within])
-        ys = np.squeeze(ys[i_within])
+        Xs = np.atleast_2d(np.squeeze(Xs[i_within]))
+        ys = np.atleast_1d(np.squeeze(ys[i_within]))
     if not len(Xs):  # no points within plotting ranges
         return
     # Create colormap with appropriate limits

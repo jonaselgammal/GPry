@@ -117,7 +117,8 @@ def mcmc_info_from_run(model, gpr, convergence=None):
                           "of the sampler slower.")
     else:
         covariance_matrix = None
-    covariance_matrix = np.cov(gpr.X_train, rowvar = False)
+    # Temporary solution used at some point. Eventually delete...
+    # covariance_matrix = np.cov(gpr.X_train, rowvar=False)
     # Add the covariance matrix to the sampler if it exists
     if covariance_matrix is not None and is_valid_covmat(covariance_matrix):
         sampler_info["mcmc"]["covmat"] = covariance_matrix
