@@ -948,13 +948,15 @@ class Log_exp(Acquisition_Function):
                 sigma_n = np.mean(sigma_n)
         else:
             sigma_n = self.sigma_n
-
         zeta = self.zeta
 
         mask = (std > sigma_n) & np.isfinite(mu)
         values = np.zeros_like(std)
+        baseline = np.max(gp.y_train)
+        # Alternative option, but found not to work extremely well
+        #baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):
-            values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*mu[mask]
+            values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*(mu[mask]-baseline)
         if np.any(~mask):
             values[~mask] = - np.inf
         if eval_gradient:

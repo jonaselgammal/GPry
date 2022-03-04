@@ -314,7 +314,6 @@ class GP_Acquisition(object):
           split_number_for_parallel_processes(self.n_restarts_optimizer)
         n_acq_this_process = n_acq_per_process[mpi_rank]
         i_acq_this_process = sum(n_acq_per_process[:mpi_rank])
-        print("Hi, I am rank ",mpi_rank,"and have been assigned i = ",i_acq_this_process,"to",i_acq_this_process+n_acq_this_process)
         proposal_X = np.empty((n_acq_this_process,gpr_.d))
         acq_X = np.empty((n_acq_this_process,))
         for ipoint in range(n_points):
@@ -322,6 +321,8 @@ class GP_Acquisition(object):
             for i in range(n_acq_this_process):
                 proposal_X[i],acq_X[i] = self.propose(gpr_, i+i_acq_this_process, random_state = random_state)
             proposal_X_main, acq_X_main = multi_gather_array([proposal_X, acq_X])
+            # Reset the objective function, such that afterwards the correct one is used
+            self.obj_func = None
             # Now take the best and add it to the gpr (done in sequence)
             if is_main_process:
                 # Find out which one of these is the beest
@@ -331,7 +332,6 @@ class GP_Acquisition(object):
                 if self.preprocessing_X is not None:
                     X_opt = self.preprocessing_X.inverse_transform(X_opt,
                                                                    copy=True)
-                X_opt = np.clip(X_opt, self.bounds[:, 0], self.bounds[:, 1])
 
                 # Get the value of the acquisition function at the optimum value
                 acq_val = -1 * acq_X_main[max_pos]

@@ -94,7 +94,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
         max_location = gpr.X_train[i_max_location]
     except IndexError:  # more MPI processes than training points: sample from prior
         max_location = [None] * gpr.X_train.shape[-1]
-    model.prior.set_reference(dict(zip(model.prior.params, max_location)))
+    #model.prior.set_reference(dict(zip(model.prior.params, max_location)))
     # Create sampler info
     sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
     # Check if convergence_criterion is given and if so try to extract the

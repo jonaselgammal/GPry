@@ -222,6 +222,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         max_accepted = options.get("max_accepted", max_points)
         max_init = options.get("max_init", 10 * n_d * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
+        fit_full_every = options.get("fit_full_every", max(int(2*np.sqrt(n_d)),1))
         if n_points_per_acq < mpi_size and verbose>1:
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
@@ -319,7 +320,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             all_new_y = [new_y]
         if is_main_process:
             new_y = np.concatenate(all_new_y)
-            gpr.append_to_data(new_X, new_y, fit=True)
+            gpr.append_to_data(new_X, new_y, fit=True, simplified_fit = (it%fit_full_every!=fit_full_every-1))
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
                 callback(model, gpr, gp_acquisition, convergence, options,
@@ -495,7 +496,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
 
 
 def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options=None,
-                      output=None, add_options=None):
+                      output=None, add_options=None, restart=False):
     """
     This function is essentially just a wrapper for the Cobaya MCMC sampler
     (monte python) which runs an MCMC on the fitted GP regressor. It returns
@@ -595,11 +596,15 @@ def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options
     else:
         sampler_info = options
     if add_options is not None:
-        sampler_info.update(add_options)
+        for key in add_options:
+          sampler_info[key].update(add_options[key])
 
     out = None
     if output is not None:
-        out = get_output(prefix=output, resume=False, force=True)
+        if not restart:
+            out = get_output(prefix=output, resume=False, force=True)
+        else:
+            out = get_output(prefix=output, resume=restart, force=False)
 
     # Create the sampler
     sampler = get_sampler(sampler_info, model=model_surrogate, output=out)

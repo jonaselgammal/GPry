@@ -320,7 +320,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             n_evals = 0
         return n_evals
 
-    def append_to_data(self, X, y, noise_level=None, fit=True):
+    def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         """Append newly acquired data to the GP Model and updates it.
 
         Here updating refers to the re-calculation of
@@ -461,7 +461,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.newly_appended = y.shape[0]
 
         if fit:
-            self.fit()
+            self.fit(simplified=simplified_fit)
         else:
             if self.preprocessing_X is not None:
                 X = self.preprocessing_X.transform(X)
@@ -544,7 +544,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         return self
 
-    def fit(self, X=None, y=None, noise_level=None):
+    def fit(self, X=None, y=None, noise_level=None, simplified = False):
         """Optimizes the hyperparameters :math:`\\theta` for the training data
         given. The algorithm used to perform the optimization is very similar
         to the one provided by Scikit-learn. The only major difference is, that
@@ -665,7 +665,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
             # Additional runs are performed from log-uniform chosen initial
             # theta
-            if self.n_restarts_optimizer > 0:
+            if self.n_restarts_optimizer > 0 and not simplified:
                 if not np.isfinite(self.kernel_.bounds).all():
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
