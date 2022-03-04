@@ -1,6 +1,5 @@
 """
-This script tests the goodness of the Gaussian KL convergence criterion, using different
-implementations.
+This script runs the GP on the Planck likelihoods.
 
 In particular, tests the accuracy of the covariance recovered (since for well-recovered
 covariance matrix, all criteria would be equivalent).
@@ -18,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # GPry things needed for building the model
+from cobaya.yaml import yaml_load_file
 from gpry.mpi import is_main_process, mpi_comm
 from cobaya.model import get_model
 from gpry.plots import getdist_add_training
@@ -54,38 +54,56 @@ del info['theory']['classy']['extra_args']['non linear']
 del info['theory']['classy']['extra_args']['hmcode_min_k_max']
 info['params']['theta_s_1e2']['prior'] = {'min':1.0,'max':1.1}
 model = get_model(info)
-print("INFO --> ",info)
-print(model.parameterization.sampled_params(),model.parameterization.sampled_params_info())
+#print("INFO --> ",info)
+#print(model.parameterization.sampled_params(),model.parameterization.sampled_params_info())
 ###############################
 ### RUN THE COMPARISON MCMC ###
 ###############################
-print("PART 1 :: THE 'TRUTH'")
-time1 = time.time()
-info_run = info.copy()
-info_run['sampler'] = {"mcmc": {"Rminus1_stop": rminusone, "max_tries": 10000}}
-updated_info1, sampler1 = run(info_run,output="chains/Planck",resume=True)
-time2 = time.time()
-s1 = sampler1.products()["sample"]
-if hasattr(s1,"detemper"):
-  s1.detemper()
-s1mean, s1cov = s1.mean(), s1.cov()
-parnames = s1.sampled_params
-x_values = s1.data[s1.sampled_params]
-logp = -s1['minuslogpost']
-weights = s1['weight']
+
+if is_main_process:
+  ch_name = "chains/Planck"
+  print("PART 1 :: THE 'TRUTH'")
+  try:
+    import yaml
+    loaded_info = yaml_load_file(ch_name+".checkpoint")
+    if np.all([loaded_info['sampler'][key]['converged'] for key in loaded_info['sampler']]):
+      found_converged = True
+    else:
+      found_converged = False
+  except FileNotFoundError as fnfe:
+    print("File not found :: ",fnfe)
+    found_converged = False
+  except Exception as e:
+    raise Exception("There was a problem reading something, here's the origianl error message :: ",e) from e
+found_converged = mpi_comm.bcast(found_converged if is_main_process else None)
+if found_converged:
+  from getdist.mcsamples import loadMCSamples
+  true_samples = loadMCSamples(ch_name)
+else:
+  from getdist.mcsamples import MCSamplesFromCobaya
+  info_run = info.copy()
+  info_run['sampler'] = {"mcmc": {"Rminus1_stop": rminusone, "max_tries": 10000}}
+  updated_info1, sampler1 = run(info_run,output=ch_name,resume=True)
+  s1 = sampler1.products()["sample"]
+  if hasattr(s1,"detemper"):
+    s1.detemper()
+  true_samples = MCSamplesFromCobaya(updated_info1,s1)
+s1cov = true_samples.getCov()
+s1mean = true_samples.getMeans()
+parnames = [x.name for x in true_samples.getParamNames().names]
+x_values = true_samples.samples
+logp = -0.5*true_samples['chi2']-true_samples['minuslogprior']
+weights = true_samples.weights
 
 ##################
 ### RUN THE GP ###
 ##################
-print("PART 2 :: THE 'GP'")
-time3 = time.time()
-
-
+if is_main_process:
+  print("PART 2 :: THE 'GP'")
 
 def callback(model, gpr, gp_acquisition, convergence, options,
                   old_gpr, new_X, new_y, y_pred):
   print("HYPER CALLBACK ",gpr.kernel_.theta, (gpr.kernel_.theta-gpr.kernel_.bounds[:,0])/(gpr.kernel_.bounds[:,1]-gpr.kernel_.bounds[:,0]),"<<-HYPER CALLBACK")
-
 
 #NOTE :: I changed SVM sigma to 14 at some point, but I don't think it matters
 cname = "check3_fewerfits2"
@@ -129,13 +147,14 @@ if doplot:
 #####################
 ### RUN GP MCMC   ###
 #####################
-time4 = time.time()
-updated_info2, sampler2 = mc_sample_from_gp(model, gpr, sampler="mcmc", convergence=None, output="chains/GP5", add_options={'mcmc':{'max_tries':1000000,"Rminus1_stop": rminusone,
-'learn_proposal_Rminus1_max':rminusone,
-'covmat':s1cov,'covmat_params':parnames
-}}, restart=False)
+updated_info2, sampler2 = mc_sample_from_gp(model, gpr, sampler="polychord", convergence=None, output="chains/GP5", 
+#add_options={'mcmc':{'max_tries':1000000,"Rminus1_stop": rminusone,
+#'learn_proposal_Rminus1_max':rminusone,
+#'covmat':s1cov,'covmat_params':parnames
+#}},
+#restart=False
+)
 #{'learn_proposal_Rminus1_max':1e25,'learn_proposal_Rminus1_max_early':1e25,'learn_proposal_Rminus1_min':1e-25,
-time5 = time.time()
 
 
 
@@ -161,7 +180,6 @@ if is_main_process:
   hist['n_tot'] = gpr.n_total_evals
   with open("planck.pkl", "wb") as f:
       pickle.dump(hist, f, pickle.HIGHEST_PROTOCOL)
-  np.savetxt("planck_timing.dat",[time2-time1,time4-time3,time5-time4])
 
   gdsamples1 = MCSamplesFromCobaya(updated_info1, s1)
   gdsamples2 = MCSamplesFromCobaya(updated_info2, s2)
