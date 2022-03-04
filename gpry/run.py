@@ -9,7 +9,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
-from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run
+from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run
 import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
@@ -494,7 +494,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     return gpr
 
 
-def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options = None):
+def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options=None,
+                      output=None, add_options=None):
     """
     This function is essentially just a wrapper for the Cobaya MCMC sampler
     (monte python) which runs an MCMC on the fitted GP regressor. It returns
@@ -585,7 +586,12 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_optio
 
     # Check if options for the sampler are given else build the sampler
     if options is None:
-        sampler_info = mcmc_info_from_run(model_surrogate, gpr, convergence)
+        if sampler.lower() == "mcmc":
+            sampler_info = mcmc_info_from_run(model_surrogate, gpr, convergence)
+        elif sampler.lower() == "polychord":
+            sampler_info = polychord_info_from_run(model_surrogate, gpr, convergence)
+        else:
+            raise ValueError("`sampler` must be `mcmc|polychord`")
     else:
         sampler_info = options
     if add_options is not None:
@@ -605,6 +611,12 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_optio
     updated_info["sampler"] = {list(sampler_info)[0]: sampler.info()}
 
     return updated_info, sampler
+
+
+# FOR BACKWARDS COMPATIBILITY --> DELETE AT SOME POINT BEFORE RELEASE!
+def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options=None):
+    return mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None,
+                             options=None, output=None, add_options=None)
 
 
 def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, options):

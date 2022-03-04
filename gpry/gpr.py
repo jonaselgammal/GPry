@@ -1059,8 +1059,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 opt_res = scipy.optimize.minimize(
                     obj_func, initial_theta, method="L-BFGS-B", jac=True,
                     bounds=bounds)
-                if self.verbose > 1:
-                    _check_optimize_result("lbfgs", opt_res)
+                # Temporarily disabled bc incompatibility between current sklearn+scipy
+                # if self.verbose > 1:
+                #     _check_optimize_result("lbfgs", opt_res)
                 theta_opt, func_min = opt_res.x, opt_res.fun
             elif callable(self.optimizer):
                 theta_opt, func_min = \

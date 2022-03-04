@@ -84,7 +84,7 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     """
     Creates appropriate MCMC sampler inputs from the results of a run.
 
-    Chaged ``model`` reference point to the best training sample
+    Changes ``model`` reference point to the best training sample
     (or the rank-th best if running in parallel).
     """
     # Set the reference point of the prior to the sampled location with maximum
@@ -122,6 +122,15 @@ def mcmc_info_from_run(model, gpr, convergence=None):
     if covariance_matrix is not None and is_valid_covmat(covariance_matrix):
         sampler_info["mcmc"]["covmat"] = covariance_matrix
         sampler_info["mcmc"]["covmat_params"] = list(model.prior.params)
+    return sampler_info
+
+
+def polychord_info_from_run(model, gpr, convergence=None):
+    """
+    Creates appropriate PolyChord sampler inputs from the results of a run.
+    """
+    # Create sampler info
+    sampler_info = {"polychord": {"measure_speeds": False}}
     return sampler_info
 
 

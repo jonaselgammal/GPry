@@ -14,6 +14,8 @@ mean = [3, 2]
 cov = [[0.5, 0.4], [0.4, 1.5]]
 rv = multivariate_normal(mean, cov)
 
+# Sampler to use for tests: "mcmc" or "polychord"
+mc_sampler = "mcmc"
 
 def lkl(x, y):
     return np.log(rv.pdf(np.array([x, y]).T))
@@ -81,8 +83,10 @@ from gpry.run import run
 model, gpr, acquisition, convergence, options = run(model, callback=callback)
 
 # Run the MCMC and extract samples
-from gpry.run import mcmc
-updated_info, sampler = mcmc(model, gpr, convergence, output="chains/gp_model")
+from gpry.run import mc_sample_from_gp
+
+updated_info, sampler = mc_sample_from_gp(
+    model, gpr, convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
 
 # Plotting
 if is_main_process:
@@ -105,7 +109,10 @@ from cobaya.output import get_output
 out = get_output(prefix="chains/truth", resume=False, force=True)
 
 from cobaya.sampler import get_sampler
-info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
+if mc_sampler.lower() == "mcmc":
+    info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
+elif mc_sampler.lower() == "polychord":
+    info_sampler = {"polychord": {"nlive": "50d", "num_repeats": "5d"}}
 mcmc_sampler = get_sampler(info_sampler, model=model, output=out)
 success = False
 try:
