@@ -219,6 +219,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.n_eval = 0
 
+        self.y_max = -np.inf
+
         self.verbose = verbose
 
         # Initialize SVM if given
@@ -384,6 +386,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     "updating with the same kernel hyperparameters")
 
             self.fit(X, y, noise_level=noise_level)
+            self.y_max = np.max(y)
             return self
 
         if self.account_for_inf is not None:
@@ -456,6 +459,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.X_train = np.append(self.X_train, X, axis=0)
         self.y_train = np.append(self.y_train, y)
+        self.y_max = max(self.y_max, np.max(y))
 
         # The number of newly added points. Used for the update_model method
         self.newly_appended = y.shape[0]
@@ -513,6 +517,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.X_train_ = np.delete(self._X_train_, position, axis=0)
         self.y_train_ = np.delete(self._y_train_, position)
+        self.y_max = np.max(self._y_train_)
         if np.iterable(self.noise_level):
             self.noise_level = np.delete(self.noise_level, position)
             self.noise_level_ = np.delete(self.noise_level_, position)
@@ -1028,6 +1033,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             c.X_train = self.X_train
         if hasattr(self, "y_train"):
             c.y_train = self.y_train
+        if hasattr(self, "y_max"):
+            c.y_max = self.y_max
         if hasattr(self, "X_train_"):
             c.X_train_ = self.X_train_
         if hasattr(self, "y_train_"):

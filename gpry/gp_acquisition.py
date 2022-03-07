@@ -248,8 +248,8 @@ class GP_Acquisition(object):
             #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
             for n_try in range(n_tries):
                 x0 = self.proposal(random_state = random_state)
-                #print("Proposed ",x0," at index ",i," and iteration ",n_try)
                 value = self.acq_func(x0, self.gpr_)
+                #print("Proposed ",x0," at index ",i," and iteration ",n_try," giving ",value)
                 if not np.isfinite(value):
                     continue
                 if self.preprocessing_X is not None:

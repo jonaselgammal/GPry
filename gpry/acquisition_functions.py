@@ -800,7 +800,7 @@ class Expected_improvement(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
-            y_opt = np.max(gp.y_train)
+            y_opt = gp.y_max
 
         values = np.zeros_like(mu)
         mask = std > 0
@@ -952,7 +952,7 @@ class Log_exp(Acquisition_Function):
 
         mask = (std > sigma_n) & np.isfinite(mu)
         values = np.zeros_like(std)
-        baseline = np.max(gp.y_train)
+        baseline = gp.y_max
         # Alternative option, but found not to work extremely well
         #baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):

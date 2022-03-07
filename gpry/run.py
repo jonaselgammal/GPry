@@ -299,6 +299,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # Get new point(s) from Bayesian optimization
             #new_X, y_pred, acq_vals = acquisition.multi_optimization(
             #    gpr, n_points=n_points_per_acq)
+        gpr = mpi_comm.bcast(gpr if is_main_process else None)
         # Acquite new points in parallel with MPI-aware random state
         new_X, y_pred, acq_vals = acquisition.multi_add(
           gpr, n_points=n_points_per_acq, 
