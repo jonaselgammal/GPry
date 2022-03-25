@@ -137,10 +137,7 @@ class GP_Acquisition(object):
 
         # If nothing is provided for the proposal, we use a uniform sampling
         if self.proposal is None:
-          self.proposal = partial(np.random.uniform,
-                                  low=self.bounds[:,0],
-                                  high=self.bounds[:,1],
-                                  size=self.n_d)
+          self.proposal = partial(scipy.stats.uniform.rvs,loc=self.bounds[:,0],scale=self.bounds[:,1],size=self.n_d)
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
