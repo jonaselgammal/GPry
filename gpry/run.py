@@ -186,6 +186,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
                                              n_restarts_optimizer=5*n_d,
+                                             n_repeats_propose=10,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
                                              verbose=verbose)

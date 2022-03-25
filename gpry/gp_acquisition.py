@@ -124,6 +124,7 @@ class GP_Acquisition(object):
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
+                 n_repeats_propose=0,
                  preprocessing_X=None,
                  random_state=None,
                  verbose=1):
@@ -175,6 +176,7 @@ class GP_Acquisition(object):
             self.acq_optimizer = acq_optimizer
 
         self.n_restarts_optimizer = n_restarts_optimizer
+        self.n_repeats_propose = n_repeats_propose
 
         self.preprocessing_X = preprocessing_X
 
@@ -243,16 +245,23 @@ class GP_Acquisition(object):
         else:
             n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
             #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
+            x0s = np.empty((self.n_repeats_propose+1,self.bounds.shape[0]))
+            values = np.empty(self.n_repeats_propose+1)
+            ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposal(random_state = random_state)
                 value = self.acq_func(x0, self.gpr_)
-                #print("Proposed ",x0," at index ",i," and iteration ",n_try," giving ",value)
                 if not np.isfinite(value):
                     continue
-                if self.preprocessing_X is not None:
-                    x0 = self.preprocessing_X.transform(x0)
-                return self._constrained_optimization(self.obj_func, x0,
-                                                      transformed_bounds)
+                x0s[ifull] = x0
+                values[ifull] = value
+                ifull += 1
+                if ifull > self.n_repeats_propose:
+                  x0 = x0s[np.argmin(values)]
+                  if self.preprocessing_X is not None:
+                      x0 = self.preprocessing_X.transform(x0)
+                  return self._constrained_optimization(self.obj_func, x0,
+                                                        transformed_bounds)
             else:
                 raise Exception(f"of {n_tries} initial samples for the "
                           "acquisition optimizer none returned a finite value")
