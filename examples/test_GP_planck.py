@@ -44,13 +44,20 @@ pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
 
 verbose = 5
-
-iplot = 5
-stype = "polychord"
-doplot = True
-cname = "check7"
 ch_name = "chains/Planck"
-ch_name2 = "chains/GP11"
+
+
+
+
+
+iplot = 6
+cname = "check8"
+ch_name2 = "chains/GP12"
+
+doplot = False
+
+stype = "polychord"
+
 
 
 
@@ -63,11 +70,11 @@ preset = "planck_2018_" + theory_code.lower()
 info = create_input(preset=preset)
 del info['theory']['classy']['extra_args']['non linear']
 del info['theory']['classy']['extra_args']['hmcode_min_k_max']
-info['params']['theta_s_1e2']['prior'] = {'min':1.038,'max':1.046}
-info['params']['n_s']['prior'] = {'min':0.94,'max':1.0}
-info['params']['omega_b']['prior'] = {'min':0.02,'max':0.026}
-info['params']['omega_cdm']['prior'] = {'min':0.08,'max':0.16}
-info['params']['logA']['prior'] = {'min':2.8,'max':3.2}
+info['params']['theta_s_1e2']['prior'] = {'min':1.038,'max':1.044}
+info['params']['n_s']['prior'] = {'min':0.94,'max':0.99}
+info['params']['omega_b']['prior'] = {'min':0.021,'max':0.024}
+info['params']['omega_cdm']['prior'] = {'min':0.115,'max':0.125}
+info['params']['logA']['prior'] = {'min':2.9,'max':3.1}
 model = get_model(info)
 Npar = len(model.parameterization.sampled_params())
 
@@ -146,19 +153,26 @@ if is_main_process and doplot:
   #print(s1cov)
   stds = np.sqrt(np.diag(s1cov))
   num_err = 15
-  vari = np.linspace(-2,2,num=num_err)
+  sig_devs = 10
+  vari = np.linspace(-sig_devs,sig_devs,num=num_err)
   plt.figure()
+  minpred = -np.inf
   for d in range(gpr.d):
     errs = np.empty(num_err)
     for ifac,fac in enumerate(vari):
       pt = np.array([x0.copy()])
       pt[0][d]+=fac*stds[d]
       logp = model.logpost(pt[0])
-      print("d,fac,gp,log,diff = ",d,fac,gpr.predict(pt)[0],logp,gpr.predict(pt)[0]/logp-1.)
-      err = (gpr.predict(pt)[0]/logp-1. if np.isfinite(logp) else 0.)
+      pred = gpr.predict(pt)[0]
+      print("d,fac,gp,log,diff = ",d,fac,pred,logp,pred/logp-1.)
+      err = (pred/logp-1. if np.isfinite(logp) else 0.)
+      if -pred<-minpred:
+        minpred = pred
+        position = (d,ifac,fac)
       errs[ifac] = err
     plt.plot(vari, errs, color=plt.get_cmap("gist_rainbow")(float(d)/gpr.d),label=parnames[d])
   plt.legend(bbox_to_anchor=(1.4,1.4))
+  print("MIN LKL = {} AT {}".format(minpred,position))
   plt.savefig("diff_plot{}.pdf".format(iplot),bbox_inches="tight")
 if doplot:
   quit()
@@ -199,7 +213,6 @@ else:
     if hasattr(s2,"detemper"):
       s2.detemper()
     gp_samples = MCSamplesFromCobaya(updated_info2,s2)
-
 ######################
 ### DERIVE SUMMARY ###
 ######################
