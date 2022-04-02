@@ -48,9 +48,9 @@ class GP_Acquisition(object):
     bounds : array
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
-    
+
     proposal : python function, optional (default: uniform sampling in prior)
-        A function to generate samples for the acquisition function. 
+        A function to generate samples for the acquisition function.
         Should return a single point upon each call, i.e. a shape (d,)-array
 
     acq_func : GPry Acquisition Function, optional (default: "Log_exp")
@@ -119,7 +119,7 @@ class GP_Acquisition(object):
 
     """
 
-    def __init__(self, bounds, 
+    def __init__(self, bounds,
                  proposal = None,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
@@ -257,14 +257,30 @@ class GP_Acquisition(object):
                 values[ifull] = value
                 ifull += 1
                 if ifull > self.n_repeats_propose:
-                  x0 = x0s[np.argmin(values)]
-                  if self.preprocessing_X is not None:
-                      x0 = self.preprocessing_X.transform(x0)
-                  return self._constrained_optimization(self.obj_func, x0,
+                    x0 = x0s[np.argmax(values)]
+                    if self.preprocessing_X is not None:
+                        x0 = self.preprocessing_X.transform(x0)
+                    return self._constrained_optimization(self.obj_func, x0,
                                                         transformed_bounds)
+            # if there's at least one finite value try optimizing from
+            # there, otherwise take the last x0 and add that to the GP
+            if ifull > 0:
+                x0 = x0s[np.argmax(values[:ifull])]
+                if self.preprocessing_X is not None:
+                    x0 = self.preprocessing_X.transform(x0)
+                print("HERE")
+                return self._constrained_optimization(self.obj_func, x0,
+                                                    transformed_bounds)
             else:
-                raise Exception(f"of {n_tries} initial samples for the "
-                          "acquisition optimizer none returned a finite value")
+                if self.verbose > 1:
+                    print(f"of {n_tries} initial samples for the "
+                           "acquisition optimizer none returned a "
+                           "finite value")
+                if self.preprocessing_X is not None:
+                    x0 = self.preprocessing_X.transform(x0)
+                print(x0)
+                print(value)
+                return x0, value
 
     def multi_add(self, gpr, n_points = 1, random_state = None):
         """Method to query multiple points where the objective function
@@ -299,7 +315,7 @@ class GP_Acquisition(object):
         fval : numpy.ndarray, shape = (n_points,)
             The values of the acquisition function at X_opt
         """
-        
+
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(
