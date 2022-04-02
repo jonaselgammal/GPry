@@ -277,7 +277,7 @@ class GP_Acquisition(object):
                            "finite value")
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                return x0, value
+                return x0, -1*value
 
     def multi_add(self, gpr, n_points = 1, random_state = None):
         """Method to query multiple points where the objective function
