@@ -268,7 +268,6 @@ class GP_Acquisition(object):
                 x0 = x0s[np.argmax(values[:ifull])]
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                print("HERE")
                 return self._constrained_optimization(self.obj_func, x0,
                                                     transformed_bounds)
             else:
@@ -278,8 +277,6 @@ class GP_Acquisition(object):
                            "finite value")
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                print(x0)
-                print(value)
                 return x0, value
 
     def multi_add(self, gpr, n_points = 1, random_state = None):
