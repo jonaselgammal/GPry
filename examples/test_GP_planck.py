@@ -51,8 +51,8 @@ ch_name = "chains/Planck"
 
 
 iplot = 6
-cname = "check8"
-ch_name2 = "chains/GP12"
+cname = "check9"
+ch_name2 = "chains/GP13"
 
 doplot = False
 
@@ -70,9 +70,9 @@ preset = "planck_2018_" + theory_code.lower()
 info = create_input(preset=preset)
 del info['theory']['classy']['extra_args']['non linear']
 del info['theory']['classy']['extra_args']['hmcode_min_k_max']
-info['params']['theta_s_1e2']['prior'] = {'min':1.038,'max':1.044}
+info['params']['theta_s_1e2']['prior'] = {'min':1.04,'max':1.044}
 info['params']['n_s']['prior'] = {'min':0.94,'max':0.99}
-info['params']['omega_b']['prior'] = {'min':0.021,'max':0.024}
+info['params']['omega_b']['prior'] = {'min':0.0215,'max':0.023}
 info['params']['omega_cdm']['prior'] = {'min':0.115,'max':0.125}
 info['params']['logA']['prior'] = {'min':2.9,'max':3.1}
 model = get_model(info)
@@ -132,12 +132,13 @@ if is_main_process:
 def callback(model, gpr, gp_acquisition, convergence, options,
                   old_gpr, new_X, new_y, y_pred):
   print("HYPER CALLBACK ",gpr.kernel_.theta, (gpr.kernel_.theta-gpr.kernel_.bounds[:,0])/(gpr.kernel_.bounds[:,1]-gpr.kernel_.bounds[:,0]),"<<-HYPER CALLBACK")
-
+#n_initial = 3*27
+#fit_full_every=2*sqrt(27)~=10
 #NOTE :: I changed SVM sigma to 14 at some point, but I don't think it matters
 if np.all(_check_checkpoint(cname)):
   _, gpr, _, _, _ = _read_checkpoint(cname)
 else:
-  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000},callback=callback,checkpoint=cname)
+  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000,'n_initial':300},callback=callback,checkpoint=cname,convergence_options={'n_correct':30})
 
 
 
