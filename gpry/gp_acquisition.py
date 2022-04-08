@@ -127,25 +127,39 @@ class GP_Acquisition(object):
                  n_repeats_propose=0,
                  preprocessing_X=None,
                  random_state=None,
-                 verbose=1):
+                 verbose=1,
+                 random_proposal_fraction=None,
+                 zeta_scaling = None):
 
         self.bounds = bounds
         self.n_d = np.shape(bounds)[0]
-        self.proposal = proposal
         self.obj_func = None
 
         self.rng = check_random_state(random_state)
+        if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
+          raise ValueError("Cannot pass a fraction outside of [0,1]. You passed {} for 'random_proposal_fraction'.".format(random_proposal_fraction))
 
-        # If nothing is provided for the proposal, we use a uniform sampling
-        if self.proposal is None:
-          self.proposal = partial(scipy.stats.uniform.rvs,loc=self.bounds[:,0],scale=self.bounds[:,1],size=self.n_d)
+        random_proposal = partial(scipy.stats.uniform.rvs,loc=self.bounds[:,0],scale=self.bounds[:,1],size=self.n_d)
+        if random_proposal_fraction is None or random_proposal_fraction == 0.:
+          self.proposal = proposal
+          # If nothing is provided for the proposal, we use a uniform sampling
+          if self.proposal is None:
+            self.proposal = random_proposal
+        else:
+          def prop(*args,**kwargs):
+            if np.random.random() > random_proposal_fraction:
+              return proposal(*args,**kwargs)
+            else:
+              return random_proposal(*args,**kwargs)
+          self.proposal = prop
+            
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(dimension=self.n_d)
+            self.acq_func = Log_exp(dimension=self.n_d,zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
                             "or 'Log_exp', instead got %s" % acq_func)
@@ -235,15 +249,17 @@ class GP_Acquisition(object):
         else:
             transformed_bounds = self.bounds
 
-        if i==0:
+        if i==-1:
             # Perform first run from last training point
             x0 = self.gpr_.X_train[-1]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
+            print("gp_acq.py :: OBJFUN[x0]={}".format(self.obj_func(x0)))
+            print("gp_acq.py :: ACQ_FUNC[x0]={},{}".format(self.acq_func(self.gpr_.X_train[-1],self.gpr_,is_verbose=True),self.acq_func(self.gpr_.X_train[-1],gpr,is_verbose=True)))
             return self._constrained_optimization(self.obj_func, x0,
                                                   transformed_bounds)
         else:
-            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
+            n_tries = 1000 * self.bounds.shape[0] * self.n_restarts_optimizer
             #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
             x0s = np.empty((self.n_repeats_propose+1,self.bounds.shape[0]))
             values = np.empty(self.n_repeats_propose+1)
@@ -344,6 +360,7 @@ class GP_Acquisition(object):
                 X_opt = np.array([X_opt])
                 # Get the "lie" (prediction of the GP at X)
                 y_lie = gpr_.predict(X_opt)
+                print("gp_ac.py[{}]={} (pos={},val={}) -- lie = {}".format(ipoint,acq_X_main,max_pos,acq_X_main[max_pos],y_lie))
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
                 if i < n_points-1:
@@ -522,6 +539,7 @@ class GP_Acquisition(object):
             if eval_gradient:
                 acq, grad = self.acq_func(X, self.gpr_,
                                           eval_gradient=True)
+                #print("acq: ",X, acq, grad)
                 return -1*acq, -1*grad
             else:
                 return -1 * self.acq_func(X, self.gpr_,
