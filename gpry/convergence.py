@@ -1206,7 +1206,8 @@ class CorrectCounter(ConvergenceCriterion):
 
     def __init__(self, prior, params):
         self.ncorrect = params.get("n_correct", 5)
-        self.threshold = params.get("threshold", 0.01)
+        self.reltol = params.get("threshold", 0.01)
+        self.abstol = params.get("abstol", 1e-3)
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
@@ -1222,9 +1223,12 @@ class CorrectCounter(ConvergenceCriterion):
         assert(n_new == len(pred_y))
         max_val = 0
         for yn,yl in zip(new_y, pred_y):
-            rel_difference = np.abs((yl-gp.y_max)/(yn-gp.y_max)-1.)
-            max_val = max(np.max(rel_difference), max_val)
-            if rel_difference < self.threshold:
+            #rel_difference = np.abs((yl-gp.y_max)/(yn-gp.y_max)-1.)
+            diff = np.abs(yl-yn)
+            max_val = max(np.max(diff), max_val)
+            thresh = np.abs(yn-gp.y_max) * self.reltol + self.abstol
+            print("true/lie/diff/thresh,npred",yn,yl,diff,thresh,self.n_pred)
+            if diff < thresh:
                 self.n_pred += 1
                 if self.verbose > 0:
                     print(f"Already {self.n_pred} correctly predicted \n")
