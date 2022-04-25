@@ -244,7 +244,6 @@ class GP_Acquisition(object):
                                                   transformed_bounds)
         else:
             n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
-            #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
             x0s = np.empty((self.n_repeats_propose+1,self.bounds.shape[0]))
             values = np.empty(self.n_repeats_propose+1)
             ifull = 0
@@ -345,7 +344,7 @@ class GP_Acquisition(object):
             # Now take the best and add it to the gpr (done in sequence)
             if is_main_process:
                 # Find out which one of these is the beest
-                max_pos = np.argmin(acq_X_main)
+                max_pos = np.argmin(acq_X_main) if np.any(np.isfinite(acq_X_main)) else len(acq_X_main)-1
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
@@ -359,7 +358,7 @@ class GP_Acquisition(object):
                 y_lie = gpr_.predict(X_opt)
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
-                if i < n_points-1:
+                if ipoint < n_points-1:
                     # Take the mean of errors as supposed measurement error
                     if np.iterable(gpr_.noise_level):
                         lie_noise_level = np.array(
