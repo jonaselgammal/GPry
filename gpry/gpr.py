@@ -395,6 +395,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # If all added values are infinite there's no need to refit the GP
             if np.all(~finite):
                 return self
+            print("gpr.py append :: X,y,finite = ",(["%.20e"%a for a in X[0]] if len(X)==1 else X),y,finite)
             X = X[finite]
             y = y[finite]
             if np.iterable(noise_level) and noise_level is not None:
@@ -663,11 +664,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     return -self.log_marginal_likelihood(theta,
                                                          clone_kernel=False)
 
+            print("FINDING FIRST OPTIMUM")
             # First optimize starting from theta specified in kernel
             optima = [(self._constrained_optimization(obj_func,
                                                       self.kernel_.theta,
                                                       self.kernel_.bounds))]
 
+            print("FINDING ADDITIONAL OPTIMA",(self.n_restarts_optimizer if not simplified else 1))
             # Additional runs are performed from log-uniform chosen initial
             # theta
             if self.n_restarts_optimizer > 0 and not simplified:
@@ -694,6 +697,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 self.log_marginal_likelihood(self.kernel_.theta,
                                              clone_kernel=False)
 
+        print("ALL OPTIMA FOUND")
         # Precompute quantities required for predictions which are independent
         # of actual query points
         K = self.kernel_(self.X_train_)
@@ -711,6 +715,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                         % self.kernel_,) + exc.args
             raise
         self.alpha_ = self.K_inv_ @ self.y_train_
+        print("DONE FITTING")
         # leave this here if stuff doesnt work...
         # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
 
@@ -791,6 +796,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.K_inv_ = np.block([[(K_inv + K_inv @ K_XY @ beta), -1*beta.T],
                                 [-1*beta                      , alpha]])
 
+        # OVERWRITING THE ABOVE CODE , JUST FOR DEBUGGINGGGG!!!!!!!!
+        k = self.kernel_(self.X_train_)
+        k[np.diag_indices_from(k)] += self.alpha
+        self.K_inv_ = np.linalg.inv(k)
+        #self.K_inv_ = np.linalg.inv(self.kernel_(self.X_train_))
+
         # Also update alpha_ matrix
         self.alpha_ = self.K_inv_ @ self.y_train_
 
@@ -799,7 +810,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def predict(self, X, return_std=False, return_cov=False,
-                return_mean_grad=False, return_std_grad=False, do_check_array=True):
+                return_mean_grad=False, return_std_grad=False, do_check_array=True,doprint=False):
         """
         Predict output for X.
 
@@ -947,6 +958,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Compute variance of predictive distribution
             y_var = self.kernel_.diag(X)
             y_var -= np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
+            if doprint:
+              print("K^T,K^-1,D_K = ",K_trans, K_inv, self.kernel_.diag(X))
+              print("X-X_T, K^T*K^-1",np.where([np.allclose(X[0],self.X_train_[i]) for i in range(len(self.X_train_))]),np.where(np.abs(np.dot(K_trans,K_inv))>1e-5)[0],len(self.X_train_))
+              print("THING = ",np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv),self.kernel_.diag(X),self.kernel_.diag(X)-np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv))
+              #K_trans_inv = np.linalg.pinv(K_trans)
+              #print("OTHERTHING = ",np.einsum("ki,ij,kj->k",K_trans,(np.einsum("ji,jk,kl->il",K_trans_inv,self.kernel_.diag(X),K_trans_inv)-K_inv),K_trans))
             # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
             # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
 
@@ -976,6 +993,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         if return_mean_grad:
             grad = self.kernel_.gradient_x(X[0], self.X_train_)
+            #print("grad:",grad)
             grad_mean = np.dot(grad.T, self.alpha_)
             # Undo normalization
             if self.preprocessing_y is not None:

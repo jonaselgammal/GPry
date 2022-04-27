@@ -879,12 +879,15 @@ class Log_exp(Acquisition_Function):
         whether zeta and sigma_n shall be fixed or not.
     """
 
-    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None):
+    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None, zeta_scaling=None):
         if zeta is None:
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
                                  "guess an appropriate zeta value.")
-            self.zeta = self.auto_zeta(dimension)
+            if zeta_scaling is None:
+              self.zeta = self.auto_zeta(dimension)
+            else:
+              self.zeta = self.auto_zeta(dimension,scaling=zeta_scaling)
         else:
             self.zeta = zeta
         self.sigma_n = sigma_n
@@ -901,10 +904,10 @@ class Log_exp(Acquisition_Function):
         return Hyperparameter(
             "sigma_n", "numeric", fixed=self.fixed)
 
-    def auto_zeta(self, dimension):
-        return dimension**-1.1
+    def auto_zeta(self, dimension, scaling=1.1):
+        return dimension**-scaling
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False,is_verbose=False,is_report_infinite=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
         its gradient.
 
@@ -931,16 +934,16 @@ class Log_exp(Acquisition_Function):
         """
         X = self.check_X(X)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        #with warnings.catch_warnings():
+            #warnings.simplefilter("ignore")
+        if True:
 
             if eval_gradient:
                 mu, std, mu_grad, std_grad = gp.predict(
                     X, return_std=True, return_mean_grad=True,
                     return_std_grad=True)
-
             else:
-                mu, std = gp.predict(X, return_std=True)
+                mu, std = gp.predict(X, return_std=True,doprint=is_verbose)
 
         if self.sigma_n is None:
             sigma_n = gp.noise_level
@@ -951,8 +954,13 @@ class Log_exp(Acquisition_Function):
         zeta = self.zeta
 
         mask = (std > sigma_n) & np.isfinite(mu)
+        if is_report_infinite:
+          print("s" if std>sigma_n else "m",end="|")
+        #if not np.all(mask):
         values = np.zeros_like(std)
         baseline = gp.y_max
+        if is_verbose:
+          print("acq.py :: X,m,s,s_n,m-b,zeta*(m-b),log(s-s_n)",X,mu,std,sigma_n, mu-baseline,2*zeta*(mu[mask]-baseline),np.log(std[mask]-sigma_n))
         # Alternative option, but found not to work extremely well
         #baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):

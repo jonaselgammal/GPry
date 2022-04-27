@@ -167,7 +167,7 @@ class SVM(SVC):
 
     """
 
-    def __init__(self, threshold_sigma=10, threshold=None, C=1e7, kernel='rbf',
+    def __init__(self, threshold_sigma=14, threshold=None, C=1e7, kernel='rbf',
                  degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
                  coef0=0.0, shrinking=True, probability=False, tol=0.001,
                  cache_size=200, class_weight=None, verbose=False, max_iter=-1,

@@ -254,13 +254,10 @@ class GP_Acquisition(object):
             x0 = self.gpr_.X_train[-1]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
-            print("gp_acq.py :: OBJFUN[x0]={}".format(self.obj_func(x0)))
-            print("gp_acq.py :: ACQ_FUNC[x0]={},{}".format(self.acq_func(self.gpr_.X_train[-1],self.gpr_,is_verbose=True),self.acq_func(self.gpr_.X_train[-1],gpr,is_verbose=True)))
             return self._constrained_optimization(self.obj_func, x0,
                                                   transformed_bounds)
         else:
-            n_tries = 1000 * self.bounds.shape[0] * self.n_restarts_optimizer
-            #print("Starting while loop! {} {} {} = {}".format(10,self.bounds.shape[0],self.n_restarts_optimizer,n_tries))
+            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
             x0s = np.empty((self.n_repeats_propose+1,self.bounds.shape[0]))
             values = np.empty(self.n_repeats_propose+1)
             ifull = 0
@@ -287,6 +284,7 @@ class GP_Acquisition(object):
                 return self._constrained_optimization(self.obj_func, x0,
                                                     transformed_bounds)
             else:
+                #quit()
                 if self.verbose > 1:
                     print(f"of {n_tries} initial samples for the "
                            "acquisition optimizer none returned a "
@@ -373,10 +371,17 @@ class GP_Acquisition(object):
                 X_opt = np.array([X_opt])
                 # Get the "lie" (prediction of the GP at X)
                 y_lie = gpr_.predict(X_opt)
+                ##print("\n\n\n\n --- GP ACQ SUMMARY ---- \n")
+                ##print(np.hstack([gpr_.X_train,gpr_.y_train[:,None]]))
+                ##print(proposal_X_main)
                 print("gp_ac.py[{}]={} (pos={},val={}) -- lie = {}".format(ipoint,acq_X_main,max_pos,acq_X_main[max_pos],y_lie))
+                ##print(gpr_.predict(X_opt,return_std=True,doprint=False))
+                ##print(X_opt,X_opt-gpr_.X_train[-1])
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
-                if i < n_points-1:
+                ##print(ipoint,n_points-1)
+                ##print("\n --- DONE GP ACQ SUMMARY ---- \n\n\n\n ")
+                if ipoint < n_points-1:
                     # Take the mean of errors as supposed measurement error
                     if np.iterable(gpr_.noise_level):
                         lie_noise_level = np.array(

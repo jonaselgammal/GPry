@@ -14,6 +14,8 @@ import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
+from functools import partial
+import scipy.stats
 from copy import deepcopy
 import numpy as np
 import warnings
@@ -160,7 +162,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"and Matern, got {gp}")
                 gpr = GaussianProcessRegressor(
                     kernel=gp,
-                    n_restarts_optimizer=10+2*n_d,
+                    n_restarts_optimizer=10+int(np.sqrt(n_d)),
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     preprocessing_y=Normalize_y(),
                     bounds=prior_bounds,
@@ -180,7 +182,21 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"'Log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                prop = model.prior.reference
+                from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+                from cobaya.tools import resolve_packages_path
+                cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
+                #mean = model.prior.reference()
+#np.array([3.05098289e+00,9.62351106e-01,1.04150121e+00,2.22919697e-02,1.19959331e-01, 4.96906597e-02,9.99424577e-01,1.00127606e+00,9.96817299e-01,6.44241440e+01,1.70416368e-02, 7.82061318e+00,3.61749566e+00, 7.96989621e+00,1.04722780e+01,1.85346384e+01,6.28059185e+01,2.52403782e+02, 4.63100275e+01,3.71415297e+01,9.56142296e+01,9.78680533e-02,1.24634765e-01,4.50296445e-01,5.25589042e-02,6.57524271e-01,1.69196502e+00])
+                mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
+ 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
+ 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
+ 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
+ 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
+ 6.5477914e-01,2.0630269e+00])
+                if np.any(d!=0 for d in cmat_dir['covmat'].shape):
+                  prop = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
+                else:
+                  prop = model.prior.sample
                 acquisition = GP_Acquisition(bounds,
                                              proposal=prop,
                                              acq_func=gp_acquisition,
@@ -189,7 +205,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                              n_repeats_propose=10,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
-                                             verbose=verbose)
+                                             verbose=verbose,
+                                             random_proposal_fraction=options.get("random_proposal_fraction", 0.),
+                                             zeta_scaling=options.get("zeta_scaling",1.1))
             elif isinstance(gp_acquisition, GP_Acquisition):
                 acquisition = gp_acquisition
             else:
@@ -301,6 +319,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             #new_X, y_pred, acq_vals = acquisition.multi_optimization(
             #    gpr, n_points=n_points_per_acq)
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
+        #print("run.py :: ",gpr.y_max)
         # Acquite new points in parallel with MPI-aware random state
         new_X, y_pred, acq_vals = acquisition.multi_add(
           gpr, n_points=n_points_per_acq, 
@@ -324,9 +343,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             new_y = np.concatenate(all_new_y)
             gpr.append_to_data(new_X, new_y, fit=True, simplified_fit = (it%fit_full_every!=fit_full_every-1))
             n_left = max_accepted - gpr.n_accepted_evals
-            if callback:
-                callback(model, gpr, gp_acquisition, convergence, options,
-                    old_gpr, new_X, new_y, y_pred)
+        if multiple_processes:
+            gpr, old_gpr, new_X, new_y, y_pred, convergence = mpi_comm.bcast(
+                (gpr, old_gpr, new_X, new_y, y_pred, convergence) if is_main_process else None)
+        if callback:
+            callback(model, gpr, gp_acquisition, convergence, options,
+                old_gpr, new_X, new_y, y_pred)
+ 
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
@@ -338,11 +361,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if multiple_processes:
                 is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         else:  # run by all processes
-            # NB: this assumes that when the criterion fails,
-            #     ALL processes raise ConvergenceCheckerror, not just rank 0
-            if multiple_processes:
-                gpr, old_gpr, new_X, new_y, y_pred =  mpi_comm.bcast(
-                    (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
                 is_converged = convergence.is_converged(
                     gpr, old_gpr, new_X, new_y, y_pred)
@@ -350,9 +368,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 is_converged = False
         if is_converged:
             break
+        n_left = mpi_comm.bcast(n_left if is_main_process else None)
+        if n_left <=0:
+            break
         if is_main_process:
-            if n_left <=0:
-              break
             # Save
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
 
@@ -475,6 +494,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
             n_finite_new = sum(is_finite(y_init - max(y_init)))
             # Break loop if the desired number of initial samples is reached
             finished = (n_finite_new >= n_still_needed)
+            print("run.py :: n_finite = {}, finished = {}, X_init".format(n_finite_new,finished,X_init))
         if multiple_processes:
             finished = mpi_comm.bcast(finished if is_main_process else None)
         if finished:
@@ -608,7 +628,6 @@ def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options
         else:
             out = get_output(prefix=output, resume=restart, force=False)
 
-    # Create the sampler
     sampler = get_sampler(sampler_info, model=model_surrogate, output=out)
 
     # Run the sampler on the GP
