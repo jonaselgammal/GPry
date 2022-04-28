@@ -19,6 +19,8 @@ import numpy as np
 import warnings
 import pickle
 import os
+import pandas as pd
+import time
 
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
@@ -160,7 +162,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"and Matern, got {gp}")
                 gpr = GaussianProcessRegressor(
                     kernel=gp,
-                    n_restarts_optimizer=10+2*n_d,
+                    n_restarts_optimizer=10 + 2 * n_d,
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     preprocessing_y=Normalize_y(),
                     bounds=prior_bounds,
@@ -185,7 +187,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                              proposal=prop,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
-                                             n_restarts_optimizer=5*n_d,
+                                             n_restarts_optimizer=5 * n_d,
                                              n_repeats_propose=10,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
@@ -215,7 +217,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
         # Read in options for the run
         if options is None:
-            if verbose>2:
+            if verbose > 2:
                 print("No options dict found. Defaulting to standard parameters.")
             options = {}
         n_initial = options.get("n_initial", 3 * n_d)
@@ -223,18 +225,17 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         max_accepted = options.get("max_accepted", max_points)
         max_init = options.get("max_init", 10 * n_d * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
-        fit_full_every = options.get("fit_full_every", max(int(2*np.sqrt(n_d)),1))
-        if n_points_per_acq < mpi_size and verbose>1:
+        fit_full_every = options.get("fit_full_every", max(int(2 * np.sqrt(n_d)), 1))
+        if n_points_per_acq < mpi_size and verbose > 1:
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
                   "not specified.")
-        if n_points_per_acq > 2*n_d and verbose>1:
+        if n_points_per_acq > 2 * n_d and verbose > 1:
             print("Warning: The number kriging believer samples per "
                   "acquisition step is larger than 2x number of dimensions of "
                   "the feature space. This may lead to slow convergence."
                   "Consider running it with less cores or decreasing "
                   "n_points_per_acq manually.")
-
 
         # Sanity checks
         if n_initial >= max_points:
@@ -262,8 +263,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             convergence.is_MPI_aware if is_main_process else None)
         if convergence_is_MPI_aware:
             convergence = mpi_comm.bcast(convergence if is_main_process else None)
-        comes_from_checkpoint = mpi_comm.bcast(comes_from_checkpoint
-            if is_main_process else None)
+        comes_from_checkpoint = mpi_comm.bcast(
+            comes_from_checkpoint if is_main_process else None)
     else:
         convergence_is_MPI_aware = convergence.is_MPI_aware
 
@@ -280,6 +281,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
         n_finite = len(gpr.y_train)
+    # Prepare progress summary table; the table key is the iteration number
+    progress = Progress()
     # Run bayesian optimization loop
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
@@ -289,32 +292,35 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     it = 0
     n_left = max_accepted - n_finite
     for it in range(n_iterations):
+        progress.add_iteration()
         if is_main_process:
             if verbose > 2:
                 if max_accepted != max_points:
-                  print(f"+++ Iteration {it} (Accepting at most {n_left} more points) +++++++++")
+                    print(f"+++ Iteration {it} "
+                          f"(Accepting at most {n_left} more points) +++++++++")
                 else:
-                  print(f"+++ Iteration {it} (of at most {n_iterations} iterations) +++++++++")
+                    print(f"+++ Iteration {it} "
+                          f"(of at most {n_iterations} iterations) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
-            # Get new point(s) from Bayesian optimization
-            #new_X, y_pred, acq_vals = acquisition.multi_optimization(
-            #    gpr, n_points=n_points_per_acq)
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
-        # Acquite new points in parallel with MPI-aware random state
-        new_X, y_pred, acq_vals = acquisition.multi_add(
-          gpr, n_points=n_points_per_acq, 
-          random_state = get_random_state())
+        # Acquire new points in parallel with MPI-aware random state
+        with Timer() as timer_acq:
+            new_X, y_pred, acq_vals = acquisition.multi_add(
+                gpr, n_points=n_points_per_acq, random_state=get_random_state())
+        progress.add_acquisition(timer_acq.total, None)
         if is_main_process:
-            print("run.py :: New X/y_lie/acq = ",new_X,y_pred,acq_vals)
+            print("run.py :: New X/y_lie/acq = ", new_X, y_pred, acq_vals)
         # Get logposterior value(s) for the acquired points (in parallel)
         if multiple_processes:
             new_X = mpi_comm.bcast(new_X if is_main_process else None)
         new_X_this_process = new_X[
             i_evals_this_process: i_evals_this_process + n_evals_this_process]
         new_y = np.empty(0)
-        for x in new_X_this_process:
-            new_y = np.append(new_y, model.logpost(x))
+        with Timer() as timer_truth:
+            for x in new_X_this_process:
+                new_y = np.append(new_y, model.logpost(x))
+        progress.add_truth(timer_truth.total, None)
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
@@ -322,17 +328,23 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             all_new_y = [new_y]
         if is_main_process:
             new_y = np.concatenate(all_new_y)
-            gpr.append_to_data(new_X, new_y, fit=True, simplified_fit = (it%fit_full_every!=fit_full_every-1))
+            do_simplified_fit = (it % fit_full_every != fit_full_every - 1)
+            with Timer() as timer_fit:
+                gpr.append_to_data(new_X, new_y,
+                                   fit=True, simplified_fit=do_simplified_fit)
+            progress.add_fit(timer_fit.total, None)
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
                 callback(model, gpr, gp_acquisition, convergence, options,
-                    old_gpr, new_X, new_y, y_pred)
+                         old_gpr, new_X, new_y, y_pred)
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
                 try:
-                    is_converged = convergence.is_converged(
-                        gpr, old_gpr, new_X, new_y, y_pred)
+                    with Timer() as timer_convergence:
+                        is_converged = convergence.is_converged(
+                            gpr, old_gpr, new_X, new_y, y_pred)
+                    progress.add_convergence(timer_convergence.total, None)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
             if multiple_processes:
@@ -341,27 +353,29 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
             if multiple_processes:
-                gpr, old_gpr, new_X, new_y, y_pred =  mpi_comm.bcast(
+                gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
                     (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
-                is_converged = convergence.is_converged(
-                    gpr, old_gpr, new_X, new_y, y_pred)
-            except gpryconv.ConvergenceCheckError as converr:
+                with Timer() as timer_convergence:
+                    is_converged = convergence.is_converged(
+                        gpr, old_gpr, new_X, new_y, y_pred)
+                progress.add_convergence(timer_convergence.total, None)
+            except gpryconv.ConvergenceCheckError:
                 is_converged = False
         if is_converged:
             break
         if is_main_process:
-            if n_left <=0:
-              break
+            if n_left <= 0:
+                break
             # Save
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-
+        # progress.plot_timing()
     # Save
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
 
-    if n_left <=0 and not isinstance(convergence, gpryconv.DontConverge) \
-        and is_main_process and verbose > 1:
+    if n_left <= 0 and not isinstance(convergence, gpryconv.DontConverge) \
+       and is_main_process and verbose > 1:
         warnings.warn("The maximum number of accepted points was reached before "
                       "convergence. Either increase max_accepted or try to "
                       "choose a smaller prior.")
@@ -748,3 +762,86 @@ def _read_checkpoint(path):
         options = pickle.load(i) if checkpoint_files[4] else None
 
     return model, gpr, acquisition, convergence, options
+
+
+class Progress:
+    """
+    Pandas DataFrame to store progress, timing, numbers of evaluations, etc.
+    """
+    _colnames = {
+        "n_train": "number of training points at the start of the iteration",
+        "time_acquire": "time needed to acquire candidates for truth evaluation",
+        "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
+                          "for truth evaluation"),
+        "time_truth": "time needed to evaluate the true model at the candidate points",
+        "n_truth": "number of evaluations of the true model",
+        "time_fit": "time of refitting of the GP model after adding new training points",
+        "n_fit": ("number of evaluations of the GP during refitting after adding new"
+                  "training points"),
+        "time_convergence": "time needed to compute the convergence criterion",
+        "n_convergence": ("number of evaluations of the GP needed to compute the "
+                          "convergence criterion"),
+        "converge_crit_value": "value of the convergence criterion",
+        "n_accepted": "???"}
+
+
+    def __init__(self):
+        """Initialises Progress table."""
+        self.data = pd.DataFrame(columns=list(self._colnames))
+
+    def help_column_names(self):
+        """Prints names and description of columns."""
+        print(self._colnames)
+
+    def add_iteration(self):
+        """
+        Adds the next row to the table. New values will be added to this row.
+        """
+        self.data = self.data.append(pd.Series(dtype=float), ignore_index=True)
+
+    def add_acquisition(self, time, n_evals):
+        """Adds timing and #evals during acquisitions."""
+        self.data.iloc[-1]["time_acquire"] = time
+
+    def add_truth(self, time, n_evals):
+        """Adds timing and #evals during truth evaluations."""
+        self.data.iloc[-1]["time_truth"] = time
+
+    def add_fit(self, time, n_evals):
+        """Adds timing and #evals during GP fitting."""
+        self.data.iloc[-1]["time_fit"] = time
+
+    def add_convergence(self, time, n_evals):
+        """Adds timing and #evals during convergence computation."""
+        self.data.iloc[-1]["time_convergence"] = time
+
+    def plot_timing(self):
+        """Plots as stacked bars the timing of each part of each iteration."""
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.bar(self.data.index, self.data["time_acquire"], label="Acquisition")
+        plt.bar(self.data.index, self.data["time_truth"], label="Truth",
+                bottom=self.data["time_acquire"])
+        plt.bar(self.data.index, self.data["time_fit"], label="GP fit",
+                bottom=self.data["time_acquire"] + self.data["time_truth"])
+        plt.bar(self.data.index, self.data["time_convergence"], label="Convergence",
+                bottom=(self.data["time_acquire"] + self.data["time_truth"] +
+                        self.data["time_fit"]))
+        plt.xlabel("Iteration")
+        plt.ylabel("Time (s)")
+        plt.legend()
+        plt.show()
+
+
+class Timer:
+    """Class for timing code within ``with`` block."""
+
+    def __enter__(self):
+        """Saves initial wallclock time."""
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        """Saves final wallclock time and difference."""
+        self.end = time.time()
+        self.total = self.end - self.start
