@@ -190,6 +190,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                              n_repeats_propose=10,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
+                                             zeta_scaling=options.get("zeta_scaling",1.1),
                                              verbose=verbose)
             elif isinstance(gp_acquisition, GP_Acquisition):
                 acquisition = gp_acquisition
@@ -333,6 +334,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                    fit=True, simplified_fit=do_simplified_fit)
             progress.add_fit(timer_fit.time, timer_fit.evals)
             n_left = max_accepted - gpr.n_accepted_evals
+            ### TODO :: Possibly this callback should check whether it is MPI aware and be executed in MPI parallel. What happens if the callback doesn't work properly or is massively delayed. Can this cause MPI problems?
             if callback:
                 callback(model, gpr, gp_acquisition, convergence, options,
                          old_gpr, new_X, new_y, y_pred)
@@ -362,11 +364,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 progress.add_convergence(timer_convergence.time, timer_convergence.evals)
             except gpryconv.ConvergenceCheckError:
                 is_converged = False
+
         if is_converged:
             break
+        # If the loop reaches n_left <= 0, then all processes need to break, not just the main process
+        n_left = mpi_comm.bcast(n_left if is_main_process else None)
+        if n_left<=0:
+            break
         if is_main_process:
-            if n_left <= 0:
-                break
             # Save
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
         # progress.plot_timing(truth=False)
