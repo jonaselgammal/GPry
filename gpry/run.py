@@ -183,23 +183,15 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"'Log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-                from cobaya.tools import resolve_packages_path
-                cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
-                #mean = model.prior.reference()
-#np.array([3.05098289e+00,9.62351106e-01,1.04150121e+00,2.22919697e-02,1.19959331e-01, 4.96906597e-02,9.99424577e-01,1.00127606e+00,9.96817299e-01,6.44241440e+01,1.70416368e-02, 7.82061318e+00,3.61749566e+00, 7.96989621e+00,1.04722780e+01,1.85346384e+01,6.28059185e+01,2.52403782e+02, 4.63100275e+01,3.71415297e+01,9.56142296e+01,9.78680533e-02,1.24634765e-01,4.50296445e-01,5.25589042e-02,6.57524271e-01,1.69196502e+00])
-                mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
+                from gpry.proposal import MeanAutoCovProposer
+                prop = MeanAutoCovProposer(mean=np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
  5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
  3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
  1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
  1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
- 6.5477914e-01,2.0630269e+00])
-                if np.any(d!=0 for d in cmat_dir['covmat'].shape):
-                  prop = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
-                else:
-                  prop = model.prior.sample
+ 6.5477914e-01,2.0630269e+00]), model_info=model.info())
                 acquisition = GP_Acquisition(bounds,
-                                             proposal=prop,
+                                             proposer=prop,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
                                              n_restarts_optimizer=5 * n_d,
