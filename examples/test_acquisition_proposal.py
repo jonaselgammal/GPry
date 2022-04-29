@@ -12,9 +12,9 @@ from time import time
 import matplotlib.pyplot as plt
 
 # Dimensionality, number of traning points (drawn from gaussian), and of proposed points
-d = 10
-n_train = 300
-n_proposed = 100
+d = 30
+n_train = d * 10
+n_proposed = d * 5
 
 X = stats.multivariate_normal.rvs(mean=np.zeros(d), cov=np.eye(d), size=n_train)
 
