@@ -3,8 +3,8 @@ from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
 from cobaya.tools import resolve_packages_path
 from functools import partial
 import scipy.stats
-import numpy.random.random as random_draw
-from gpry.run import generate_sampler_for_gp
+from numpy.random import random as random_draw
+from gpry.tools import generate_sampler_for_gp
 
 class Proposer(metaclass=ABCMeta):
 
