@@ -106,6 +106,10 @@ class GP_Acquisition(object):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
+    zeta_scaling : float, optional (default: 1.1)
+        The scaling of the acquisition function's zeta parameter with dimensionality
+        (Only if "Log_exp" is passed as acquisition_function)
+
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -127,6 +131,7 @@ class GP_Acquisition(object):
                  n_repeats_propose=0,
                  preprocessing_X=None,
                  random_state=None,
+                 zeta_scaling=1.1,
                  verbose=1):
 
         self.bounds = bounds
@@ -145,7 +150,7 @@ class GP_Acquisition(object):
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(dimension=self.n_d)
+            self.acq_func = Log_exp(dimension=self.n_d, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
                             "or 'Log_exp', instead got %s" % acq_func)
