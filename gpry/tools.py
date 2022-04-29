@@ -54,7 +54,6 @@ def cobaya_input_prior(cobaya_prior):
                             "max": bounds[i, 1]+epsilon[i]}}
                        for i, p in enumerate(cobaya_prior.params)}}
 
-
 def cobaya_input_likelihood(gpr, sampled_parameter_names=None):
     """
     Returns a Cobaya-compatible likelihood input dict for the `gpr`.
@@ -82,6 +81,34 @@ def cobaya_gp_model_input(cobaya_prior, gpr):
     info.update(cobaya_input_likelihood(gpr, list(cobaya_prior.params)))
     return info
 
+def cobaya_generate_gp_input(gpr, paramnames=None, bounds=None):
+    """
+    Returns a Cobaya model input dict corresponding to the gp surrogate model
+    The parameter names are going to be set to paramnames, while the bounds will be set from bounds. Both are optional. If no bounds are put, ???
+    """
+    d = len(bounds)
+    if bounds is None:
+        raise Exception("Sorry, it is not yet possible to provide no bounds to sample the GP on")
+    else:
+        if gpr.X_train[0].shape[0]!=d:
+            raise ValueError("Cannot provide bounds of size {}, while gpry.X_train has length {}".format(d,gpr.X_train[0].shape[0]))
+    paramnames = check_params_names_len(paramnames, d)
+
+    epsilon = [1e-3*(bounds[i, 1]-bounds[i, 0]) for i in range(d)] ## TODO :: this is very artificial and probably should be removed eventually. It was added here by Jonas, so I am leaving it for now until we discuss further
+    info = {"params": {p: {"prior": {
+                            "min": bounds[i, 0]-epsilon[i],
+                            "max": bounds[i, 1]+epsilon[i]}}
+                       for i, p in enumerate(paramnames)}}
+
+    def lkl(**kwargs):
+        values = [kwargs[name] for name in paramnames]
+        return gpr.predict(np.atleast_2d(values), do_check_array=False)[0]
+
+    info.update({"likelihood": {"gp": {
+        "external": lkl, "input_params": paramnames}}})
+
+    return info
+    
 
 def mcmc_info_from_run(model, gpr, convergence=None):
     """
