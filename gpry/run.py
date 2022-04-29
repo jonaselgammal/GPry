@@ -181,9 +181,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"'Log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                prop = model.prior.reference
                 acquisition = GP_Acquisition(bounds,
-                                             proposal=prop,
+                                             proposer=None,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
                                              n_restarts_optimizer=5 * n_d,

@@ -19,6 +19,7 @@ from sklearn.utils.optimize import _check_optimize_result
 from gpry.acquisition_functions import Log_exp
 from gpry.acquisition_functions import is_acquisition_function
 from gpry.gpr import GaussianProcessRegressor
+from gpry.proposal import UniformProposer
 
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
     split_number_for_parallel_processes, multi_gather_array
@@ -49,9 +50,8 @@ class GP_Acquisition(object):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    proposal : python function, optional (default: uniform sampling in prior)
-        A function to generate samples for the acquisition function.
-        Should return a single point upon each call, i.e. a shape (d,)-array
+    proposer : Proposer object, optional (default: "UniformProposer")
+        Proposer to propose points from which the acquisition function should be optimized.
 
     acq_func : GPry Acquisition Function, optional (default: "Log_exp")
         Acquisition function to maximize/minimize. If none is given the
@@ -124,7 +124,7 @@ class GP_Acquisition(object):
     """
 
     def __init__(self, bounds,
-                 proposal = None,
+                 proposer = None,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
@@ -136,14 +136,14 @@ class GP_Acquisition(object):
 
         self.bounds = bounds
         self.n_d = np.shape(bounds)[0]
-        self.proposal = proposal
+        self.proposer = proposer
         self.obj_func = None
 
         self.rng = check_random_state(random_state)
 
         # If nothing is provided for the proposal, we use a uniform sampling
-        if self.proposal is None:
-          self.proposal = partial(scipy.stats.uniform.rvs,loc=self.bounds[:,0],scale=self.bounds[:,1],size=self.n_d)
+        if self.proposer is None:
+          self.proposer = UniformProposer(self.bounds,self.n_d)
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
@@ -253,7 +253,7 @@ class GP_Acquisition(object):
             values = np.empty(self.n_repeats_propose+1)
             ifull = 0
             for n_try in range(n_tries):
-                x0 = self.proposal(random_state = random_state)
+                x0 = self.proposer.get(random_state = random_state)
                 value = self.acq_func(x0, self.gpr_)
                 if not np.isfinite(value):
                     continue
@@ -567,7 +567,7 @@ class GP_Acquisition(object):
             while n_starting_points_left > 0:
                 X_initial = np.empty((n_tries, self.n_d))
                 for i in range(n_tries):
-                    X_initial[i] = self.proposal()
+                    X_initial[i] = self.proposer.get()
                 values = self.acq_func(X_initial, self.gpr_)
                 mask = np.isfinite(values)
                 X_initial = X_initial[mask]
