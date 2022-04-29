@@ -877,14 +877,20 @@ class Log_exp(Acquisition_Function):
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
+        
+    dimension: double, default=None
+        the dimension of the parameter space used for auto-scaling the zeta
+    
+    zeta_scaling: double, default=1.1
+        the scaling power of the zeta with dimension, if auto-scaled
     """
 
-    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None):
+    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None, zeta_scaling=1.1):
         if zeta is None:
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
                                  "guess an appropriate zeta value.")
-            self.zeta = self.auto_zeta(dimension)
+            self.zeta = self.auto_zeta(dimension,scaling=zeta_scaling)
         else:
             self.zeta = zeta
         self.sigma_n = sigma_n
@@ -901,8 +907,8 @@ class Log_exp(Acquisition_Function):
         return Hyperparameter(
             "sigma_n", "numeric", fixed=self.fixed)
 
-    def auto_zeta(self, dimension):
-        return dimension**-1.1
+    def auto_zeta(self, dimension, scaling=1.1):
+        return dimension**(-scaling)
 
     def __call__(self, X, gp, eval_gradient=False):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
