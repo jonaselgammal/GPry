@@ -4,7 +4,7 @@ distribution and sample the GP to get chains.
 """
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes, multiple_processes, multi_gather_array
+    split_number_for_parallel_processes, multiple_processes
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
@@ -17,14 +17,13 @@ from cobaya.sampler import get_sampler
 from copy import deepcopy
 import numpy as np
 import warnings
-import pickle
 import os
 import pandas as pd
 import time
 
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
-        convergence_criterion="ConvergenceCriterionGaussianMCMC",
+        convergence_criterion="CorrectCounter",
         callback=None,
         convergence_options=None, options={}, checkpoint=None, verbose=3):
     """
@@ -791,6 +790,9 @@ class Progress:
         """Initialises Progress table."""
         self.data = pd.DataFrame(columns=list(self._colnames))
 
+    def __repr__(self):
+        return self.data.__repr__()
+
     def help_column_names(self):
         """Prints names and description of columns."""
         print(self._colnames)
@@ -898,7 +900,7 @@ class TimerCounter(Timer):
         """Takes the GP's whose evaluations will be counted."""
         self.gps = gps  # save references for use at exit
 
-    def __enter__(self, *gps):
+    def __enter__(self):
         """Saves initial wallclock time and number of evaluations."""
         super().__enter__()
         self.init_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
