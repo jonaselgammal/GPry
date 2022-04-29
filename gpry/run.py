@@ -9,7 +9,7 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
-from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run
+from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run, generate_sampler_for_gp
 import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
@@ -22,7 +22,6 @@ import warnings
 import os
 import pandas as pd
 import time
-
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="CorrectCounter",
@@ -524,7 +523,6 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
 
     return gpr
 
-
 def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
                       output=None, add_options=None, restart=False):
     """
@@ -581,55 +579,13 @@ def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", converge
         The sampler instance contains the chains etc. and can be used for
         plotting etc.
     """
-
-    # Check GP
-    if isinstance(gp, GaussianProcessRegressor):
-        if hasattr(gp, 'y_train'):
-            gpr = gp
-        else:
-            warnings.warn("The provided GP hasn't been trained to data "
-                          "before. This is likely unintentional...")
-    elif isinstance(gp, str):
-        _, gpr, _, _, _ = _read_checkpoint(gp)
-        if gpr is None:
-            raise RuntimeError("Could not load the GP regressor from checkpoint")
-        if not hasattr(gpr, "y_train"):
-            warnings.warn("The provided GP hasn't been trained to data "
-                          "before. This is likely unintentional...")
-    else:
-        raise TypeError("The GP needs to be a gpry GP Regressor or a string "
-                        "with a path to a checkpoint file.")
-
-    model_surrogate = get_model(
-        cobaya_generate_gp_input(gpr, paramnames=paramnames,bounds=bounds))
-
-    # Check if options for the sampler are given else build the sampler
-    if options is None:
-        if sampler.lower() == "mcmc":
-            sampler_info = mcmc_info_from_run(model_surrogate, gpr, convergence)
-        elif sampler.lower() == "polychord":
-            sampler_info = polychord_info_from_run(model_surrogate, gpr, convergence)
-        else:
-            raise ValueError("`sampler` must be `mcmc|polychord`")
-    else:
-        sampler_info = options
-    if add_options is not None:
-        for key in add_options:
-          sampler_info[key].update(add_options[key])
-
-    out = None
-    if output is not None:
-        if not restart:
-            out = get_output(prefix=output, resume=False, force=True)
-        else:
-            out = get_output(prefix=output, resume=restart, force=False)
-
-    sampler = get_sampler(sampler_info, model=model_surrogate, output=out)
-
-    # Run the sampler on the GP
-    print("Starting sampler")
+    surr_info, sampler = generate_sampler_for_gp( gp, bounds=bounds, paramnames=paramnames, sampler=sampler, convergence=convergence, options=options, output=output, add_options=add_options, restart=restart)
+    
+    # Run the sampler
+    print("Running the sampler")
     sampler.run()
-    updated_info = model_surrogate.info()
+    
+    updated_info = surr_info.copy()
     updated_info["sampler"] = {list(sampler_info)[0]: sampler.info()}
 
     return updated_info, sampler
@@ -911,3 +867,33 @@ class TimerCounter(Timer):
         super().__exit__()
         self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
         self.evals = sum(self.final_eval - self.init_eval)
+
+
+class Runner(object):
+    def __init__(self):
+        self.gp = None
+        self.gp_acquisition = None
+        self.convergence = None
+        self.options = None
+        self.paramnames = None
+        self.bounds = None
+        self.has_run = False
+    def run(self, model, gp="RBF", gp_acquisition="Log_exp",
+            convergence_criterion="CorrectCounter",
+            callback=None,
+            convergence_options=None, options={}, checkpoint=None, verbose=3):
+        model, gpr, acquisition, convergence, options = run(model, gp=gp, gp_acquisition=gp_acquisition,
+            convergence_criterion=convergence_criterion,
+            callback=callback,
+            convergence_options=convergence_options, options=options, checkpoint=checkpoint, verbose=verbose)
+        self.gp = gpr
+        self.gp_acquisition = acquisition
+        self.convergence = convergence
+        self.options = options
+        self.paramnames = model.prior.params
+        self.bounds = model.prior.bounds
+        self.has_run = True
+    def generate_mc_sample(sampler="mcmc", output=None, add_options=None, restart=False):
+        if not self.has_run:
+            raise Exception("You have to first run before you can generate an mc_sample")
+        return mc_sample_from_gp(self.gp, bounds=self.bounds, paramnames=self.paramnames, sampler=sampler, convergence=self.convergence, options=self.options, output=output, add_options=add_options, restart=restart)
