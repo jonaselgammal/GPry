@@ -106,6 +106,10 @@ class GP_Acquisition(object):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
+    zeta_scaling : float, optional (default: 1.1)
+        The scaling of the acquisition function's zeta parameter with dimensionality
+        (Only if "Log_exp" is passed as acquisition_function)
+
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -159,7 +163,7 @@ class GP_Acquisition(object):
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(dimension=self.n_d,zeta_scaling=zeta_scaling)
+            self.acq_func = Log_exp(dimension=self.n_d, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
                             "or 'Log_exp', instead got %s" % acq_func)
@@ -359,7 +363,7 @@ class GP_Acquisition(object):
             # Now take the best and add it to the gpr (done in sequence)
             if is_main_process:
                 # Find out which one of these is the beest
-                max_pos = np.argmin(acq_X_main)
+                max_pos = np.argmin(acq_X_main) if np.any(np.isfinite(acq_X_main)) else len(acq_X_main)-1
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
@@ -379,8 +383,6 @@ class GP_Acquisition(object):
                 ##print(X_opt,X_opt-gpr_.X_train[-1])
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
-                ##print(ipoint,n_points-1)
-                ##print("\n --- DONE GP ACQ SUMMARY ---- \n\n\n\n ")
                 if ipoint < n_points-1:
                     # Take the mean of errors as supposed measurement error
                     if np.iterable(gpr_.noise_level):
