@@ -21,7 +21,7 @@ class UniformProposer(Proposer):
 
 class MeanCovProposer(Proposer):
     def __init__(self,mean, cov):
-        self.proposal_function = scipy.stats.multivariate_normal(mean=mean,cov=cov).rvs
+        self.proposal_function = scipy.stats.multivariate_normal(mean=mean,cov=cov,allow_singular=True).rvs
     def get(self,random_state=None):
         return self.proposal_function(random_state=random_state)
 
@@ -29,7 +29,7 @@ class MeanAutoCovProposer(Proposer):
     def __init__(self,mean,model_info):
         cmat_dir = get_best_covmat(model_info, packages_path=resolve_packages_path())
         if np.any(d!=0 for d in cmat_dir['covmat'].shape):
-          self.proposal_function = scipy.stats.multivariate_normal(mean=mean,cov=cmat_dir['covmat']).rvs
+          self.proposal_function = scipy.stats.multivariate_normal(mean=mean,cov=cmat_dir['covmat'],allow_singular=True).rvs
         else:
           self.proposal_function = model.prior.sample
     def get(self,random_state=None):
