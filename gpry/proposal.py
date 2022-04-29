@@ -49,6 +49,8 @@ class MeanAutoCovProposer(Proposer):
             self.proposal_function = scipy.stats.multivariate_normal(
                 mean=mean, cov=cmat_dir['covmat'], allow_singular=True).rvs
         else:
+            # TODO :: how to gracefully fall back if autocovmat not found
+            raise Exception("Autocovmat is not valid")
             # UNDEFINED: model
             self.proposal_function = model.prior.sample
 
@@ -77,14 +79,12 @@ def SmallChainProposer(Proposer):
     def resample(self):
         this_i = choice(range(len(self.gpr.X_train)))
         this_X = np.copy(self.gpr.X_train[this_i])
-        # UNDEFINED: model
-        logpost = model.logposterior(this_X, temperature=self.temperature)
+        logpost = self.gpr.y_train[this_i]
         self.sampler.current_point.add(this_X, logpost)
         # reset the number of samples and run
         self.sampler.collection.reset()
         self.sampler.run()
-        # UNDEFINED: parnames
-        points = self.sampler.products()["sample"][parnames].values[::-self.n_steps]
+        points = self.sampler.products()["sample"][self.parnames].values[::-self.n_steps]
         self.samples = points
         return self.samples
 
