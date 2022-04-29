@@ -54,7 +54,7 @@ def SmallChainProposer(Proposer):
         logpost = model.logposterior(this_X, temperature=self.temperature)
         self.sampler.current_point.add(this_X, logpost)
         # reset the number of samples and run
-        self.sampler.collection._cache_reset()
+        self.sampler.collection.reset()
         self.sampler.run()
         points = self.sampler.products()["sample"][parnames].values[::-self.n_steps]
         self.samples = points
