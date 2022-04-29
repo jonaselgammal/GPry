@@ -305,10 +305,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             old_gpr = deepcopy(gpr)
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
         # Acquire new points in parallel with MPI-aware random state
-        with Timer() as timer_acq:
+        with TimerCounter(gpr) as timer_acq:
             new_X, y_pred, acq_vals = acquisition.multi_add(
                 gpr, n_points=n_points_per_acq, random_state=get_random_state())
-        progress.add_acquisition(timer_acq.total, None)
+        progress.add_acquisition(timer_acq.time, timer_acq.evals)
         if is_main_process:
             print("run.py :: New X/y_lie/acq = ", new_X, y_pred, acq_vals)
         # Get logposterior value(s) for the acquired points (in parallel)
@@ -320,7 +320,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         with Timer() as timer_truth:
             for x in new_X_this_process:
                 new_y = np.append(new_y, model.logpost(x))
-        progress.add_truth(timer_truth.total, None)
+        progress.add_truth(timer_truth.time, len(x))
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
@@ -329,10 +329,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if is_main_process:
             new_y = np.concatenate(all_new_y)
             do_simplified_fit = (it % fit_full_every != fit_full_every - 1)
-            with Timer() as timer_fit:
+            with TimerCounter(gpr) as timer_fit:
                 gpr.append_to_data(new_X, new_y,
                                    fit=True, simplified_fit=do_simplified_fit)
-            progress.add_fit(timer_fit.total, None)
+            progress.add_fit(timer_fit.time, timer_fit.evals)
             n_left = max_accepted - gpr.n_accepted_evals
             if callback:
                 callback(model, gpr, gp_acquisition, convergence, options,
@@ -341,10 +341,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if not convergence_is_MPI_aware:
             if is_main_process:
                 try:
-                    with Timer() as timer_convergence:
+                    with TimerCounter(gpr, old_gpr) as timer_convergence:
                         is_converged = convergence.is_converged(
                             gpr, old_gpr, new_X, new_y, y_pred)
-                    progress.add_convergence(timer_convergence.total, None)
+                    progress.add_convergence(
+                        timer_convergence.time, timer_convergence.evals)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
             if multiple_processes:
@@ -356,10 +357,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
                     (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
-                with Timer() as timer_convergence:
+                with TimerCounter(gpr, old_gpr) as timer_convergence:
                     is_converged = convergence.is_converged(
                         gpr, old_gpr, new_X, new_y, y_pred)
-                progress.add_convergence(timer_convergence.total, None)
+                progress.add_convergence(timer_convergence.time, timer_convergence.evals)
             except gpryconv.ConvergenceCheckError:
                 is_converged = False
         if is_converged:
@@ -369,7 +370,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 break
             # Save
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-        # progress.plot_timing()
+        # progress.plot_timing(truth=False)
+        # progress.plot_evals(truth=False)
     # Save
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
@@ -774,13 +776,13 @@ class Progress:
         "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
                           "for truth evaluation"),
         "time_truth": "time needed to evaluate the true model at the candidate points",
-        "n_truth": "number of evaluations of the true model",
+        "evals_truth": "number of evaluations of the true model",
         "time_fit": "time of refitting of the GP model after adding new training points",
-        "n_fit": ("number of evaluations of the GP during refitting after adding new"
-                  "training points"),
+        "evals_fit": ("number of evaluations of the GP during refitting after adding new"
+                      "training points"),
         "time_convergence": "time needed to compute the convergence criterion",
-        "n_convergence": ("number of evaluations of the GP needed to compute the "
-                          "convergence criterion"),
+        "evals_convergence": ("number of evaluations of the GP needed to compute the "
+                              "convergence criterion"),
         "converge_crit_value": "value of the convergence criterion",
         "n_accepted": "???"}
 
@@ -799,21 +801,25 @@ class Progress:
         """
         self.data = self.data.append(pd.Series(dtype=float), ignore_index=True)
 
-    def add_acquisition(self, time, n_evals):
+    def add_acquisition(self, time, evals):
         """Adds timing and #evals during acquisitions."""
         self.data.iloc[-1]["time_acquire"] = time
+        self.data.iloc[-1]["evals_acquire"] = evals
 
-    def add_truth(self, time, n_evals):
+    def add_truth(self, time, evals):
         """Adds timing and #evals during truth evaluations."""
         self.data.iloc[-1]["time_truth"] = time
+        self.data.iloc[-1]["evals_truth"] = evals
 
-    def add_fit(self, time, n_evals):
+    def add_fit(self, time, evals):
         """Adds timing and #evals during GP fitting."""
         self.data.iloc[-1]["time_fit"] = time
+        self.data.iloc[-1]["evals_fit"] = evals
 
-    def add_convergence(self, time, n_evals):
+    def add_convergence(self, time, evals):
         """Adds timing and #evals during convergence computation."""
         self.data.iloc[-1]["time_convergence"] = time
+        self.data.iloc[-1]["evals_convergence"] = evals
 
     def plot_timing(self, truth=True):
         """
@@ -839,7 +845,33 @@ class Progress:
         plt.xlabel("Iteration")
         plt.ylabel("Time (s)")
         plt.legend()
-        plt.show()
+        plt.show(block=False)
+
+    def plot_evals(self, truth=True):
+        """
+        Plots as stacked bars the number of evaluations of each part of each iteration.
+
+        Pass ``truth=False`` (default: True) to exclude the number of evaluations of the
+        true posterior at training points, for e.g. overhead-only plots.
+        """
+        import matplotlib.pyplot as plt
+        plt.figure()
+        # cast x values into list, to prevent finer x ticks
+        iters = [str(i) for i in self.data.index.to_numpy(int)]
+        bottom = np.zeros(len(self.data.index))
+        for col, label in {
+                "evals_acquire": "Acquisition",
+                "evals_truth": "Truth",
+                "evals_fit": "GP fit",
+                "evals_convergence": "Convergence crit."}.items():
+            if not truth and col == "evals_truth":
+                continue
+            plt.bar(iters, self.data[col], label=label, bottom=bottom)
+            bottom += self.data[col].to_numpy(dtype=float)
+        plt.xlabel("Iteration")
+        plt.ylabel("Number of evaluations")
+        plt.legend()
+        plt.show(block=False)
 
 
 class Timer:
@@ -853,4 +885,27 @@ class Timer:
     def __exit__(self, *args, **kwargs):
         """Saves final wallclock time and difference."""
         self.end = time.time()
-        self.total = self.end - self.start
+        self.time = self.end - self.start
+
+
+class TimerCounter(Timer):
+    """
+    Class for timing code within ``with`` block, and count number of evaluations of a
+    given GP model.
+    """
+
+    def __init__(self, *gps):
+        """Takes the GP's whose evaluations will be counted."""
+        self.gps = gps  # save references for use at exit
+
+    def __enter__(self, *gps):
+        """Saves initial wallclock time and number of evaluations."""
+        super().__enter__()
+        self.init_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        """Saves final wallclock time and number of evaluations, and their differences."""
+        super().__exit__()
+        self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
+        self.evals = sum(self.final_eval - self.init_eval)
