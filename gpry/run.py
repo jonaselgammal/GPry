@@ -183,7 +183,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
                 from gpry.proposal import MeanAutoCovProposer
-                prop = MeanAutoCovProposer(mean=mean = model.prior.reference(), model_info=model.info())
+                prop = MeanAutoCovProposer(mean=model.prior.reference(), model_info=model.info())
                 acquisition = GP_Acquisition(bounds,
                                              proposer=prop,
                                              acq_func=gp_acquisition,
