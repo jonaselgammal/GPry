@@ -21,7 +21,6 @@ import os
 import pandas as pd
 import time
 
-
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="CorrectCounter",
         callback=None,
@@ -903,3 +902,33 @@ class TimerCounter(Timer):
         super().__exit__()
         self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
         self.evals = sum(self.final_eval - self.init_eval)
+
+
+class Runner(object):
+    def __init__(self):
+        self.gp = None
+        self.gp_acquisition = None
+        self.convergence = None
+        self.options = None
+        self.paramnames = None
+        self.bounds = None
+        self.has_run = False
+    def run(self, model, gp="RBF", gp_acquisition="Log_exp",
+            convergence_criterion="CorrectCounter",
+            callback=None,
+            convergence_options=None, options={}, checkpoint=None, verbose=3):
+        model, gpr, acquisition, convergence, options = run(model, gp=gp, gp_acquisition=gp_acquisition,
+            convergence_criterion=convergence_criterion,
+            callback=callback,
+            convergence_options=convergence_options, options=options, checkpoint=checkpoint, verbose=verbose)
+        self.gp = gpr
+        self.gp_acquisition = acquisition
+        self.convergence = convergence
+        self.options = options
+        self.paramnames = model.prior.params
+        self.bounds = model.prior.bounds
+        self.has_run = True
+    def generate_mc_sample(sampler="mcmc", output=None, add_options=None, restart=False):
+        if not self.has_run:
+            raise Exception("You have to first run before you can generate an mc_sample")
+        return mc_sample_from_gp(self.gp, bounds=self.bounds, paramnames=self.paramnames, sampler=sampler, convergence=self.convergence, options=self.options, output=output, add_options=add_options, restart=restart)
