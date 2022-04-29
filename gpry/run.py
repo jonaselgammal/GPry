@@ -815,18 +815,27 @@ class Progress:
         """Adds timing and #evals during convergence computation."""
         self.data.iloc[-1]["time_convergence"] = time
 
-    def plot_timing(self):
-        """Plots as stacked bars the timing of each part of each iteration."""
+    def plot_timing(self, truth=True):
+        """
+        Plots as stacked bars the timing of each part of each iteration.
+
+        Pass ``truth=False`` (default: True) to exclude the computation time of the true
+        posterior at training points, for e.g. overhead-only plots.
+        """
         import matplotlib.pyplot as plt
         plt.figure()
-        plt.bar(self.data.index, self.data["time_acquire"], label="Acquisition")
-        plt.bar(self.data.index, self.data["time_truth"], label="Truth",
-                bottom=self.data["time_acquire"])
-        plt.bar(self.data.index, self.data["time_fit"], label="GP fit",
-                bottom=self.data["time_acquire"] + self.data["time_truth"])
-        plt.bar(self.data.index, self.data["time_convergence"], label="Convergence",
-                bottom=(self.data["time_acquire"] + self.data["time_truth"] +
-                        self.data["time_fit"]))
+        # cast x values into list, to prevent finer x ticks
+        iters = [str(i) for i in self.data.index.to_numpy(int)]
+        bottom = np.zeros(len(self.data.index))
+        for col, label in {
+                "time_acquire": "Acquisition",
+                "time_truth": "Truth",
+                "time_fit": "GP fit",
+                "time_convergence": "Convergence crit."}.items():
+            if not truth and col == "time_truth":
+                continue
+            plt.bar(iters, self.data[col], label=label, bottom=bottom)
+            bottom += self.data[col].to_numpy(dtype=float)
         plt.xlabel("Iteration")
         plt.ylabel("Time (s)")
         plt.legend()
