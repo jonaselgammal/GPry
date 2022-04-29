@@ -3,7 +3,7 @@ from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
 from cobaya.tools import resolve_packages_path
 from functools import partial
 import scipy.stats
-from numpy.random import random as random_draw
+import numpy as np
 from gpry.tools import generate_sampler_for_gp
 
 class Proposer(metaclass=ABCMeta):
@@ -75,7 +75,7 @@ class PartialProposer(Proposer):
         self.true_proposer = true_proposer
 
     def get(self,random_state=None):
-        if random_draw() > self.rpf:
+        if np.random.random() > self.rpf:
             return self.true_proposer.get(random_state=random_state)
         else:
             return self.random_proposer.get(random_state=random_state)
