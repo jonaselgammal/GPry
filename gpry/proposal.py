@@ -63,7 +63,7 @@ def SmallChainProposer(Proposer):
 class PartialProposer(Proposer):
 
     # Either sample from true_proposer, or give a random prior sample
-    def __init__(self,random_proposal_fraction = 0., bounds, n_d,true_proposer):
+    def __init__(self, bounds, n_d,true_proposer, random_proposal_fraction = 0.):
 
         if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
           raise ValueError("Cannot pass a fraction outside of [0,1]. You passed {} for 'random_proposal_fraction'.".format(random_proposal_fraction))
