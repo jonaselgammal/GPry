@@ -516,7 +516,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     return gpr
 
 
-def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options=None,
+def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
                       output=None, add_options=None, restart=False):
     """
     This function is essentially just a wrapper for the Cobaya MCMC sampler
@@ -529,21 +529,18 @@ def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options
     Parameters
     ----------
 
-    model_truth : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        Contains all information about the parameters in the likelihood and
-        their priors as well as the likelihood itself. The likelihood is not
-        used actively/it is replaced by the gp regressor so it does not need to
-        be correct and can be replaced by a dummy function. Alternatively a
-        string containing a path with the location of a saved GP run (checkpoint)
-        can be provided (the same path that was used to save the checkpoint
-        in the ``run`` function).
-
     gp : GaussianProcessRegressor, which has been fit to data and returned from
         the ``run`` function.
         Alternatively a string containing a path with the
         location of a saved GP run (checkpoint) can be provided (the same path
         that was used to save the checkpoint in the ``run`` function).
 
+    bounds : List of boundaries (lower,upper), optional
+        By default it doesn't use boundaries
+
+    paramnames : List of parameter strings, optional
+        By default it uses some dummy strings, which affects the updated_info
+    
     convergence : Convergence_criterion, optional
         The convergence criterion which has been used to fit the GP. This is
         used to extract the covariance matrix if it is available from the
@@ -594,17 +591,8 @@ def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options
         raise TypeError("The GP needs to be a gpry GP Regressor or a string "
                         "with a path to a checkpoint file.")
 
-    # Check model_truth
-    if isinstance(model_truth, str):
-        model_truth, _, _, _, _ = _read_checkpoint(model_truth)
-        if model_truth is None:
-            raise RuntimeError("Could not load the model from checkpoint")
-    elif not isinstance(model_truth, Model):
-        raise TypeError("model_truth needs to be a Cobaya model instance.")
-
-    sampled_parameter_names = list(model_truth.parameterization.sampled_params())
     model_surrogate = get_model(
-        cobaya_gp_model_input(model_truth.prior, gpr))
+        cobaya_generate_gp_input(gpr, paramnames=paramnames,bounds=bounds))
 
     # Check if options for the sampler are given else build the sampler
     if options is None:
@@ -641,7 +629,7 @@ def mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None, options
 
 # FOR BACKWARDS COMPATIBILITY --> DELETE AT SOME POINT BEFORE RELEASE!
 def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options=None):
-    return mc_sample_from_gp(model_truth, gp, sampler="mcmc", convergence=None,
+    return mc_sample_from_gp(gp, model_truth.prior.params, model_truth.prior.bounds, sampler="mcmc", convergence=None,
                              options=None, output=None, add_options=None)
 
 
