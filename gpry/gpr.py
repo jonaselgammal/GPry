@@ -765,6 +765,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 %(self.K_inv_.shape[0], self.y_train_.size-self.newly_appended))
 
         # Define all neccessary variables
+        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT! # TODO :: investigate closer
+        """
         K_inv = self.K_inv_
         X_1 = self.X_train_[:-self.newly_appended]
         X_2 = self.X_train_[-self.newly_appended:]
@@ -790,6 +792,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Put all together
         self.K_inv_ = np.block([[(K_inv + K_inv @ K_XY @ beta), -1*beta.T],
                                 [-1*beta                      , alpha]])
+        """
+        kernel = self.kernel_(self.X_train_)
+        kernel[np.diag_indices_from(kernel)] += self.alpha
+        self.K_inv_ = np.linalg.inv(kernel)
 
         # Also update alpha_ matrix
         self.alpha_ = self.K_inv_ @ self.y_train_
