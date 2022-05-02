@@ -6,7 +6,7 @@ from functools import partial
 import scipy.stats
 import numpy as np
 from random import choice
-from gpry.tools import generate_sampler_for_gp
+from gpry.mc import generate_sampler_for_gp
 
 
 class Proposer(metaclass=ABCMeta):
@@ -58,7 +58,7 @@ class MeanAutoCovProposer(Proposer):
         return self.proposal_function(random_state=random_state)
 
 
-def SmallChainProposer(Proposer):
+class SmallChainProposer(Proposer):
 
     def __init__(self, gpr, bounds, npoints=100, nsteps=10):
         self.samples = []
@@ -110,3 +110,36 @@ class PartialProposer(Proposer):
             return self.true_proposer.get(random_state=random_state)
         else:
             return self.random_proposer.get(random_state=random_state)
+
+
+class Centroids(Proposer):
+    """
+    Proposes points at the centroids of subsets of dim-1 training points.
+
+    It perturbs some of the proposals away from the centroids to encourage exploration.
+    """
+
+    def __init__(self, bounds, training_set, lambd=1):
+        self.bounds = bounds
+        self.training = training_set
+        # TODO: adapt lambd to dimensionality!!!
+        # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
+        self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
+
+    @property
+    def d(self):
+        return len(self.bounds)
+
+    def get(self, random_state=None):
+        # TODO: actually use the random_state!
+        m = self.d + 1
+        subset = self.training[
+            np.random.choice(len(self.training), size=m, replace=False)]
+        centroid = np.average(subset, axis=0)
+        # perturb the point: per dimension, add a random multiple of the difference
+        # between the centroid and one of the points.
+        kick = -centroid + np.array(
+            [subset[j][i] for i, j in enumerate(
+                np.random.choice(m, size=self.d, replace=False))])
+        kick *= self.kicking_pdf.rvs(self.d)
+        return centroid + kick
