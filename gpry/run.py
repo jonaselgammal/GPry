@@ -9,7 +9,8 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
-from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run, generate_sampler_for_gp
+from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run
+from gpry.mc import generate_sampler_for_gp
 import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
@@ -577,14 +578,14 @@ def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", converge
     sampler.run()
     
     updated_info = surr_info.copy()
-    updated_info["sampler"] = {list(sampler_info)[0]: sampler.info()}
+    updated_info["sampler"] = {list(surr_info)[0]: sampler.info()}
 
     return updated_info, sampler
 
 
 # FOR BACKWARDS COMPATIBILITY --> DELETE AT SOME POINT BEFORE RELEASE!
 def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options=None):
-    return mc_sample_from_gp(gp, model_truth.prior.params, model_truth.prior.bounds, sampler="mcmc", convergence=None,
+    return mc_sample_from_gp(gp, model_truth.prior.params, model_truth.prior.bounds(confidence_for_unbounded=0.99995), sampler="mcmc", convergence=None,
                              options=None, output=None, add_options=None)
 
 
@@ -882,7 +883,7 @@ class Runner(object):
         self.convergence = convergence
         self.options = options
         self.paramnames = model.prior.params
-        self.bounds = model.prior.bounds
+        self.bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
         self.has_run = True
     def generate_mc_sample(sampler="mcmc", output=None, add_options=None, restart=False):
         if not self.has_run:

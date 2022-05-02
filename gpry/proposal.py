@@ -6,7 +6,7 @@ from functools import partial
 import scipy.stats
 import numpy as np
 from random import choice
-from gpry.tools import generate_sampler_for_gp
+from gpry.mc import generate_sampler_for_gp
 
 
 class Proposer(metaclass=ABCMeta):
