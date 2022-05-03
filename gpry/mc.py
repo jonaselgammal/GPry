@@ -2,6 +2,8 @@ from gpry.gpr import GaussianProcessRegressor
 from cobaya.model import get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
+from gpry.tools import cobaya_generate_gp_input, mcmc_info_from_run, \
+    polychord_info_from_run
 
 def generate_sampler_for_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
                       output=None, add_options=None, restart=False):
@@ -24,7 +26,7 @@ def generate_sampler_for_gp(gp, bounds=None, paramnames=None, sampler="mcmc", co
 
     paramnames : List of parameter strings, optional
         By default it uses some dummy strings, which affects the updated_info
-    
+
     convergence : Convergence_criterion, optional
         The convergence criterion which has been used to fit the GP. This is
         used to extract the covariance matrix if it is available from the
