@@ -380,6 +380,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             break
         if is_main_process:
             # Save
+            print(gpr.n_accepted_evals)
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
         # progress.plot_timing(truth=False)
         # progress.plot_evals(truth=False)
@@ -548,7 +549,7 @@ def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", converge
 
     paramnames : List of parameter strings, optional
         By default it uses some dummy strings, which affects the updated_info
-    
+
     convergence : Convergence_criterion, optional
         The convergence criterion which has been used to fit the GP. This is
         used to extract the covariance matrix if it is available from the
@@ -580,21 +581,22 @@ def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", converge
         The sampler instance contains the chains etc. and can be used for
         plotting etc.
     """
-    surr_info, sampler = generate_sampler_for_gp( gp, bounds=bounds, paramnames=paramnames, sampler=sampler, convergence=convergence, options=options, output=output, add_options=add_options, restart=restart)
-    
+    sampler_name = sampler
+    surr_info, sampler = generate_sampler_for_gp(gp, bounds=bounds, paramnames=paramnames, sampler=sampler, convergence=convergence, options=options, output=output, add_options=add_options, restart=restart)
+
     # Run the sampler
     print("Running the sampler")
     sampler.run()
-    
+
     updated_info = surr_info.copy()
-    updated_info["sampler"] = {list(surr_info)[0]: sampler.info()}
+    updated_info["sampler"] = {sampler_name: sampler.info()}
 
     return updated_info, sampler
 
 
 # FOR BACKWARDS COMPATIBILITY --> DELETE AT SOME POINT BEFORE RELEASE!
 def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options=None):
-    return mc_sample_from_gp(gp, model_truth.prior.params, model_truth.prior.bounds(confidence_for_unbounded=0.99995), sampler="mcmc", convergence=None,
+    return mc_sample_from_gp(gp, model_truth.prior.bounds(confidence_for_unbounded=0.99995), model_truth.prior.params, sampler="mcmc", convergence=None,
                              options=None, output=None, add_options=None)
 
 
