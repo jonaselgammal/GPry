@@ -621,6 +621,12 @@ def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, opt
       raise ImportError("Could not find the 'dill' package. This is not a strict requirement for gpry, but without it the checkpoint functionality does not work.") from e
     if path is not None:
         try:
+            os.makedirs(path)
+        except OSError:
+            print ("Creation of the directory %s failed" % path)
+        else:
+            print ("Successfully created the directory %s" % path)
+        try:
             with open(os.path.join(path, "mod.pkl"), 'wb') as f:
                 # Save model as dict
                 model_dict = model.info()
