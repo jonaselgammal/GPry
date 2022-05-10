@@ -23,7 +23,7 @@ class UniformProposer(Proposer):
 
     def __init__(self, bounds, n_d):
         proposal_pdf = scipy.stats.uniform(
-            loc=bounds[:, 0], scale=bounds[:, 1])
+            loc=bounds[:, 0], scale=bounds[:, 1]-bounds[:, 0])
         self.proposal_function = partial(proposal_pdf.rvs, size=n_d)
 
     def get(self, random_state=None):
