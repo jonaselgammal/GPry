@@ -12,7 +12,7 @@ Although my background is in Cosmology GPry will work with any likelihood which 
 The requirements that your likelihood/posterior has to fulfil in order for this algorithm to be efficient and give correct results are as follows:
 
 - The likelihood/posterior should be *smooth* (continuous) and you should know how smooth (how many times differentiable).
-- The likelihood/posterior evaluation should be *slow*. What slow means depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if your MCMC takes longer to converge than you're willing to wait you should definitely give it a shot. 
+- The likelihood/posterior evaluation should be *slow*. What slow means depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if your MCMC takes longer to converge than you're willing to wait you should give it a shot. 
 - The likelihood should be *low-dimensional* (d<20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
 
 ### What does GPry do?
@@ -20,7 +20,7 @@ Unlike algorithms like MCMC which sample a posterior distribution GPry is design
 This doesn't mean that your posterior has to have a certain shape (i.e. it doesn't have to be a perfect gaussian) but rather that we assume that the posterior is a continuous, differentiable function which has a single characteristic length scale along each dimension.
 Furthermore GPry implements a number of tricks to mitigate some of the pitfalls associated with interpolating functions with GPs. The most important ones are:
 - A novel **acquisition function** for efficient sampling of the parameter space. This procedure is inspired by Bayesian optimization.
-- A batch acquisition algorithm which enables evaluating the likelihood/posterior in parallel using multiple cores. This is based on the **Kriging-believer** algorithm. We increase the performance of this using the block-wise inversion lemma to save computation resources.
+- A batch acquisition algorithm which enables evaluating the likelihood/posterior in parallel using multiple cores. This is based on the **Kriging-believer** algorithm. A nice bonus is that it also decreases the time for fitting the GP's hyperparameters
 - In order to prevent sampling regions which fall well outside the 2- &sigma; contours and account for the fact that many theory codes just return 0 far away from the fiducial values instead of computing the actual likelihood (which leads to - &‌infin; in the log-posterior) we shrink the prior using an **SVM classifier** to divide the parameter space into a "finite" and "infinite" region.
 
 ### What benefits does GPry offer compared to MCMC, Nested Sampling, ...?
