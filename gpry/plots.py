@@ -7,7 +7,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 
-def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker="."):
+def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker="."):
     """
     Adds the training points to a GetDist triangle plot, coloured according to
     their log-posterior value.
@@ -17,9 +17,6 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
 
     getdist_plot : `GetDist triangle plot <https://getdist.readthedocs.io/en/latest/plots.html?highlight=triangle_plot#getdist.plots.GetDistPlotter.triangle_plot>`_
         Contains the marginalized contours and potentially other things.
-
-    model : Cobaya model
-        The model that was used to run the GP on
 
     gpr : GaussianProcessRegressor
         The trained GP Regressor containing the samples.
@@ -34,11 +31,11 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
     The GetDist triangle plot with the added training points.
     """
     # Gather axes and bounds
-    sampled_params = list(model.parameterization.sampled_params())
+    sampled_params = parnames
     ax_dict = {}
-    bounds = [None] * len(sampled_params)
-    for i, pi in enumerate(sampled_params):
-        for j, pj in enumerate(sampled_params):
+    bounds = [None] * len(parnames)
+    for i, pi in enumerate(parnames):
+        for j, pj in enumerate(parnames):
             ax = getdist_plot.get_axes_for_params(pi, pj, ordered=True)
             if not ax:
                 continue

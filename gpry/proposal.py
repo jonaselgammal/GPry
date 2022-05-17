@@ -58,6 +58,15 @@ class MeanAutoCovProposer(Proposer):
         return self.proposal_function(random_state=random_state)
 
 
+class FuncProposer(Proposer):
+
+    def __init__(self, func):
+        self.proposal_function = func
+
+    def get(self, random_state=None):
+        return self.proposal_function(random_state=random_state)
+
+
 class SmallChainProposer(Proposer):
 
     def __init__(self, gpr, bounds, npoints=100, nsteps=10):

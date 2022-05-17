@@ -352,7 +352,7 @@ class GP_Acquisition(object):
             # Now take the best and add it to the gpr (done in sequence)
             if is_main_process:
                 # Find out which one of these is the beest
-                max_pos = np.argmin(acq_X_main) if np.any(np.isfinite(acq_X_main)) else len(acq_X_main)-1
+                max_pos = np.argmin(acq_X_main)# if np.any(np.isfinite(acq_X_main)) else len(acq_X_main)-1
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:

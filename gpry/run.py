@@ -183,8 +183,26 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"'Log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                from gpry.proposal import MeanAutoCovProposer
-                prop = MeanAutoCovProposer(mean=model.prior.reference(), model_info=model.info())
+                from gpry.proposal import MeanAutoCovProposer, FuncProposer
+                print("RUNNING WITH MEAN == ",options.get("prop_mean",model.prior.reference()))
+                prop = MeanAutoCovProposer(mean=options.get("prop_mean",model.prior.reference()), model_info=model.info())
+                from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+                from cobaya.tools import resolve_packages_path
+                cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
+                #mean = model.prior.reference()
+                mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
+ 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
+ 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
+ 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
+ 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
+ 6.5477914e-01,2.0630269e+00])
+                if np.any(d!=0 for d in cmat_dir['covmat'].shape):
+                  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
+                else:
+                  prop_fun = model.prior.sample
+                prop = FuncProposer(prop_fun)
+                #print([[prop_fun(),prop.get()] for _ in range(100)])
+
                 acquisition = GP_Acquisition(bounds,
                                              proposer=prop,
                                              acq_func=gp_acquisition,
@@ -361,9 +379,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         else:  # run by all processes
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
-            if multiple_processes:
-                gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
-                    (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
+            #if multiple_processes:
+            #    gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
+            #        (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
                 with TimerCounter(gpr, old_gpr) as timer_convergence:
                     is_converged = convergence.is_converged(
@@ -482,6 +500,10 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
         for j in range(n_to_sample_per_process):
             # Draw point from prior and evaluate logposterior at that point
             X = model.prior.reference(warn_if_no_ref=False)
+            #X = model.prior.sample(ignore_external=True)[0]#
+            ##from gpry.proposal import MeanAutoCovProposer
+            ##prop = MeanAutoCovProposer(mean=model.prior.reference(), model_info=model.info())
+            ##X = prop.get()
             if verbose > 2:
                 print(f"Evaluating true posterior at {X}")
             y = model.logpost(X)
