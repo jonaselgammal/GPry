@@ -25,7 +25,8 @@ import time
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="CorrectCounter",
         callback=None,
-        convergence_options=None, options={}, checkpoint=None, verbose=3):
+        convergence_options=None, options={}, checkpoint=None,
+        load_checkpoint=None, verbose=3):
     """
     This function takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. This is the easiest way to make use of the
@@ -93,6 +94,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         Path for storing checkpointing information from which to resume in case the
         algorithm crashes. If None is given no checkpoint is saved.
 
+    load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
+        Whether to resume from the checkpoint files if existing ones are found
+        at the location specified by ´checkpoint´.
+
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -124,26 +129,33 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     """
     if is_main_process:
         # Check if a checkpoint exists already and if so resume from there
-        if checkpoint is not None and verbose > 2:
-            print("Checking for checkpoint to resume from...")
-        checkpoint_files = _check_checkpoint(checkpoint)
-        comes_from_checkpoint = np.all(checkpoint_files)
-        if comes_from_checkpoint:
-            model, gpr, acquisition, convergence, options = _read_checkpoint(
-                checkpoint)
-            n_d = model.prior.d()
-            if verbose > 2:
-                print("#########################################")
-                print("Checkpoint found. Resuming from there...")
-                print("If this behaviour is unintentional either")
-                print("turn the checkpoint option off or rename it")
-                print("to a file which doesn't exist.")
-                print("#########################################")
-        else:
-            if np.any(checkpoint_files) and verbose > 1:
-                print("warning: Found checkpoint files but they were "
-                      "incomplete. Ignoring them...")
+        if checkpoint is not None:
+            if load_checkpoint not in ["resume", "overwrite"]:
+                ValueError("If a checkpoint location is specified you need to "
+                           "set 'load_checkpoint' to 'resume' or 'overwrite'.")
+            if load_checkpoint == "resume":
+                if verbose > 2:
+                    print("Checking for checkpoint to resume from...")
+                checkpoint_files = _check_checkpoint(checkpoint)
+                comes_from_checkpoint = np.all(checkpoint_files)
+                if comes_from_checkpoint:
+                    model, gpr, acquisition, convergence, options = _read_checkpoint(
+                        checkpoint)
+                    n_d = model.prior.d()
+                    if verbose > 2:
+                        print("#########################################")
+                        print("Checkpoint found. Resuming from there...")
+                        print("If this behaviour is unintentional either")
+                        print("turn the checkpoint option off or rename it")
+                        print("to a file which doesn't exist.")
+                        print("#########################################")
+                else:
+                    if np.any(checkpoint_files) and verbose > 1:
+                        print("warning: Found checkpoint files but they were "
+                              "incomplete. Ignoring them...")
 
+        else:
+            comes_from_checkpoint = False
             # Check model
             if not isinstance(model, Model):
                 raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
@@ -319,7 +331,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         with Timer() as timer_truth:
             for x in new_X_this_process:
                 new_y = np.append(new_y, model.logpost(x))
-        progress.add_truth(timer_truth.time, len(x))
+        progress.add_truth(timer_truth.time, None)
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
