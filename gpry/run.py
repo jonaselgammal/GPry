@@ -525,7 +525,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
             else:
                 # TODO: maybe re-fit SVM to shrink initial sample region
                 pass
-    if progress:
+    if progress and is_main_process:
         progress.add_truth(timer_truth.time, len(X_init))
     if verbose > 2:
         print("Done getting initial training samples.")
