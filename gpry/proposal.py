@@ -1,3 +1,10 @@
+"""
+Provides different methods for getting random samples from the allowed sampling
+region for either drawing an initial set of samples to start the bayesian
+optimization from or get locations from where to start the acquisition
+function's optimizer.
+"""
+
 from abc import ABCMeta, abstractmethod
 from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
 from cobaya.tools import resolve_packages_path
@@ -16,7 +23,27 @@ class Proposer(metaclass=ABCMeta):
         """
         Returns a random sample (given a certain random state) in the parameter space for
         the acquisition function to be optimized from.
+
+        Parameters
+        ----------
+
+        random_state : int or numpy.RandomState, optional
+            The generator used to initialize the centers. If an integer is
+            given, it fixes the seed. Defaults to the global numpy random
+            number generator.
         """
+
+    def update(self, gpr):
+        """
+        Updates the internal GP instance if it has been updated with new data.
+
+        Parameters
+        ----------
+
+        gpr : GaussianProcessRegressor
+        The gpr instance that has been updated.
+        """
+        pass
 
 
 class UniformProposer(Proposer):
@@ -63,11 +90,13 @@ class SmallChainProposer(Proposer):
     def __init__(self, gpr, bounds, npoints=100, nsteps=10):
         self.samples = []
         surr_info, sampler = generate_sampler_for_gp(
-            gpr, bounds, sampler="mcmc", add_options={'max_samples': 100})
+            gpr, bounds, sampler="mcmc", add_options={'max_samples': npoints})
         self.sampler = sampler
         self.surr_model = get_model(surr_info)
         self.parnames = list(surr_info['params'])
-        self.nsteps = 10
+        self.bounds = bounds
+        self.npoints = npoints
+        self.nsteps = nsteps
         self.gpr = gpr
 
     def get(self, random_state=None):
@@ -87,6 +116,10 @@ class SmallChainProposer(Proposer):
         points = self.sampler.products()["sample"][self.parnames].values[::-self.n_steps]
         self.samples = points
         return self.samples
+
+    def update(self, gpr):
+        # Initialize with the changed GP
+        self.__init__(gpr, self.bounds, self.npoints, self.nsteps)
 
 
 class PartialProposer(Proposer):
@@ -142,4 +175,10 @@ class Centroids(Proposer):
             [subset[j][i] for i, j in enumerate(
                 np.random.choice(m, size=self.d, replace=False))])
         kick *= self.kicking_pdf.rvs(self.d)
-        return centroid + kick
+        # This might have to be modified if the optimizer can't deal with
+        # points which are exactly on the edges.
+        return np.clip(centroid + kick, self.bounds[:, 0], self.bounds[:, 1])
+
+    def update(self, gpr):
+        # Get training locations from gpr and save them
+        self.training = gpr.X_train
