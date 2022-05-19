@@ -279,9 +279,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     else:
         convergence_is_MPI_aware = convergence.is_MPI_aware
 
+    # Prepare progress summary table; the table key is the iteration number
+    progress = Progress()
     if not comes_from_checkpoint:
         # Define initial tranining set
-        get_initial_sample(model, gpr, n_initial, verbose=verbose)
+        get_initial_sample(model, gpr, n_initial, verbose=verbose, progress=progress)
         if is_main_process:
             # Save checkpoint
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
@@ -292,8 +294,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
     else:
         n_finite = len(gpr.y_train)
-    # Prepare progress summary table; the table key is the iteration number
-    progress = Progress()
     # Run bayesian optimization loop
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
@@ -304,6 +304,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     n_left = max_accepted - n_finite
     for it in range(n_iterations):
         progress.add_iteration()
+        progress.add_current_n_truth(gpr.n_total_evals, gpr.n_accepted_evals)
         if is_main_process:
             if verbose > 2:
                 if max_accepted != max_points:
@@ -331,7 +332,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         with Timer() as timer_truth:
             for x in new_X_this_process:
                 new_y = np.append(new_y, model.logpost(x))
-        progress.add_truth(timer_truth.time, len(x))
+        progress.add_truth(timer_truth.time, len(new_X))
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
@@ -411,7 +412,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     return model, gpr, acquisition, convergence, options
 
 
-def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
+def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress=None):
     """
     Draws an initial sample for the `gpr` GP model until it has a training set of size
     `n_initial`, counting only finite-target points ("finite" here meaning over the
@@ -445,6 +446,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
         problems arise.
 
+    progress : a Progress instance to store timing and number of evaluations.
+
     Returns
     -------
 
@@ -453,6 +456,12 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     """
     n_d = model.prior.d()
     max_init = max_init or 10 * n_d * n_initial
+# parallelisation
+    if progress:
+        progress.add_iteration()
+        progress.add_current_n_truth(0, 0)
+        progress.add_acquisition(0, 0)
+        progress.add_convergence(0, 0, np.nan)
     # Check if there's an SVM and if so read out it's threshold value
     # We will compare it against y - max(y)
     if isinstance(gpr.account_for_inf, SVM):
@@ -481,45 +490,51 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3):
     n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
     # Initial samples loop. The initial samples are drawn from the prior
     # and according to the distribution of the prior.
-    for i in range(n_iterations_before_giving_up):
-        X_init_loop = np.empty((0, n_d))
-        y_init_loop = np.empty(0)
-        for j in range(n_to_sample_per_process):
-            # Draw point from prior and evaluate logposterior at that point
-            X = model.prior.reference(warn_if_no_ref=False)
-            if verbose > 2:
-                print(f"Evaluating true posterior at {X}")
-            y = model.logpost(X)
-            if verbose > 2:
-                print(f"Got {y}")
-            X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
-            y_init_loop = np.append(y_init_loop, y)
-        # Gather points and decide whether to break.
-        if multiple_processes:
-            all_points = mpi_comm.gather(X_init_loop)
-            all_posts = mpi_comm.gather(y_init_loop)
-        else:
-            all_points = [X_init_loop]
-            all_posts = [y_init_loop]
-        if is_main_process:
-            X_init = np.concatenate([X_init, np.concatenate(all_points)])
-            y_init = np.concatenate([y_init, np.concatenate(all_posts)])
-            # Only finite values contributes to the number of initial samples
-            n_finite_new = sum(is_finite(y_init - max(y_init)))
-            # Break loop if the desired number of initial samples is reached
-            finished = (n_finite_new >= n_still_needed)
-        if multiple_processes:
-            finished = mpi_comm.bcast(finished if is_main_process else None)
-        if finished:
-            break
-        else:
-            # TODO: maybe re-fit SVM to shrink initial sample region
-            pass
+    with Timer() as timer_truth:
+        for i in range(n_iterations_before_giving_up):
+            X_init_loop = np.empty((0, n_d))
+            y_init_loop = np.empty(0)
+            for j in range(n_to_sample_per_process):
+                # Draw point from prior and evaluate logposterior at that point
+                X = model.prior.reference(warn_if_no_ref=False)
+                if verbose > 2:
+                    print(f"Evaluating true posterior at {X}")
+                y = model.logpost(X)
+                if verbose > 2:
+                    print(f"Got {y}")
+                X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
+                y_init_loop = np.append(y_init_loop, y)
+            # Gather points and decide whether to break.
+            if multiple_processes:
+                all_points = mpi_comm.gather(X_init_loop)
+                all_posts = mpi_comm.gather(y_init_loop)
+            else:
+                all_points = [X_init_loop]
+                all_posts = [y_init_loop]
+            if is_main_process:
+                X_init = np.concatenate([X_init, np.concatenate(all_points)])
+                y_init = np.concatenate([y_init, np.concatenate(all_posts)])
+                # Only finite values contributes to the number of initial samples
+                n_finite_new = sum(is_finite(y_init - max(y_init)))
+                # Break loop if the desired number of initial samples is reached
+                finished = (n_finite_new >= n_still_needed)
+            if multiple_processes:
+                finished = mpi_comm.bcast(finished if is_main_process else None)
+            if finished:
+                break
+            else:
+                # TODO: maybe re-fit SVM to shrink initial sample region
+                pass
+    if progress:
+        progress.add_truth(timer_truth.time, len(X_init))
     if verbose > 2:
         print("Done getting initial training samples.")
     if is_main_process:
         # Append the initial samples to the gpr
-        gpr.append_to_data(X_init, y_init)
+        with TimerCounter(gpr) as timer_fit:
+            gpr.append_to_data(X_init, y_init)
+        if progress:
+            progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
         # Raise error if the number of initial samples hasn't been reached
         if not finished:
             raise RuntimeError("The desired number of finite initial "
@@ -737,6 +752,8 @@ class Progress:
     """
     _colnames = {
         "n_train": "number of training points at the start of the iteration",
+        "n_accepted": ("number of finite-posterior training points "
+                       "at the start of the iteration"),
         "time_acquire": "time needed to acquire candidates for truth evaluation",
         "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
                           "for truth evaluation"),
@@ -748,9 +765,10 @@ class Progress:
         "time_convergence": "time needed to compute the convergence criterion",
         "evals_convergence": ("number of evaluations of the GP needed to compute the "
                               "convergence criterion"),
-        "converge_crit_value": "value of the convergence criterion",
-        "n_accepted": "???"}
-
+        "converge_crit_value": "value of the convergence criterion"}
+    _dtypes = {col: (np.int if col.split("_")[0].lower() in ["n", "evals"]
+                     else np.float)
+               for col in _colnames}
 
     def __init__(self):
         """Initialises Progress table."""
@@ -768,6 +786,14 @@ class Progress:
         Adds the next row to the table. New values will be added to this row.
         """
         self.data = self.data.append(pd.Series(dtype=float), ignore_index=True)
+
+    def add_current_n_truth(self, n_truth, n_truth_finite):
+        """
+        Adds the number of total and finite evaluations of the true model
+        at the beginning of the iteration.
+        """
+        self.data.iloc[-1]["n_train"] = n_truth
+        self.data.iloc[-1]["n_accepted"] = n_truth_finite
 
     def add_acquisition(self, time, evals):
         """Adds timing and #evals during acquisitions."""
@@ -801,6 +827,7 @@ class Progress:
         posterior at training points, for e.g. overhead-only plots.
         """
         import matplotlib.pyplot as plt
+        plt.set_loglevel('WARNING')  # avoids a useless message
         plt.figure()
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
@@ -812,8 +839,9 @@ class Progress:
                 "time_convergence": "Convergence crit."}.items():
             if not truth and col == "time_truth":
                 continue
-            plt.bar(iters, self.data[col], label=label, bottom=bottom)
-            bottom += self.data[col].to_numpy(dtype=float)
+            dtype = self._dtypes[col]
+            plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
+            bottom += self.data[col].to_numpy(dtype=dtype)
         plt.xlabel("Iteration")
         plt.ylabel("Time (s)")
         plt.legend()
@@ -827,6 +855,7 @@ class Progress:
         true posterior at training points, for e.g. overhead-only plots.
         """
         import matplotlib.pyplot as plt
+        plt.set_loglevel('WARNING')  # avoids a useless message
         plt.figure()
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
@@ -838,8 +867,9 @@ class Progress:
                 "evals_convergence": "Convergence crit."}.items():
             if not truth and col == "evals_truth":
                 continue
-            plt.bar(iters, self.data[col], label=label, bottom=bottom)
-            bottom += self.data[col].to_numpy(dtype=float)
+            dtype = self._dtypes[col]
+            plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
+            bottom += self.data[col].to_numpy(dtype=dtype)
         plt.xlabel("Iteration")
         plt.ylabel("Number of evaluations")
         plt.legend()
