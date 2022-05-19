@@ -217,6 +217,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.noise_level = noise_level
 
         self.n_eval = 0
+        self.n_eval_loglike = 0
 
         self.y_max = -np.inf
 
@@ -545,6 +546,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
 
         return self
+
+    # Wrapper around log_marginal_likelihood to count the number of evaluations
+    def log_marginal_likelihood(self, *args, **kwargs):
+        self.n_eval_loglike += 1
+        return super().log_marginal_likelihood(*args, **kwargs)
 
     def fit(self, X=None, y=None, noise_level=None, simplified=False):
         r"""Optimizes the hyperparameters :math:`\\theta` for the training data
@@ -1029,6 +1035,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             bounds=self.bounds,
             random_state=self.random_state)
 
+        # Remember number of evaluations
+        if hasattr(self, "n_eval"):
+            c.n_eval = self.n_eval
         # Initialize the X_train and y_train part
         if hasattr(self, "X_train"):
             c.X_train = self.X_train

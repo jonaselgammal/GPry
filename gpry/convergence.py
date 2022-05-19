@@ -106,6 +106,11 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         gp. If gp_2 is None the last GP is taken from the model instance."""
 
     @property
+    def last_value(self):
+        """Last value of the convergence criterion."""
+        return deepcopy(self.values[-1])
+
+    @property
     def is_MPI_aware(self):
         return False
 

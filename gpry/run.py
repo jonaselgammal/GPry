@@ -331,7 +331,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         with Timer() as timer_truth:
             for x in new_X_this_process:
                 new_y = np.append(new_y, model.logpost(x))
-        progress.add_truth(timer_truth.time, None)
+        progress.add_truth(timer_truth.time, len(x))
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
@@ -343,7 +343,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             with TimerCounter(gpr) as timer_fit:
                 gpr.append_to_data(new_X, new_y,
                                    fit=True, simplified_fit=do_simplified_fit)
-            progress.add_fit(timer_fit.time, timer_fit.evals)
+            progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             n_left = max_accepted - gpr.n_accepted_evals
             ### TODO :: Possibly this callback should check whether it is MPI aware and be executed in MPI parallel. What happens if the callback doesn't work properly or is massively delayed. Can this cause MPI problems?
             if callback:
@@ -357,7 +357,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                         is_converged = convergence.is_converged(
                             gpr, old_gpr, new_X, new_y, y_pred)
                     progress.add_convergence(
-                        timer_convergence.time, timer_convergence.evals)
+                        timer_convergence.time, timer_convergence.evals,
+                        convergence.last_value)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
             if multiple_processes:
@@ -783,12 +784,16 @@ class Progress:
         self.data.iloc[-1]["time_fit"] = time
         self.data.iloc[-1]["evals_fit"] = evals
 
-    def add_convergence(self, time, evals):
-        """Adds timing and #evals during convergence computation."""
+    def add_convergence(self, time, evals, crit_value):
+        """
+        Adds timing and #evals during convergence computation, together with the new
+        criterion value.
+        """
         self.data.iloc[-1]["time_convergence"] = time
         self.data.iloc[-1]["evals_convergence"] = evals
+        self.data.iloc[-1]["converge_crit_value"] = crit_value
 
-    def plot_timing(self, truth=True):
+    def plot_timing(self, truth=True, block=False):
         """
         Plots as stacked bars the timing of each part of each iteration.
 
@@ -812,9 +817,9 @@ class Progress:
         plt.xlabel("Iteration")
         plt.ylabel("Time (s)")
         plt.legend()
-        plt.show(block=False)
+        plt.show(block=block)
 
-    def plot_evals(self, truth=True):
+    def plot_evals(self, truth=True, block=False):
         """
         Plots as stacked bars the number of evaluations of each part of each iteration.
 
@@ -838,7 +843,7 @@ class Progress:
         plt.xlabel("Iteration")
         plt.ylabel("Number of evaluations")
         plt.legend()
-        plt.show(block=False)
+        plt.show(block=block)
 
 
 class Timer:
@@ -869,6 +874,8 @@ class TimerCounter(Timer):
         """Saves initial wallclock time and number of evaluations."""
         super().__enter__()
         self.init_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
+        self.init_eval_loglike = np.array(
+            [gp.n_eval_loglike for gp in self.gps], dtype=int)
         return self
 
     def __exit__(self, *args, **kwargs):
@@ -876,6 +883,9 @@ class TimerCounter(Timer):
         super().__exit__()
         self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
         self.evals = sum(self.final_eval - self.init_eval)
+        self.final_eval_loglike = np.array(
+            [gp.n_eval_loglike for gp in self.gps], dtype=int)
+        self.evals_loglike = sum(self.final_eval_loglike - self.init_eval_loglike)
 
 
 class Runner(object):
