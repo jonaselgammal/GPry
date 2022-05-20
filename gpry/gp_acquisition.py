@@ -195,6 +195,9 @@ class GP_Acquisition(object):
 
     def propose(self, gpr, i, random_state=None):
 
+        # Update proposer with new gpr
+        self.proposer.update(gpr)
+
         # If we do a first-time run, use this
         if not self.obj_func:
 
