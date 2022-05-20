@@ -4,7 +4,7 @@ distribution and sample the GP to get chains.
 """
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes, multiple_processes
+    split_number_for_parallel_processes, multiple_processes, sync_processes
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
@@ -377,7 +377,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 progress.add_convergence(timer_convergence.time, timer_convergence.evals)
             except gpryconv.ConvergenceCheckError:
                 is_converged = False
-
+        sync_processes()
+        progress.mpi_sync()
         if is_converged:
             break
         # If the loop reaches n_left <= 0, then all processes need to break, not just the main process
@@ -388,8 +389,14 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # Save
             print(gpr.n_accepted_evals)
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-        # progress.plot_timing(truth=False)
-        # progress.plot_evals(truth=False)
+#        import pandas as pd
+#        pd.options.display.width = 1200
+#        pd.options.display.max_colwidth = 100
+#        pd.options.display.max_columns = 100
+#        print(progress)
+#        progress.plot_timing(truth=False)
+#        progress.plot_evals(truth=False)
+#        input("Press any key to go on...")
     # Save
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
@@ -541,7 +548,8 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
                                "samples hasn't been reached. Try "
                                "increasing max_init or decreasing the "
                                "volume of the prior")
-
+    if progress:
+        progress.mpi_sync()
     return gpr
 
 def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
@@ -765,7 +773,7 @@ class Progress:
         "time_convergence": "time needed to compute the convergence criterion",
         "evals_convergence": ("number of evaluations of the GP needed to compute the "
                               "convergence criterion"),
-        "converge_crit_value": "value of the convergence criterion"}
+        "convergence_crit_value": "value of the convergence criterion"}
     _dtypes = {col: (np.int if col.split("_")[0].lower() in ["n", "evals"]
                      else np.float)
                for col in _colnames}
@@ -817,7 +825,43 @@ class Progress:
         """
         self.data.iloc[-1]["time_convergence"] = time
         self.data.iloc[-1]["evals_convergence"] = evals
-        self.data.iloc[-1]["converge_crit_value"] = crit_value
+        self.data.iloc[-1]["convergence_crit_value"] = crit_value
+
+    def mpi_sync(self):
+        """
+        When running in parallel, synchronises all individual instances by taking the
+        maximum times and numbers of GP evaluations where each process run an independent
+        step.
+
+        The number of truth evaluations in the present iteration is the individual process
+        one, instead of the total number of new evaluations, in order to be consistent
+        with the reported evaluation time.
+        """
+        if not multiple_processes:
+            return
+        self.bcast_last_max("time_acquire")
+        self.bcast_last_max("evals_acquire")
+        self.bcast_last_max("time_truth")
+        self.bcast_last_max("evals_truth")
+        self.bcast_last_max("time_fit")
+        self.bcast_last_max("evals_fit")
+        self.bcast_last_max("time_convergence")
+        self.bcast_last_max("evals_convergence")
+        self.bcast_last_max("convergence_crit_value")  # prob not needed
+        sync_processes()
+
+    def bcast_last_max(self, column):
+        """
+        Sets the last row value of a column to the max of all MPI processes.
+
+        If only one defined (the rest are nan's), takes it.
+        """
+        all_values = np.array(mpi_comm.gather(self.data.iloc[-1][column]))
+        max_value = None
+        if is_main_process:
+            all_finite_values = all_values[np.isfinite(all_values)]
+            max_value = max(all_finite_values) if len(all_finite_values) else np.nan
+        self.data.iloc[-1][column] = mpi_comm.bcast(max_value)
 
     def plot_timing(self, truth=True, block=False):
         """
