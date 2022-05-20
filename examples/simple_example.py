@@ -80,7 +80,9 @@ model = get_model(info)
 
 # Run the GP
 from gpry.run import run
-model, gpr, acquisition, convergence, options = run(model, callback=callback)
+checkpoint = "output/simple"
+model, gpr, acquisition, convergence, options = run(
+    model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite")
 
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp

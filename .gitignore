@@ -132,6 +132,7 @@ dmypy.json
 examples/images/*
 examples/chains/*
 examples/new/*
+examples/output/*
 examples/*.pkl
 examples/*.png
 

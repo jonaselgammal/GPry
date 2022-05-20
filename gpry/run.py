@@ -24,7 +24,7 @@ import time
 
 def run(model, gp="RBF", gp_acquisition="Log_exp",
         convergence_criterion="CorrectCounter",
-        callback=None,
+        callback=None, callback_is_MPI_aware=False,
         convergence_options=None, options={}, checkpoint=None,
         load_checkpoint=None, verbose=3):
     """
@@ -87,8 +87,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
         ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options,
-        previous_gpr, new_X, new_y, pred_y)``.
+                   progress, previous_gpr, new_X, new_y, pred_y)``.
         When running in parallel, the function is run by the main process only.
+
+    callback_is_MPI_aware: bool (default: False)
+        If True, the callback function is called for every process simultaneously, and
+        it is expected to handle parallelisation internally. If false, only the main
+        process calls it.
 
     checkpoint : str, optional (default=None)
         Path for storing checkpointing information from which to resume in case the
@@ -129,10 +134,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     """
     if is_main_process:
         # Check if a checkpoint exists already and if so resume from there
+        comes_from_checkpoint = False
         if checkpoint is not None:
             if load_checkpoint not in ["resume", "overwrite"]:
-                ValueError("If a checkpoint location is specified you need to "
-                           "set 'load_checkpoint' to 'resume' or 'overwrite'.")
+                raise ValueError("If a checkpoint location is specified you need to "
+                                 "set 'load_checkpoint' to 'resume' or 'overwrite'.")
             if load_checkpoint == "resume":
                 if verbose > 2:
                     print("Checking for checkpoint to resume from...")
@@ -141,7 +147,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 if comes_from_checkpoint:
                     model, gpr, acquisition, convergence, options = _read_checkpoint(
                         checkpoint)
-                    n_d = model.prior.d()
                     if verbose > 2:
                         print("#########################################")
                         print("Checkpoint found. Resuming from there...")
@@ -153,14 +158,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                     if np.any(checkpoint_files) and verbose > 1:
                         print("warning: Found checkpoint files but they were "
                               "incomplete. Ignoring them...")
-
-        else:
-            comes_from_checkpoint = False
             # Check model
             if not isinstance(model, Model):
                 raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
             try:
-                n_d = model.prior.d()
                 prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             except:
                 raise RuntimeError("There seems to be something wrong with "
@@ -173,7 +174,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"and Matern, got {gp}")
                 gpr = GaussianProcessRegressor(
                     kernel=gp,
-                    n_restarts_optimizer=10 + 2 * n_d,
+                    n_restarts_optimizer=10 + 2 * model.prior.d(),
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     preprocessing_y=Normalize_y(),
                     bounds=prior_bounds,
@@ -197,7 +198,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                              proposer=None,
                                              acq_func=gp_acquisition,
                                              acq_optimizer="fmin_l_bfgs_b",
-                                             n_restarts_optimizer=5 * n_d,
+                                             n_restarts_optimizer=5 * model.prior.d(),
                                              n_repeats_propose=10,
                                              preprocessing_X=Normalize_bounds(
                                                  prior_bounds),
@@ -231,17 +232,18 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if verbose > 2:
                 print("No options dict found. Defaulting to standard parameters.")
             options = {}
-        n_initial = options.get("n_initial", 3 * n_d)
+        n_initial = options.get("n_initial", 3 * model.prior.d())
         max_points = options.get("max_points", 1000)
         max_accepted = options.get("max_accepted", max_points)
-        max_init = options.get("max_init", 10 * n_d * n_initial)
+        max_init = options.get("max_init", 10 * model.prior.d() * n_initial)
         n_points_per_acq = options.get("n_points_per_acq", mpi_size)
-        fit_full_every = options.get("fit_full_every", max(int(2 * np.sqrt(n_d)), 1))
+        fit_full_every = options.get(
+            "fit_full_every", max(int(2 * np.sqrt(model.prior.d())), 1))
         if n_points_per_acq < mpi_size and verbose > 1:
             print("Warning: parallellisation not fully utilised! It is advised to make "
                   "n_points_per_acq equal to the number of MPI processes (default when "
                   "not specified.")
-        if n_points_per_acq > 2 * n_d and verbose > 1:
+        if n_points_per_acq > 2 * model.prior.d() and verbose > 1:
             print("Warning: The number kriging believer samples per "
                   "acquisition step is larger than 2x number of dimensions of "
                   "the feature space. This may lead to slow convergence."
@@ -286,7 +288,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         get_initial_sample(model, gpr, n_initial, verbose=verbose, progress=progress)
         if is_main_process:
             # Save checkpoint
-            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
+            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options,
+                             progress, plots=False)
             if verbose > 2:
                 print("Initial samples drawn, starting with Bayesian "
                       "optimization loop.")
@@ -346,10 +349,11 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                    fit=True, simplified_fit=do_simplified_fit)
             progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             n_left = max_accepted - gpr.n_accepted_evals
-            ### TODO :: Possibly this callback should check whether it is MPI aware and be executed in MPI parallel. What happens if the callback doesn't work properly or is massively delayed. Can this cause MPI problems?
-            if callback:
-                callback(model, gpr, gp_acquisition, convergence, options,
+        if callback:
+            if callback_is_MPI_aware or is_main_process:
+                callback(model, gpr, gp_acquisition, convergence, options, progress,
                          old_gpr, new_X, new_y, y_pred)
+            mpi_comm.barrier()
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
             if is_main_process:
@@ -386,23 +390,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         if n_left<=0:
             break
         if is_main_process:
-            # Save
-            print(gpr.n_accepted_evals)
-            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-        stop_progress = False
-        if is_main_process and stop_progress:
-            import pandas as pd
-            pd.options.display.width = 1200
-            pd.options.display.max_colwidth = 100
-            pd.options.display.max_columns = 100
-            print(progress)
-            progress.plot_timing(truth=False)
-            progress.plot_evals(truth=False)
-            input("Press any key to go on...")
+            _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options,
+                             progress, plots=True)
     # Save
     if is_main_process:
-        _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-
+        _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options,
+                         progress, plots=True)
     if n_left <= 0 and not isinstance(convergence, gpryconv.DontConverge) \
        and is_main_process and verbose > 1:
         warnings.warn("The maximum number of accepted points was reached before "
@@ -463,9 +456,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
     The gpr with the samples appended to (possibly already existing) samples
     and refit hyperparameters.
     """
-    n_d = model.prior.d()
-    max_init = max_init or 10 * n_d * n_initial
-# parallelisation
+    max_init = max_init or 10 * model.prior.d() * n_initial
     if progress:
         progress.add_iteration()
         progress.add_current_n_truth(0, 0)
@@ -488,20 +479,21 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
         n_still_needed = n_initial - pretrained
         n_to_sample_per_process = int(np.ceil(n_still_needed / mpi_size))
         # Arrays to store the initial sample
-        X_init = np.empty((0, n_d))
+        X_init = np.empty((0, model.prior.d()))
         y_init = np.empty(0)
     if multiple_processes:
         n_to_sample_per_process = mpi_comm.bcast(
             n_to_sample_per_process if is_main_process else None)
     if n_to_sample_per_process == 0 and verbose > 1:  # Enough pre-training
-        warnings.warn("The number of pretrained points exceeds the number of initial samples")
+        warnings.warn("The number of pretrained points exceeds the number of "
+                      "initial samples")
         return
     n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
     # Initial samples loop. The initial samples are drawn from the prior
     # and according to the distribution of the prior.
     with Timer() as timer_truth:
         for i in range(n_iterations_before_giving_up):
-            X_init_loop = np.empty((0, n_d))
+            X_init_loop = np.empty((0, model.prior.d()))
             y_init_loop = np.empty(0)
             for j in range(n_to_sample_per_process):
                 # Draw point from prior and evaluate logposterior at that point
@@ -629,7 +621,8 @@ def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_optio
                              options=None, output=None, add_options=None)
 
 
-def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, options):
+def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, options,
+                     progress, plots=True):
     """
     This function is used to save all relevant parts of the GP loop for reuse
     as checkpoint in case the procedure crashes.
@@ -652,6 +645,11 @@ def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, opt
     convergence_criterion : Convergence_criterion
 
     options : dict
+
+    progress : Progress instance
+
+    plots: bool (default True)
+      Produces and saves progress plots.
     """
     try:
       import dill as pickle
@@ -678,9 +676,26 @@ def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, opt
                 pickle.dump(convergence, f, pickle.HIGHEST_PROTOCOL)
             with open(os.path.join(path, "opt.pkl"), 'wb') as f:
                 pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)
+            with open(os.path.join(path, "pro.pkl"), 'wb') as f:
+                pickle.dump(progress, f, pickle.HIGHEST_PROTOCOL)
+            if plots:
+                _do_plots(path, convergence, progress)
         except Exception as excpt:
             raise RuntimeError("Couldn't save the checkpoint. Check if the path "
                                "is correct and exists. Error message: " + str(excpt))
+
+
+def _do_plots(path, convergence, progress):
+    """
+    Creates some progress plots and saves them at path (assumes path exists).
+    """
+    progress.plot_timing(truth=False, save=os.path.join(path, "timing.svg"))
+    progress.plot_evals(save=os.path.join(path, "evals.svg"))
+    from gpry.plots import plot_convergence
+    fig, ax = plot_convergence(convergence)
+    fig.savefig(os.path.join(path, "convergence.svg"))
+    import matplotlib.pyplot as plt
+    plt.close(fig)
 
 
 def _check_checkpoint(path):
@@ -841,14 +856,17 @@ class Progress:
         """
         if not multiple_processes:
             return
+        # For the number of evaluations, not sure summing them is very helpful.
+        # Maybe keep all of them so that the can be plotted per item in slightly different
+        # colours for each process?
         self.bcast_last_max("time_acquire")
-        self.bcast_last_max("evals_acquire")
+        self.bcast_sum("evals_acquire")
         self.bcast_last_max("time_truth")
-        self.bcast_last_max("evals_truth")
+        self.bcast_sum("evals_truth")
         self.bcast_last_max("time_fit")
-        self.bcast_last_max("evals_fit")
+        self.bcast_sum("evals_fit")
         self.bcast_last_max("time_convergence")
-        self.bcast_last_max("evals_convergence")
+        self.bcast_sum("evals_convergence")
         self.bcast_last_max("convergence_crit_value")  # prob not needed
         sync_processes()
 
@@ -858,16 +876,30 @@ class Progress:
 
         If only one defined (the rest are nan's), takes it.
         """
+        self._bcast_operation(column, "max")
+
+    def bcast_sum(self, column):
+        """
+        Sets the last row value of a column to the sum over all MPI processes.
+
+        If only one defined (the rest are nan's), takes it.
+        """
+        self._bcast_operation(column, "sum")
+
+    def _bcast_operation(self, column, operation):
+        f = {"max": max, "sum": sum}[operation.lower()]
         all_values = np.array(mpi_comm.gather(self.data.iloc[-1][column]))
         max_value = None
         if is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]
-            max_value = max(all_finite_values) if len(all_finite_values) else np.nan
+            max_value = f(all_finite_values) if len(all_finite_values) else np.nan
         self.data.iloc[-1][column] = mpi_comm.bcast(max_value)
 
-    def plot_timing(self, truth=True, block=False):
+    def plot_timing(self, truth=True, show=False, save="progress_timing.png"):
         """
         Plots as stacked bars the timing of each part of each iteration.
+
+        In multiprocess runs, max of the time taken per step.
 
         Pass ``truth=False`` (default: True) to exclude the computation time of the true
         posterior at training points, for e.g. overhead-only plots.
@@ -889,13 +921,20 @@ class Progress:
             plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
             bottom += self.data[col].to_numpy(dtype=dtype)
         plt.xlabel("Iteration")
-        plt.ylabel("Time (s)")
+        multiprocess_str = " (max over processes)" if multiple_processes else ""
+        plt.ylabel("Time (s)" + multiprocess_str)
         plt.legend()
-        plt.show(block=block)
+        if save:
+            plt.savefig(save)
+        if show:
+            plt.show(block=True)
+        plt.close()
 
-    def plot_evals(self, truth=True, block=False):
+    def plot_evals(self, show=False, save="progress_evals.png"):
         """
         Plots as stacked bars the number of evaluations of each part of each iteration.
+
+        In multiprocess runs, sum of the number of evaluations of all processes.
 
         Pass ``truth=False`` (default: True) to exclude the number of evaluations of the
         true posterior at training points, for e.g. overhead-only plots.
@@ -908,18 +947,20 @@ class Progress:
         bottom = np.zeros(len(self.data.index))
         for col, label in {
                 "evals_acquire": "Acquisition",
-                "evals_truth": "Truth",
                 "evals_fit": "GP fit",
                 "evals_convergence": "Convergence crit."}.items():
-            if not truth and col == "evals_truth":
-                continue
             dtype = self._dtypes[col]
             plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
             bottom += self.data[col].to_numpy(dtype=dtype)
         plt.xlabel("Iteration")
-        plt.ylabel("Number of evaluations")
+        multiprocess_str = " (summed over processes)" if multiple_processes else ""
+        plt.ylabel("Number of evaluations" + multiprocess_str)
         plt.legend()
-        plt.show(block=block)
+        if save:
+            plt.savefig(save)
+        if show:
+            plt.show(block=True)
+        plt.close()
 
 
 class Timer:
@@ -980,7 +1021,7 @@ class Runner(object):
         model, gpr, acquisition, convergence, options = run(model, gp=gp, gp_acquisition=gp_acquisition,
             convergence_criterion=convergence_criterion,
             callback=callback,
-            convergence_options=convergence_options, options=options, checkpoint=checkpoint, verbose=verbose)
+                                                            convergence_options=convergence_options, options=options, checkpoint=checkpoint, verbose=verbose)
         self.gp = gpr
         self.gp_acquisition = acquisition
         self.convergence = convergence
