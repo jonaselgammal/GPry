@@ -91,7 +91,7 @@ def generate_sampler_for_gp(gp, bounds=None, paramnames=None, sampler="mcmc", co
         sampler_info = options
     if add_options is not None:
         for key in add_options:
-          sampler_info[key].update(add_options[key])
+            sampler_info[list(sampler_info.keys())[0]][key] = add_options[key]
 
     out = None
     if output is not None:
