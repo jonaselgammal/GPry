@@ -389,14 +389,16 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             # Save
             print(gpr.n_accepted_evals)
             _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
-#        import pandas as pd
-#        pd.options.display.width = 1200
-#        pd.options.display.max_colwidth = 100
-#        pd.options.display.max_columns = 100
-#        print(progress)
-#        progress.plot_timing(truth=False)
-#        progress.plot_evals(truth=False)
-#        input("Press any key to go on...")
+        stop_progress = False
+        if is_main_process and stop_progress:
+            import pandas as pd
+            pd.options.display.width = 1200
+            pd.options.display.max_colwidth = 100
+            pd.options.display.max_columns = 100
+            print(progress)
+            progress.plot_timing(truth=False)
+            progress.plot_evals(truth=False)
+            input("Press any key to go on...")
     # Save
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options)
