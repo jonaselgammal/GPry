@@ -86,7 +86,6 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     The plot convergence criterion vs. number of training points
     """
     values, n_posterior_evals, n_accepted_evals = convergence_criterion.get_history()
-
     fig, ax = plt.subplots()
     if evaluations == "total":
         ax.plot(n_posterior_evals, values, marker=marker)
@@ -94,6 +93,8 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
         ax.plot(n_accepted_evals, values, marker=marker)
     else:
         raise ValueError("'evaluations' must be either 'total' or 'accepted'.")
+    if hasattr(convergence_criterion, "limit"):
+        ax.axhline(convergence_criterion.limit, ls="--", lw="0.5", c="0.5")
     ax.set_xlabel(f"# {evaluations} posterior evaluations")
     ax.set_ylabel("Value of convergence criterion")
     ax.set_yscale("log")

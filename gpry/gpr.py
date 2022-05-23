@@ -11,7 +11,6 @@ import scipy.optimize
 # gpry kernels and SVM
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
-from gpry.preprocessing import Normalize_bounds, Normalize_y
 
 # sklearn GP and kernel utilities
 from sklearn.gaussian_process import GaussianProcessRegressor \
@@ -25,7 +24,7 @@ from sklearn.utils.validation import check_array
 
 
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
-    """
+    r"""
     GaussianProcessRegressor (GPR) that allows dynamic expansion.
 
     The implementation is based on Algorithm 2.1 of Gaussian Processes
@@ -218,13 +217,14 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.noise_level = noise_level
 
         self.n_eval = 0
+        self.n_eval_loglike = 0
 
         self.y_max = -np.inf
 
         self.verbose = verbose
 
         # Initialize SVM if given
-        if account_for_inf=="SVM":
+        if account_for_inf == "SVM":
             self.account_for_inf = SVM()
         else:
             self.account_for_inf = account_for_inf
@@ -323,7 +323,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return n_evals
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
-        """Append newly acquired data to the GP Model and updates it.
+        r"""Append newly acquired data to the GP Model and updates it.
 
         Here updating refers to the re-calculation of
         :math:`(K(X,X)+\sigma_n^2 I)^{-1}` which is needed for predictions. In
@@ -372,7 +372,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self
             Returns an instance of self.
         """
-
         if self.copy_X_train:
             X = np.copy(X)
             y = np.copy(y)
@@ -381,17 +380,16 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # has previously been fit to the data
         if not (hasattr(self, "X_train_") and hasattr(self, "y_train_")):
             if not fit and self.verbose > 1:
-                warnings.warn("No model has previously been fit to the data, "\
-                    "a model will be fit with X and y instead of just "\
-                    "updating with the same kernel hyperparameters")
-
+                warnings.warn("No model has previously been fit to the data, "
+                              "a model will be fit with X and y instead of just "
+                              "updating with the same kernel hyperparameters")
             self.fit(X, y, noise_level=noise_level)
             self.y_max = np.max(y)
             return self
 
         if self.account_for_inf is not None:
             finite = self.account_for_inf.append_to_data(X, y,
-                fit_preprocessors=fit)
+                                                         fit_preprocessors=fit)
             # If all added values are infinite there's no need to refit the GP
             if np.all(~finite):
                 return self
@@ -406,12 +404,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # if the data is not refit.
         if np.iterable(noise_level):
             if noise_level.shape[0] != y.shape[0]:
-                raise ValueError("noise_level must be an array with same "\
-                    "number of entries as y.(%d != %d)"
+                raise ValueError("noise_level must be an array with same "
+                                 "number of entries as y.(%d != %d)"
                                  % (noise_level.shape[0], y.shape[0]))
             elif np.iterable(self.noise_level):
                 self.noise_level = np.append(self.noise_level,
-                    noise_level, axis=0)
+                                             noise_level, axis=0)
                 if not fit:
                     if self.preprocessing_y is not None:
                         noise_level_transformed = self.preprocessing_y.\
@@ -419,15 +417,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     else:
                         noise_level_transformed = noise_level
                     self.noise_level_ = np.append(self.noise_level_,
-                        noise_level_transformed, axis=0)
+                                                  noise_level_transformed, axis=0)
             else:
                 if self.verbose > 1:
                     warnings.warn(
                         "A new noise level has been assigned to the "
                         "updated training set while the old training set has a"
                         " single scalar noise level: %s" % self.noise_level)
-                noise_level = np.append(np.ones(self.y_train_.shape) * \
-                    self.noise_level, noise_level, axis=0)
+                noise_level = np.append(np.ones(self.y_train_.shape) *
+                                        self.noise_level, noise_level, axis=0)
                 self.noise_level = noise_level
                 if not fit:
                     if self.preprocessing_y is not None:
@@ -438,15 +436,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     self.noise_level_ = noise_level_transformed
         elif noise_level is None:
             if np.iterable(self.noise_level):
-                raise ValueError("No value for the noise level given even "\
-                    "though concrete values were given earlier. Please only "\
-                    "give one scalar value or a different one for each "\
-                    "training point.")
+                raise ValueError("No value for the noise level given even "
+                                 "though concrete values were given earlier. Please only "
+                                 "give one scalar value or a different one for each "
+                                 "training point.")
         elif isinstance(noise_level, int) or isinstance(noise_level, float):
             if not fit and self.verbose > 1:
-                warnings.warn("Overwriting the noise level with a scalar "\
-                    "without refitting the kernel's hyperparamters. This may "\
-                    "cause unwanted behaviour.")
+                warnings.warn("Overwriting the noise level with a scalar "
+                              "without refitting the kernel's hyperparamters. This may "
+                              "cause unwanted behaviour.")
                 if self.preprocessing_y is not None:
                     noise_level_transformed = \
                         self.preprocessing_y.transform_noise_level(noise_level)
@@ -455,8 +453,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 self.noise_level_ = noise_level_transformed
             self.noise_level = noise_level
         else:
-            raise ValueError("noise_level needs to be an iterable, number or "\
-                "None, not %s"%noise_level)
+            raise ValueError("noise_level needs to be an iterable, number or "
+                             "None, not %s" % noise_level)
 
         self.X_train = np.append(self.X_train, X, axis=0)
         self.y_train = np.append(self.y_train, y)
@@ -482,7 +480,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def remove_from_data(self, position, fit=True):
-        """Removes data points from the GP model. Works very similarly to the
+        r"""Removes data points from the GP model. Works very similarly to the
         :meth:`append_to_data` method with the only difference being that the
         position(s) of the training points to delete are given instead of
         values.
@@ -494,7 +492,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             If an array is given the data is deleted at multiple points.
 
         fit : Bool, optional (default: True)
-            Whether the model is refit to new :math:`\\theta`-parameters
+            Whether the model is refit to new :math:`\theta`-parameters
             or just updated.
 
         Returns
@@ -503,18 +501,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             Returns an instance of self.
         """
         if not (hasattr(self, "X_train_") and hasattr(self, "y_train_")):
-            raise ValueError("GP model contains no points. Cannot remove "\
-                "points which do not exist.")
+            raise ValueError("GP model contains no points. Cannot remove "
+                             "points which do not exist.")
 
         if np.iterable(position):
             if np.max(position) >= len(self.y_train_):
-                raise ValueError("Position index is higher than length of "\
-                    "training points")
+                raise ValueError("Position index is higher than length of "
+                                 "training points")
 
         else:
             if position >= len(self.y_train_):
-                raise ValueError("Position index is higher than length of "\
-                    "training points")
+                raise ValueError("Position index is higher than length of "
+                                 "training points")
 
         self.X_train_ = np.delete(self._X_train_, position, axis=0)
         self.y_train_ = np.delete(self._y_train_, position)
@@ -538,20 +536,25 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 L_inv = solve_triangular(self.L_.T, np.eye(self.L_.shape[0]))
                 self.K_inv_ = L_inv.dot(L_inv.T)
             except np.linalg.LinAlgError as exc:
-                exc.args = ("The kernel, %s, is not returning a "\
-                            "positive definite matrix. Try gradually "\
-                            "increasing the 'noise_level' parameter of your "\
+                exc.args = ("The kernel, %s, is not returning a "
+                            "positive definite matrix. Try gradually "
+                            "increasing the 'noise_level' parameter of your "
                             "GaussianProcessRegressor estimator."
                             % self.kernel_) + exc.args
                 raise
             self.alpha_ = self.K_inv_ @ self.y_train_
             # Just here if stuff doesnt work, needs to be removed later...
-            #self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
+            # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
 
         return self
 
-    def fit(self, X=None, y=None, noise_level=None, simplified = False):
-        """Optimizes the hyperparameters :math:`\\theta` for the training data
+    # Wrapper around log_marginal_likelihood to count the number of evaluations
+    def log_marginal_likelihood(self, *args, **kwargs):
+        self.n_eval_loglike += 1
+        return super().log_marginal_likelihood(*args, **kwargs)
+
+    def fit(self, X=None, y=None, noise_level=None, simplified=False):
+        r"""Optimizes the hyperparameters :math:`\\theta` for the training data
         given. The algorithm used to perform the optimization is very similar
         to the one provided by Scikit-learn. The only major difference is, that
         gradient information is used in addition to the values of the
@@ -575,7 +578,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         -------
         self
         """
-
         if not hasattr(self, 'kernel_'):
             self.kernel_ = clone(self.kernel)
 
@@ -585,11 +587,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if X is None or y is None:
             # Check if X AND y are None, else raise ValueError
             if X is not None or y is not None:
-                raise ValueError("X or y is None, while the other isn't. "\
-                    "Either both need to be provided or both should be None")
+                raise ValueError("X or y is None, while the other isn't. "
+                                 "Either both need to be provided or both should be None")
             if noise_level is not None:
-                raise ValueError("Cannot give a noise level if X and y are "\
-                    "not given.")
+                raise ValueError("Cannot give a noise level if X and y are "
+                                 "not given.")
 
             # Take X and y from model. We assume that all infinite values have
             # been removed by the append to data method
@@ -725,7 +727,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def _update_model(self):
-        """Updates a preexisting model using the matrix inversion lemma.
+        r"""Updates a preexisting model using the matrix inversion lemma.
 
         This method is used when a refitting of the :math:`\\theta`-parameters
         is not needed. In this case only the Inverse of the Covariance matrix
@@ -742,32 +744,31 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         -------
         self
         """
-
         # Check if a model has previously been fit to the data, i.e. that a
         # K_inv_matrix, X_train_ and y_train_ exist. Furthermore check, that
         # newly_appended > 0.
 
         if self.newly_appended < 1:
             raise ValueError("No new points have been appended to the model. "
-                "Please append points with the 'append_to_data'-method before "
-                "trying to update.")
+                             "Please append points with the 'append_to_data'-method "
+                             "before trying to update.")
 
         if getattr(self, "X_train_", None) is None:
             raise ValueError("X_train_ is missing. Most probably the model "
-                "hasn't been fit to the data previously.")
+                             "hasn't been fit to the data previously.")
 
         if getattr(self, "y_train_", None) is None:
-            raise ValueError("y_train_ is missing. Most probably the model "\
-                "hasn't been fit to the data previously.")
+            raise ValueError("y_train_ is missing. Most probably the model "
+                             "hasn't been fit to the data previously.")
 
         if getattr(self, "K_inv_", None) is None:
-            raise ValueError("K_inv_ is missing. Most probably the model "\
-                "hasn't been fit to the data previously.")
+            raise ValueError("K_inv_ is missing. Most probably the model "
+                             "hasn't been fit to the data previously.")
 
         if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended:
-            raise ValueError("The number of added points doesn't match the "\
-                "dimensions of the K_inv matrix. %s != %s"
-                %(self.K_inv_.shape[0], self.y_train_.size-self.newly_appended))
+            raise ValueError("The number of added points doesn't match the "
+                             "dimensions of the K_inv matrix. %s != %s"
+                             % (self.K_inv_.shape[0], self.y_train_.size-self.newly_appended))
 
         # Define all neccessary variables
         # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT! # TODO :: investigate closer
@@ -1010,7 +1011,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 if not np.allclose(y_std, grad_std):
                     grad_std = -np.dot(K_trans,
                                        np.dot(K_inv, grad))[0] \
-                                       / y_std_untransformed
+                        / y_std_untransformed
                     # Undo normalization
                     if self.preprocessing_y is not None:
                         # Apply inverse transformation twice
@@ -1048,6 +1049,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             bounds=self.bounds,
             random_state=self.random_state)
 
+        # Remember number of evaluations
+        if hasattr(self, "n_eval"):
+            c.n_eval = self.n_eval
         # Initialize the X_train and y_train part
         if hasattr(self, "X_train"):
             c.X_train = self.X_train
