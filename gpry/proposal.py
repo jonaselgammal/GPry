@@ -14,6 +14,7 @@ import scipy.stats
 import numpy as np
 from random import choice
 from gpry.mc import generate_sampler_for_gp
+from cobaya.model import LogPosterior
 
 
 class Proposer(metaclass=ABCMeta):
@@ -152,36 +153,57 @@ class SmallChainProposer(Proposer):
 
     nsteps : int, optional (default=10)
         The number of MC steps that is taken from the end of the chain.
+
+    nretries : int, optional (default=3)
+        The number of times that the MC chain is restarted if it fails.
+        If the chain fails `nretries` times a warning is printed and samples
+        from a uniform distribution are returned.
     """
 
-    def __init__(self, bounds, npoints=100, nsteps=10):
+    def __init__(self, bounds, npoints=100, nsteps=20, nretries=3):
         self.samples = []
         self.bounds = bounds
+        self.nretries = nretries
         self.npoints = npoints
         self.nsteps = nsteps
+        self.random_proposer = UniformProposer(bounds)
 
     def get(self, random_state=None):
         if len(self.samples) > 0:
-            return self.samples.pop()
+            last, self.samples = self.samples[-1], self.samples[:-1]
+            return last
         else:
-            self.resample().pop()
+            self.resample()
+            last, self.samples = self.samples[-1], self.samples[:-1]
+            return last
 
     def resample(self):
-        this_i = choice(range(len(self.gpr.X_train)))
-        this_X = np.copy(self.gpr.X_train[this_i])
-        logpost = self.gpr.y_train[this_i]
-        self.sampler.current_point.add(this_X, logpost)
-        # reset the number of samples and run
-        self.sampler.collection.reset()
-        self.sampler.run()
-        points = self.sampler.products()["sample"][self.parnames].values[::-self.n_steps]
-        self.samples = points
-        return self.samples
+        for i in range(self.nretries):
+            this_i = choice(range(len(self.gpr.X_train)))
+            this_X = np.copy(self.gpr.X_train[this_i])
+            logpost = self.gpr.y_train[this_i]
+            self.sampler.current_point.add(this_X, LogPosterior(logpost=logpost))
+            # reset the number of samples and run
+            self.sampler.collection.reset()
+            try:
+                self.sampler.run()
+                points = self.sampler.products()["sample"][self.parnames].values[::-self.nsteps]
+                self.samples = points
+                return
+            except:
+                pass
+        # if resample_tries failed raise Warning and pass uniform points
+        print("[proposer] WARNING: MC chain got stuck. Taking random uniform points")
+        self.samples = np.empty((self.nsteps, len(self.bounds)))
+        for i in range(self.nsteps):
+            self.samples[i] = self.random_proposer.get()
+
 
     def update(self, gpr):
         self.samples = []
         surr_info, sampler = generate_sampler_for_gp(
-            gpr, self.bounds, sampler="mcmc", add_options={'max_tries': self.npoints})
+            gpr, self.bounds, sampler="mcmc", add_options={'max_samples': self.npoints, 'max_tries': 10*self.npoints})
+        surr_info
         self.sampler = sampler
         self.parnames = list(surr_info['params'])
         self.gpr = gpr
@@ -218,7 +240,7 @@ class PartialProposer(Proposer):
 
         self.rpf = random_proposal_fraction
         # ToDo: Make this a sample of the prior instead of uniform hypercube.
-        self.random_proposer = UniformProposer(bounds, n_d)
+        self.random_proposer = UniformProposer(bounds)
         self.true_proposer = true_proposer
 
     def get(self, random_state=None):
