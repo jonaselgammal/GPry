@@ -88,7 +88,8 @@ model, gpr, acquisition, convergence, options = run(
 from gpry.run import mc_sample_from_gp
 
 updated_info, sampler = mc_sample_from_gp(
-    model, gpr, convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
+    gpr, model.prior.bounds(confidence_for_unbounded=0.99995),
+    convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
 
 # Plotting
 if is_main_process:

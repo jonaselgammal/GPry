@@ -273,7 +273,7 @@ class GP_Acquisition(object):
                 return x0, -1 * value
 
     def multi_add(self, gpr, n_points=1, random_state=None):
-        """Method to query multiple points where the objective function
+        r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
         changing the hyperparameters of the model.
