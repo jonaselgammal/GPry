@@ -5,6 +5,9 @@ posterior distribution and performance of the algorithm.
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import cm
+
+from gpry.tools import cl_of_nstd, nstd_of_cl
 
 
 def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker="."):
@@ -102,4 +105,43 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     ax.set_ylabel("Value of convergence criterion")
     ax.set_yscale("log")
     ax.grid()
+    return fig, ax
+
+
+def plot_distance_distribution(points, mean, covmat):
+    """
+    Plots a histogram of the distribution of points with respect to the number of standard
+    deviations. Bluer stacks represent newer points.
+
+    Confidence level boundaries (dimension-dependent) are shown too.
+    """
+    dim = np.atleast_2d(points).shape[1]
+    mean = np.atleast_1d(mean)
+    covmat = np.atleast_2d(covmat)
+    assert (mean.shape == (dim,) and covmat.shape == (dim, dim)), \
+        (f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
+         f"mean.shape={mean.shape} and covmat.shape={covmat.shape}.")
+    # Transform to normalised gaussian
+    std_diag = np.diag(np.sqrt(np.diag(covmat)))
+    invstd_diag = np.linalg.inv(std_diag)
+    corrmat = invstd_diag.dot(covmat).dot(invstd_diag)
+    Lscalefree = np.linalg.cholesky(corrmat)
+    L = np.linalg.inv(std_diag).dot(Lscalefree)
+    points_transf = L.dot((points - mean).T).T
+    radial_distances = np.sqrt(np.sum(points_transf**2, axis=1))
+    fig, ax = plt.subplots()
+    cmap = cm.get_cmap('Spectral')
+    colors = [cmap(i / len(points)) for i in range(len(points))]
+    plt.hist(np.atleast_2d(radial_distances), bins=20, color=colors, stacked=True)
+    cls = [cl_of_nstd(1, s) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
+    linestyles = ["-", "--", "-.", ":"]
+    for cl, ls in zip(cls, linestyles):
+        std_of_cl = nstd_of_cl(dim, cl)
+        if std_of_cl < max(radial_distances):
+            plt.axvline(std_of_cl, c="0.75", ls=ls, zorder=-99,
+                        label=f"{cl:.4f}% prob mass")
+    plt.title("# points per standard deviation (bluer=newer)")
+    plt.ylabel("# points")
+    plt.xlabel("# standard deviations")
+    plt.legend()
     return fig, ax

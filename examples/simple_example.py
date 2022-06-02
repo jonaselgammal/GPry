@@ -3,8 +3,8 @@ Example code for a simple GP Characterization of a likelihood.
 """
 
 import os
-from gpry.mpi import is_main_process, mpi_comm
-from gpry.plots import getdist_add_training
+from gpry.mpi import is_main_process
+from gpry.plots import getdist_add_training, plot_distance_distribution
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
@@ -60,7 +60,7 @@ if is_main_process:
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
     cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
-    if not "images" in os.listdir("."):
+    if "images" not in os.listdir("."):
         os.makedirs("images")
     plt.savefig("images/Ground_truth.png", dpi=300)
     plt.close()
@@ -84,11 +84,17 @@ checkpoint = "output/simple"
 model, gpr, acquisition, convergence, options = run(
     model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite")
 
+# Plot distribution of points
+if is_main_process:
+    plot_distance_distribution(gpr.X_train, mean, cov)
+    plt.savefig("images/Distance_distribution.png", dpi=300)
+
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp
 
 updated_info, sampler = mc_sample_from_gp(
     gpr, model.prior.bounds(confidence_for_unbounded=0.99995),
+    paramnames=model.parameterization.sampled_params(),
     convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
 
 # Plotting
@@ -97,7 +103,8 @@ if is_main_process:
     import getdist.plots as gdplt
     gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_gp, list(info["params"]), filled=True)
+    gdplot.triangle_plot(
+        gdsamples_gp, model.parameterization.sampled_params(), filled=True)
     getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Surrogate_triangle.png", dpi=300)
 
