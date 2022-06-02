@@ -143,7 +143,7 @@ class GP_Acquisition(object):
 
         # If nothing is provided for the proposal, we use a uniform sampling
         if self.proposer is None:
-            self.proposer = UniformProposer(self.bounds,self.n_d)
+            self.proposer = UniformProposer(self.bounds)
         else:
             # TODO: Catch error if it's not the right instance
             self.proposer = proposer
