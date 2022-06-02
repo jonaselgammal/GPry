@@ -88,6 +88,8 @@ model, gpr, acquisition, convergence, options = run(
 if is_main_process:
     plot_distance_distribution(gpr.X_train, mean, cov)
     plt.savefig("images/Distance_distribution.png", dpi=300)
+    plot_distance_distribution(gpr.X_train, mean, cov, density=True)
+    plt.savefig("images/Distance_density_distribution.png", dpi=300)
 
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp

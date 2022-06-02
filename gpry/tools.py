@@ -217,3 +217,8 @@ def nstd_of_cl(d, p):
         return np.sqrt(-2 * np.log(1 - p))
     return newton(lambda n: cl_of_nstd(d, n) - p, np.sqrt(d - 1),
                   fprime=lambda n: partial_n_cl_of_nstd(d, n))
+
+
+def volume_sphere(r, dim=3):
+    """Volume of a sphere of radius ``r`` in dimension ``dim``."""
+    return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim
