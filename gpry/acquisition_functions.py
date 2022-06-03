@@ -50,19 +50,16 @@ should not be needed.
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
 from collections.abc import Iterable
-import math
 from inspect import signature
 import warnings
 
 import numpy as np
-from scipy.special import kv, gamma, logsumexp
-from scipy.spatial.distance import pdist, cdist, squareform
 from scipy.stats import norm
 from sklearn.base import clone
 
 
 class Acquisition_Function(metaclass=ABCMeta):
-    """ Base class for all Acquisition Functions (AF's). All acquisition
+    """Base class for all Acquisition Functions (AF's). All acquisition
     functions are derived from this class.
 
     Currently several acquisition functions are supported which should be
@@ -146,8 +143,8 @@ class Acquisition_Function(metaclass=ABCMeta):
         init_sign = signature(init)
         args, varargs = [], []
         for parameter in init_sign.parameters.values():
-            if (parameter.kind != parameter.VAR_KEYWORD
-                    and parameter.name != 'self'):
+            if parameter.kind != parameter.VAR_KEYWORD and \
+               parameter.name != 'self':
                 args.append(parameter.name)
             if parameter.kind == parameter.VAR_POSITIONAL:
                 varargs.append(parameter.name)
@@ -247,7 +244,8 @@ class Acquisition_Function(metaclass=ABCMeta):
             The reshaped array of input data X
         """
         if not isinstance(X, np.ndarray):
-            raise ValueError("Expected a numpy array for X, instead got %s"%X)
+            raise ValueError(
+                "Expected a numpy array for X, instead got %s" % X)
 
         if X.ndim == 1:
             return X.reshape(1, -1)
@@ -256,8 +254,7 @@ class Acquisition_Function(metaclass=ABCMeta):
 
     @property
     def n_dims(self):
-        """Returns the number of non-fixed hyperparameters of the acquisition
-        function."""
+        """Returns the number of non-fixed hyperparameters of the acquisition function."""
         return self.theta.shape[0]
 
     @property
@@ -295,6 +292,7 @@ class Acquisition_Function(metaclass=ABCMeta):
     @theta.setter
     def theta(self, theta):
         """Sets the (flattened, log-transformed) non-fixed hyperparameters.
+
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)
@@ -379,13 +377,13 @@ class Acquisition_Function(metaclass=ABCMeta):
 
 
 class ConstantAcqFunc(Acquisition_Function):
-    """Constant Acquisition function.
+    r"""Constant Acquisition function.
 
     Can be used as part of a product-Composition where it scales the magnitude
     of the other factor or as part of a sum.
 
     .. math::
-        A_f(X) = constant\\_value \\;\\forall\\; X
+        A_f(X) = constant\_value \;\forall\; X
 
     Parameters
     ----------
@@ -447,7 +445,7 @@ class ConstantAcqFunc(Acquisition_Function):
 
 
 class Mu(Acquisition_Function):
-    """:math:`\mu(X)` of the surrogate model.
+    r""":math:`\mu(X)` of the surrogate model.
 
     .. math::
         A_f(X) = a\cdot\mu(X)
@@ -519,7 +517,7 @@ class Mu(Acquisition_Function):
 
 
 class Exponential_mu(Acquisition_Function):
-    """:math:`\exp[\mu(X)]` of the surrogate model.
+    r""":math:`\exp[\mu(X)]` of the surrogate model.
 
     .. math::
         A_f(X) = \exp(a\cdot\mu(X))
@@ -588,7 +586,7 @@ class Exponential_mu(Acquisition_Function):
 
 
 class Std(Acquisition_Function):
-    """:math:`\sigma(X)` of the surrogate model.
+    r""":math:`\sigma(X)` of the surrogate model.
 
     .. math::
         A_f(X) = a\cdot\sigma(X)
@@ -660,7 +658,7 @@ class Std(Acquisition_Function):
 
 
 class Exponential_std(Acquisition_Function):
-    """:math:`\exp[\sigma(X)]` of the surrogate model.
+    r""":math:`\exp[\sigma(X)]` of the surrogate model.
 
     .. math::
         A_f(X) = \exp(a\cdot\sigma(X))
@@ -674,6 +672,7 @@ class Exponential_std(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
@@ -730,7 +729,7 @@ class Exponential_std(Acquisition_Function):
 
 
 class Expected_improvement(Acquisition_Function):
-    """Computes the (negative) Expected improvement function.
+    r"""Computes the (negative) Expected improvement function.
 
     The conditional probability `P(y=f(x) | x)` form a gaussian with a certain
     mean and standard deviation approximated by the model.
@@ -752,6 +751,7 @@ class Expected_improvement(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, xi=0.01, fixed=False, dimension=None):
         self.xi = xi
         self.fixed = fixed
@@ -832,8 +832,9 @@ class Expected_improvement(Acquisition_Function):
     def __repr__(self):
         return "{0:.3f}".format(self.xi)
 
+
 class Log_exp(Acquisition_Function):
-    """Acquisition function which is designed to efficiently sample
+    r"""Acquisition function which is designed to efficiently sample
     log-probability distributions. This is achieved by transforming
     :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
     probability distribution) to logarithmic space using gaussian error
@@ -877,10 +878,10 @@ class Log_exp(Acquisition_Function):
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
-        
+
     dimension: double, default=None
         the dimension of the parameter space used for auto-scaling the zeta
-    
+
     zeta_scaling: double, default=1.1
         the scaling power of the zeta with dimension, if auto-scaled
     """
@@ -890,7 +891,7 @@ class Log_exp(Acquisition_Function):
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
                                  "guess an appropriate zeta value.")
-            self.zeta = self.auto_zeta(dimension,scaling=zeta_scaling)
+            self.zeta = self.auto_zeta(dimension, scaling=zeta_scaling)
         else:
             self.zeta = zeta
         self.sigma_n = sigma_n
@@ -1036,6 +1037,7 @@ class Hyperparameter(namedtuple('Hyperparameter',
         Whether the value of this hyperparameter is fixed, i.e., cannot be
         changed during hyperparameter tuning.
     """
+
     # A raw namedtuple is very memory efficient as it packs the attributes
     # in a struct to get rid of the __dict__ of attributes in particular it
     # does not copy the string for the keys on each instance.
@@ -1054,15 +1056,14 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
-        return (self.name == other.name
-                and self.value_type == other.value_type
-                and self.n_elements == other.n_elements
-                and self.fixed == other.fixed)
+        return (self.name == other.name and
+                self.value_type == other.value_type and
+                self.n_elements == other.n_elements and
+                self.fixed == other.fixed)
 
 
 class Acquisition_Function_Operator(Acquisition_Function):
-    """Base class for all AF operators.
-    """
+    """Base class for all AF operators."""
 
     def __init__(self, k1, k2):
         self.k1 = k1
@@ -1230,8 +1231,8 @@ class Exponentiation(Acquisition_Function):
         """Returns a list of all hyperparameter."""
         r = []
         for hyperparameter in self.acquisition_function.hyperparameters:
-            r.append(Hyperparameter("acquisition_function__"
-                                    + hyperparameter.name,
+            r.append(Hyperparameter("acquisition_function__" +
+                                    hyperparameter.name,
                                     hyperparameter.value_type,
                                     hyperparameter.n_elements))
         return r
@@ -1267,8 +1268,8 @@ class Exponentiation(Acquisition_Function):
     def __eq__(self, b):
         if type(self) != type(b):
             return False
-        return (self.acquisition_function == b.acquisition_function
-                and self.exponent == b.exponent)
+        return (self.acquisition_function == b.acquisition_function and
+                self.exponent == b.exponent)
 
     def __call__(self, X, gp, eval_gradient=False):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
