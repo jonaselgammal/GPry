@@ -36,7 +36,7 @@ def callback(model, current_gpr, gp_acquisition, convergence_criterion, options,
     plt.savefig("images/Distance_distribution.png", dpi=300)
     plot_distance_distribution(current_gpr.X_train, mean, cov, density=True)
     plt.savefig("images/Distance_density_distribution.png", dpi=300)
-    plot_2d_model_acquisition(current_gpr, gp_acquisition)
+    plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
     plt.savefig("images/Contours_model_acquisition.png", dpi=300)
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
     # input("Press key to continue...")

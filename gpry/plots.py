@@ -162,9 +162,11 @@ def plot_distance_distribution(points, mean, covmat, density=False):
 
 # TODO: careful: not sure preprocessing is dealt with correctly,
 #       both when evaluating model and acquisition
-def plot_2d_model_acquisition(gpr, acquisition, res=200):
+def plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
+
+    If ``last_points`` passed, they are highlighted.
     """
     if gpr.d != 2:
         warnings.warn("This plots are only possible in 2d.")
@@ -180,7 +182,7 @@ def plot_2d_model_acquisition(gpr, acquisition, res=200):
     # TODO: maybe change this one below if __call__ method added to GP_acquisition
     acq_value = acquisition.acq_func(xx, gpr, eval_gradient=False)
     # maybe show the next max of acquisition
-    # acq_max = xx[np.argmax(acq_value)]
+    acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
     cmap = [cm.magma, cm.viridis]
     label = ["Model mean (log-posterior)", "Acquisition function value"]
@@ -194,10 +196,23 @@ def plot_2d_model_acquisition(gpr, acquisition, res=200):
         # # Background of the same color as the bottom of the colormap, to avoid "gaps"
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
-        ax[i].scatter(*gpr.X_train.T, color="deepskyblue", marker="o", edgecolors="k")
+        points = ax[i].scatter(
+            *gpr.X_train.T, color="deepskyblue", marker="o", edgecolors="k")
+        # Plot position of next best sample
+        point_max = ax[i].scatter(*acq_max, marker="x", color="k")
+        if last_points is not None:
+            points_last = ax[i].scatter(
+                *last_points.T, color="r", marker="o", edgecolors="k")
+        # Bounds
         ax[i].set_xlim(bounds[0][0], bounds[0][1])
         ax[i].set_ylim(bounds[1][0], bounds[1][1])
         # Remove ticks, for ilustrative purposes only
         # ax[i].set_xticks([], minor=[])
         # ax[i].set_yticks([], minor=[])
-    plt.tight_layout()
+    legend_labels = {points: "Training points"}
+    if last_points is not None:
+        legend_labels[points_last] = "Points added in last iteration."
+    legend_labels[point_max] = "Next optimal location"
+    fig.legend(list(legend_labels), list(legend_labels.values()),
+               loc="lower center", ncol=99)
+    plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
