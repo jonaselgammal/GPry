@@ -2,6 +2,7 @@
 This module provides some plotting routines for plotting the marginalized
 posterior distribution and performance of the algorithm.
 """
+import warnings
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -157,3 +158,46 @@ def plot_distance_distribution(points, mean, covmat, density=False):
     plt.xlabel("Number of standard deviations")
     plt.legend()
     return fig, ax
+
+
+# TODO: careful: not sure preprocessing is dealt with correctly,
+#       both when evaluating model and acquisition
+def plot_2d_model_acquisition(gpr, acquisition, res=200):
+    """
+    Contour plots for model prediction and acquisition function value of a 2d model.
+    """
+    if gpr.d != 2:
+        warnings.warn("This plots are only possible in 2d.")
+        return
+    # TODO: option to restrict bounds to the min square containing traning samples,
+    #       with some padding
+    bounds = gpr.bounds
+    x = np.linspace(bounds[0][0], bounds[0][1], res)
+    y = np.linspace(bounds[1][0], bounds[1][1], res)
+    X, Y = np.meshgrid(x, y)
+    xx = np.vstack([X.reshape(X.size), Y.reshape(Y.size)]).T
+    model_mean = gpr.predict(xx)
+    # TODO: maybe change this one below if __call__ method added to GP_acquisition
+    acq_value = acquisition.acq_func(xx, gpr, eval_gradient=False)
+    # maybe show the next max of acquisition
+    # acq_max = xx[np.argmax(acq_value)]
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    cmap = [cm.magma, cm.viridis]
+    label = ["Model mean (log-posterior)", "Acquisition function value"]
+    for i, Z in enumerate([model_mean, acq_value]):
+        ax[i].set_title(label[i])
+        # Boost the upper limit to avoid truncation errors.
+        Z = np.clip(Z, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
+        levels = np.arange(min(Z) * 0.99, max(Z) * 1.01, (max(Z) - min(Z)) / 500)
+        Z = Z.reshape(*X.shape)
+        norm = cm.colors.Normalize(vmax=Z.max(), vmin=Z.min())
+        # # Background of the same color as the bottom of the colormap, to avoid "gaps"
+        # plt.gca().set_facecolor(cmap[i].colors[0])
+        ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
+        ax[i].scatter(*gpr.X_train.T, color="deepskyblue", marker="o", edgecolors="k")
+        ax[i].set_xlim(bounds[0][0], bounds[0][1])
+        ax[i].set_ylim(bounds[1][0], bounds[1][1])
+        # Remove ticks, for ilustrative purposes only
+        # ax[i].set_xticks([], minor=[])
+        # ax[i].set_yticks([], minor=[])
+    plt.tight_layout()

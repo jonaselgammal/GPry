@@ -4,7 +4,8 @@ Example code for a simple GP Characterization of a likelihood.
 
 import os
 from gpry.mpi import is_main_process
-from gpry.plots import getdist_add_training, plot_distance_distribution
+from gpry.plots import getdist_add_training, plot_distance_distribution, \
+    plot_2d_model_acquisition
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
@@ -84,12 +85,14 @@ checkpoint = "output/simple"
 model, gpr, acquisition, convergence, options = run(
     model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite")
 
-# Plot distribution of points
+# Plot distribution of points, and contours of model and acquisition
 if is_main_process:
     plot_distance_distribution(gpr.X_train, mean, cov)
     plt.savefig("images/Distance_distribution.png", dpi=300)
     plot_distance_distribution(gpr.X_train, mean, cov, density=True)
     plt.savefig("images/Distance_density_distribution.png", dpi=300)
+    plot_2d_model_acquisition(gpr, acquisition)
+    plt.savefig("images/Contours_model_acquisition.png", dpi=300)
 
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp
