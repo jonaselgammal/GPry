@@ -351,7 +351,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             n_left = max_accepted - gpr.n_accepted_evals
         if callback:
             if callback_is_MPI_aware or is_main_process:
-                callback(model, gpr, gp_acquisition, convergence, options, progress,
+                callback(model, gpr, acquisition, convergence, options, progress,
                          old_gpr, new_X, new_y, y_pred)
             mpi_comm.barrier()
         # Calculate convergence and break if the run has converged

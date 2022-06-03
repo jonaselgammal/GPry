@@ -22,7 +22,8 @@ def lkl(x, y):
     return np.log(rv.pdf(np.array([x, y]).T))
 
 
-def callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion):
+def callback(model, current_gpr, gp_acquisition, convergence_criterion, options, progress,
+             previous_gpr, new_X, new_y, y_pred):
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
     print(current_gpr)
     print(previous_gpr)
@@ -30,11 +31,19 @@ def callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion):
     for x, y in zip(new_X, new_y):
         print(x, y)
     print(convergence_criterion)
+    # Plot distribution of points, and contours of model and acquisition
+    plot_distance_distribution(current_gpr.X_train, mean, cov)
+    plt.savefig("images/Distance_distribution.png", dpi=300)
+    plot_distance_distribution(current_gpr.X_train, mean, cov, density=True)
+    plt.savefig("images/Distance_density_distribution.png", dpi=300)
+    plot_2d_model_acquisition(current_gpr, gp_acquisition)
+    plt.savefig("images/Contours_model_acquisition.png", dpi=300)
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
+    # input("Press key to continue...")
 
 
 # Uncomment this line to disable the example callback function above
-callback = None
+callback = callback
 
 #############################################################
 # Plotting the likelihood
@@ -84,15 +93,6 @@ from gpry.run import run
 checkpoint = "output/simple"
 model, gpr, acquisition, convergence, options = run(
     model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite")
-
-# Plot distribution of points, and contours of model and acquisition
-if is_main_process:
-    plot_distance_distribution(gpr.X_train, mean, cov)
-    plt.savefig("images/Distance_distribution.png", dpi=300)
-    plot_distance_distribution(gpr.X_train, mean, cov, density=True)
-    plt.savefig("images/Distance_density_distribution.png", dpi=300)
-    plot_2d_model_acquisition(gpr, acquisition)
-    plt.savefig("images/Contours_model_acquisition.png", dpi=300)
 
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp
