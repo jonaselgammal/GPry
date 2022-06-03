@@ -15,6 +15,7 @@ import numpy as np
 from random import choice
 from gpry.mc import generate_sampler_for_gp
 from cobaya.model import LogPosterior
+from gpry.tools import check_params_names_len
 
 
 class Proposer(metaclass=ABCMeta):
@@ -34,6 +35,7 @@ class Proposer(metaclass=ABCMeta):
             number generator.
         """
 
+    @abstractmethod
     def update(self, gpr):
         """
         Updates the internal GP instance if it has been updated with new data.
@@ -44,7 +46,7 @@ class Proposer(metaclass=ABCMeta):
         gpr : GaussianProcessRegressor
         The gpr instance that has been updated.
         """
-        pass
+        return
 
 
 class UniformProposer(Proposer):
@@ -66,6 +68,9 @@ class UniformProposer(Proposer):
 
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
+        
+    def update(self, gpr):
+        return
 
 
 class MeanCovProposer(Proposer):
@@ -95,6 +100,8 @@ class MeanCovProposer(Proposer):
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
 
+    def update(self, gpr):
+        return
 
 class MeanAutoCovProposer(Proposer):
     """
@@ -125,6 +132,8 @@ class MeanAutoCovProposer(Proposer):
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
 
+    def update(self, gpr):
+        return
 
 class FuncProposer(Proposer):
 
@@ -134,6 +143,8 @@ class FuncProposer(Proposer):
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
 
+    def update(self, gpr):
+        return
 
 class SmallChainProposer(Proposer):
     """
@@ -160,13 +171,15 @@ class SmallChainProposer(Proposer):
         from a uniform distribution are returned.
     """
 
-    def __init__(self, bounds, npoints=100, nsteps=20, nretries=3):
+    def __init__(self, bounds, cmat=None, parnames=None, npoints=100, nsteps=10, nretries=3):
         self.samples = []
         self.bounds = bounds
         self.nretries = nretries
         self.npoints = npoints
         self.nsteps = nsteps
         self.random_proposer = UniformProposer(bounds)
+        self.cmat=cmat
+        self.parnames = parnames
 
     def get(self, random_state=None):
         if len(self.samples) > 0:
@@ -198,15 +211,16 @@ class SmallChainProposer(Proposer):
         for i in range(self.nsteps):
             self.samples[i] = self.random_proposer.get()
 
-
     def update(self, gpr):
         self.samples = []
+        self.gpr = gpr
+        opts= {'max_samples': self.npoints, 'max_tries': 10*self.npoints}
+        if self.cmat is not None:
+          opts.update({'covmat':self.cmat,'covmat_params':check_params_names_len(self.parnames, len(self.bounds))})
         surr_info, sampler = generate_sampler_for_gp(
-            gpr, self.bounds, sampler="mcmc", add_options={'max_samples': self.npoints, 'max_tries': 10*self.npoints})
-        surr_info
+            gpr, self.bounds, paramnames = self.parnames, sampler="mcmc", add_options=opts)
         self.sampler = sampler
         self.parnames = list(surr_info['params'])
-        self.gpr = gpr
 
 
 class PartialProposer(Proposer):
@@ -230,7 +244,6 @@ class PartialProposer(Proposer):
     # Either sample from true_proposer, or give a random prior sample
     def __init__(self, bounds, true_proposer, random_proposal_fraction=0.25):
 
-        n_d = len(bounds)
         if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
             raise ValueError(
                 "Cannot pass a fraction outside of [0,1]. "
@@ -251,8 +264,6 @@ class PartialProposer(Proposer):
 
     def update(self, gpr):
         self.true_proposer.update(gpr)
-
-
 
 class Centroids(Proposer):
     """
@@ -301,3 +312,4 @@ class Centroids(Proposer):
     def update(self, gpr):
         # Get training locations from gpr and save them
         self.training = gpr.X_train
+        return

@@ -4,6 +4,7 @@ from cobaya.output import get_output
 from cobaya.sampler import get_sampler
 from gpry.tools import cobaya_generate_gp_input, mcmc_info_from_run, \
     polychord_info_from_run
+import warnings
 
 def generate_sampler_for_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
                       output=None, add_options=None, restart=False):

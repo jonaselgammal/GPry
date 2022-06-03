@@ -196,25 +196,29 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                      f"'Log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                from gpry.proposal import MeanAutoCovProposer, FuncProposer
-                print("RUNNING WITH MEAN == ",options.get("prop_mean",model.prior.reference()))
-                prop = MeanAutoCovProposer(mean=options.get("prop_mean",model.prior.reference()), model_info=model.info())
-                from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-                from cobaya.tools import resolve_packages_path
-                cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
-                #mean = model.prior.reference()
-                mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
- 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
- 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
- 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
- 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
- 6.5477914e-01,2.0630269e+00])
-                if np.any(d!=0 for d in cmat_dir['covmat'].shape):
-                  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
+                if "proposer" in options:
+                  prop = options["proposer"]
                 else:
-                  prop_fun = model.prior.sample
-                prop = FuncProposer(prop_fun)
-                #print([[prop_fun(),prop.get()] for _ in range(100)])
+                  from gpry.proposal import MeanAutoCovProposer, FuncProposer
+                  m1 = mean=options.get("prop_mean",model.prior.reference())
+                  print("RUNNING WITH MEAN == ",m1)
+                  prop = MeanAutoCovProposer(m1, model_info=model.info())
+                #from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+                #from cobaya.tools import resolve_packages_path
+                #cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
+                ##mean = model.prior.reference()
+                #mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
+# 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
+# 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
+# 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
+# 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
+# 6.5477914e-01,2.0630269e+00])
+                #assert(np.allclose(m1,mean,rtol=1e-10,atol=1e-15))
+                #if np.any(d!=0 for d in cmat_dir['covmat'].shape):
+                #  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
+                #else:
+                #  prop_fun = model.prior.sample
+                #prop = FuncProposer(prop_fun)
 
                 acquisition = GP_Acquisition(bounds,
                                              proposer=prop,
@@ -289,6 +293,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             print("Initialized GPry.")
             if not comes_from_checkpoint:
                 print("Starting by drawing initial samples.")
+
     if multiple_processes:
         n_initial, max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
             (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
@@ -316,10 +321,13 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if verbose > 2:
                 print("Initial samples drawn, starting with Bayesian "
                       "optimization loop.")
+
     if multiple_processes:
-        n_finite = mpi_comm.bcast(len(gpr.y_train) if is_main_process else None)
-    else:
-        n_finite = len(gpr.y_train)
+        gpr = mpi_comm.bcast(gpr if is_main_process else None)
+ 
+    acquisition.proposer.update(gpr)
+    n_finite = len(gpr.y_train)
+
     # Run bayesian optimization loop
     n_iterations = int((max_points - n_finite) / n_points_per_acq)
     n_evals_per_acq_per_process = \
@@ -341,7 +349,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                           f"(of at most {n_iterations} iterations) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
-        gpr = mpi_comm.bcast(gpr if is_main_process else None)
+
         # Acquire new points in parallel with MPI-aware random state
         with TimerCounter(gpr) as timer_acq:
             new_X, y_pred, acq_vals = acquisition.multi_add(
@@ -380,6 +388,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 callback(model, gpr, gp_acquisition, convergence, options, progress,
                          old_gpr, new_X, new_y, y_pred)
             mpi_comm.barrier()
+
+        acquisition.proposer.update(gpr)
 
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
@@ -423,8 +433,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     if is_main_process:
         _save_checkpoint(checkpoint, model, gpr, acquisition, convergence, options,
                          progress, plots=True)
-    if n_left <= 0 and not isinstance(convergence, gpryconv.DontConverge) \
-       and is_main_process and verbose > 1:
+    if n_left <= 0 and is_main_process \
+        and not isinstance(convergence, gpryconv.DontConverge) and verbose > 1:
         warnings.warn("The maximum number of accepted points was reached before "
                       "convergence. Either increase max_accepted or try to "
                       "choose a smaller prior.")
@@ -519,6 +529,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
     # Initial samples loop. The initial samples are drawn from the prior
     # and according to the distribution of the prior.
 
+    n_d = gpr.d
     with Timer() as timer_truth:
         for i in range(n_iterations_before_giving_up):
             X_init_loop = np.empty((0, n_d))
