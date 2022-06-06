@@ -160,99 +160,99 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                     if np.any(checkpoint_files) and verbose > 1:
                         print("warning: Found checkpoint files but they were "
                               "incomplete. Ignoring them...")
-            # Check model
-            if not isinstance(model, Model):
-                raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
-            try:
-                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-            except:
-                raise RuntimeError("There seems to be something wrong with "
-                                   "the model instance...")
+        # Check model
+        if not isinstance(model, Model):
+            raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+        try:
+            prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+        except:
+            raise RuntimeError("There seems to be something wrong with "
+                               "the model instance...")
 
-            # Construct GP if it's not already constructed
-            if isinstance(gp, str):
-                if gp not in ["RBF", "Matern"]:
-                    raise ValueError("Supported standard kernels are 'RBF' "
-                                     f"and Matern, got {gp}")
-                gpr = GaussianProcessRegressor(
-                    kernel=gp,
-                    n_restarts_optimizer=10 + int(np.sqrt(model.prior.d())),
-                    preprocessing_X=Normalize_bounds(prior_bounds),
-                    preprocessing_y=Normalize_y(),
-                    bounds=prior_bounds,
-                    verbose=verbose
-                )
+        # Construct GP if it's not already constructed
+        if isinstance(gp, str):
+            if gp not in ["RBF", "Matern"]:
+                raise ValueError("Supported standard kernels are 'RBF' "
+                                 f"and Matern, got {gp}")
+            gpr = GaussianProcessRegressor(
+                kernel=gp,
+                n_restarts_optimizer=10 + int(np.sqrt(model.prior.d())),
+                preprocessing_X=Normalize_bounds(prior_bounds),
+                preprocessing_y=Normalize_y(),
+                bounds=prior_bounds,
+                verbose=verbose
+            )
 
-            elif isinstance(gp, GaussianProcessRegressor):
-                gpr = gp
+        elif isinstance(gp, GaussianProcessRegressor):
+            gpr = gp
+        else:
+            raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern'"
+                            f", got {gp}")
+
+        # Construct the acquisition object if it's not already constructed
+        if isinstance(gp_acquisition, str):
+            if gp_acquisition not in ["Log_exp"]:
+                raise ValueError("Supported acquisition function is "
+                                 f"'Log_exp', got {gp_acquisition}")
+
+            bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+            if "proposer" in options:
+              prop = options["proposer"]
             else:
-                raise TypeError("gp should be a GP regressor, 'RBF' or 'Matern'"
-                                f", got {gp}")
-
-            # Construct the acquisition object if it's not already constructed
-            if isinstance(gp_acquisition, str):
-                if gp_acquisition not in ["Log_exp"]:
-                    raise ValueError("Supported acquisition function is "
-                                     f"'Log_exp', got {gp_acquisition}")
-
-                bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                if "proposer" in options:
-                  prop = options["proposer"]
-                else:
-                  from gpry.proposal import MeanAutoCovProposer, FuncProposer
-                  m1 = mean=options.get("prop_mean",model.prior.reference())
-                  print("RUNNING WITH MEAN == ",m1)
-                  prop = MeanAutoCovProposer(m1, model_info=model.info())
-                #from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-                #from cobaya.tools import resolve_packages_path
-                #cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
-                ##mean = model.prior.reference()
-                #mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
+              from gpry.proposal import MeanAutoCovProposer, FuncProposer
+              m1 = mean=options.get("prop_mean",model.prior.reference())
+              print("RUNNING WITH MEAN == ",m1)
+              prop = MeanAutoCovProposer(m1, model_info=model.info())
+            #from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+            #from cobaya.tools import resolve_packages_path
+            #cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
+            ##mean = model.prior.reference()
+            #mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
 # 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
 # 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
 # 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
 # 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
 # 6.5477914e-01,2.0630269e+00])
-                #assert(np.allclose(m1,mean,rtol=1e-10,atol=1e-15))
-                #if np.any(d!=0 for d in cmat_dir['covmat'].shape):
-                #  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
-                #else:
-                #  prop_fun = model.prior.sample
-                #prop = FuncProposer(prop_fun)
+            #assert(np.allclose(m1,mean,rtol=1e-10,atol=1e-15))
+            #if np.any(d!=0 for d in cmat_dir['covmat'].shape):
+            #  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
+            #else:
+            #  prop_fun = model.prior.sample
+            #prop = FuncProposer(prop_fun)
 
-                acquisition = GP_Acquisition(bounds,
-                                             proposer=prop,
-                                             acq_func=gp_acquisition,
-                                             acq_optimizer="fmin_l_bfgs_b",
-                                             n_restarts_optimizer=5 * model.prior.d(),
-                                             n_repeats_propose=10,
-                                             preprocessing_X=Normalize_bounds(
-                                                 prior_bounds),
-                                             verbose=verbose,
-                                             random_proposal_fraction=options.get("random_proposal_fraction", 0.),
-                                             zeta_scaling=options.get("zeta_scaling",1.1))
-            elif isinstance(gp_acquisition, GP_Acquisition):
-                acquisition = gp_acquisition
-            else:
-                raise TypeError("gp_acquisition should be an Acquisition "
-                                f"object or 'Log_exp', got {gp_acquisition}")
+            acquisition = GP_Acquisition(bounds,
+                                         proposer=prop,
+                                         acq_func=gp_acquisition,
+                                         acq_optimizer="fmin_l_bfgs_b",
+                                         n_restarts_optimizer=5 * model.prior.d(),
+                                         n_repeats_propose=10,
+                                         preprocessing_X=Normalize_bounds(
+                                             prior_bounds),
+                                         verbose=verbose,
+                                         random_proposal_fraction=options.get("random_proposal_fraction", 0.),
+                                         zeta_scaling=options.get("zeta_scaling",1.1))
+        elif isinstance(gp_acquisition, GP_Acquisition):
+            acquisition = gp_acquisition
+        else:
+            raise TypeError("gp_acquisition should be an Acquisition "
+                            f"object or 'Log_exp', got {gp_acquisition}")
 
-            # Construct the convergence criterion
-            if isinstance(convergence_criterion, str):
-                try:
-                    conv_class = getattr(gpryconv, convergence_criterion)
-                except AttributeError:
-                    raise ValueError(
-                        f"Unknown convergence criterion {convergence_criterion}. "
-                        f"Available convergence criteria: {gpryconv.builtin_names()}")
-                convergence = conv_class(model.prior, convergence_options or {})
-            elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
-                convergence = convergence_criterion
-            else:
-                raise TypeError("convergence_criterion should be a "
-                                "Convergence_criterion object or "
-                                f"{gpryconv.builtin_names()}, got "
-                                f"{convergence_criterion}")
+        # Construct the convergence criterion
+        if isinstance(convergence_criterion, str):
+            try:
+                conv_class = getattr(gpryconv, convergence_criterion)
+            except AttributeError:
+                raise ValueError(
+                    f"Unknown convergence criterion {convergence_criterion}. "
+                    f"Available convergence criteria: {gpryconv.builtin_names()}")
+            convergence = conv_class(model.prior, convergence_options or {})
+        elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
+            convergence = convergence_criterion
+        else:
+            raise TypeError("convergence_criterion should be a "
+                            "Convergence_criterion object or "
+                            f"{gpryconv.builtin_names()}, got "
+                            f"{convergence_criterion}")
 
         # Read in options for the run
         if options is None:
@@ -298,6 +298,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         n_initial, max_init, max_points, max_accepted, n_points_per_acq = mpi_comm.bcast(
             (n_initial, max_init, max_points, max_accepted, n_points_per_acq)
             if is_main_process else None)
+
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
         acquisition = mpi_comm.bcast(acquisition if is_main_process else None)
         convergence_is_MPI_aware = mpi_comm.bcast(
@@ -383,6 +384,10 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         #if multiple_processes:
         #    gpr, old_gpr, new_X, new_y, y_pred, convergence = mpi_comm.bcast(
         #        (gpr, old_gpr, new_X, new_y, y_pred, convergence) if is_main_process else None)
+        if multiple_processes and (callback_is_MPI_aware or convergence_is_MPI_aware):
+            old_gpr = mpi_comm.bcast(old_gpr if is_main_process else None)
+            new_y = mpi_comm.bcast(new_y if is_main_process else None)
+            y_pred = mpi_comm.bcast(y_pred if is_main_process else None)
         if callback:
             if callback_is_MPI_aware or is_main_process:
                 callback(model, gpr, gp_acquisition, convergence, options, progress,
@@ -408,14 +413,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         else:  # run by all processes
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
-            #if multiple_processes:
-            #    gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
-            #        (gpr, old_gpr, new_X, new_y, y_pred) if is_main_process else None)
             try:
                 with TimerCounter(gpr, old_gpr) as timer_convergence:
                     is_converged = convergence.is_converged(
                         gpr, old_gpr, new_X, new_y, y_pred)
-                progress.add_convergence(timer_convergence.time, timer_convergence.evals)
+                progress.add_convergence(timer_convergence.time, timer_convergence.evals,
+                        convergence.last_value)
             except gpryconv.ConvergenceCheckError:
                 is_converged = False
         sync_processes()
@@ -493,6 +496,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
     The gpr with the samples appended to (possibly already existing) samples
     and refit hyperparameters.
     """
+    print("SAMPLING INITIAL SAMPLES")
     max_init = max_init or 10 * model.prior.d() * n_initial
     if progress:
         progress.add_iteration()
