@@ -191,35 +191,22 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
         # Construct the acquisition object if it's not already constructed
         if isinstance(gp_acquisition, str):
-            if gp_acquisition not in ["Log_exp"]:
+            if gp_acquisition not in ["Log_exp","Nonlinear_log_exp"]:
                 raise ValueError("Supported acquisition function is "
-                                 f"'Log_exp', got {gp_acquisition}")
+                                 f"'Log_exp', 'Nonlinear_log_exp', got {gp_acquisition}")
 
             bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             if "proposer" in options:
+              if isinstance(options['proposer'],str):
+                if 'mean' in options['proposer'] or 'cov' in options['proposer']:
+                  from gpry.proposal import MeanAutoCovProposer, FuncProposer
+                  m1 = options.get("prop_mean",model.prior.reference())
+                  prop = MeanAutoCovProposer(m1, model_info=model.info())
+                else:
+                  raise Exception("Provide a proposer or a string")
               prop = options["proposer"]
             else:
-              from gpry.proposal import MeanAutoCovProposer, FuncProposer
-              m1 = mean=options.get("prop_mean",model.prior.reference())
-              print("RUNNING WITH MEAN == ",m1)
-              prop = MeanAutoCovProposer(m1, model_info=model.info())
-            #from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-            #from cobaya.tools import resolve_packages_path
-            #cmat_dir = get_best_covmat(model.info(), packages_path=resolve_packages_path())
-            ##mean = model.prior.reference()
-            #mean = np.array([3.0484112e+00,9.6422960e-01,1.0415373e+00,2.2376425e-02,1.2020768e-01,
-# 5.7868808e-02,9.9909205e-01,9.9933445e-01,9.9792794e-01,5.1526735e+01,
-# 3.4999962e-01,7.1078026e+00,1.6779064e+00,8.8553138e+00,1.1295051e+01,
-# 1.9879684e+01,9.2369150e+01,2.3477665e+02,4.2266440e+01,4.0650338e+01,
-# 1.0849452e+02,1.1645506e-01,1.5337531e-01,4.7528197e-01,2.3296911e-01,
-# 6.5477914e-01,2.0630269e+00])
-            #assert(np.allclose(m1,mean,rtol=1e-10,atol=1e-15))
-            #if np.any(d!=0 for d in cmat_dir['covmat'].shape):
-            #  prop_fun = partial(scipy.stats.multivariate_normal.rvs,mean=mean,cov=cmat_dir['covmat'])
-            #else:
-            #  prop_fun = model.prior.sample
-            #prop = FuncProposer(prop_fun)
-
+              prop = None
             acquisition = GP_Acquisition(bounds,
                                          proposer=prop,
                                          acq_func=gp_acquisition,
@@ -229,13 +216,12 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                          preprocessing_X=Normalize_bounds(
                                              prior_bounds),
                                          verbose=verbose,
-                                         random_proposal_fraction=options.get("random_proposal_fraction", 0.),
                                          zeta_scaling=options.get("zeta_scaling",1.1))
         elif isinstance(gp_acquisition, GP_Acquisition):
             acquisition = gp_acquisition
         else:
             raise TypeError("gp_acquisition should be an Acquisition "
-                            f"object or 'Log_exp', got {gp_acquisition}")
+                            f"object or 'Log_exp', or 'Nonlinear_log_exp', got {gp_acquisition}")
 
         # Construct the convergence criterion
         if isinstance(convergence_criterion, str):
@@ -390,7 +376,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             y_pred = mpi_comm.bcast(y_pred if is_main_process else None)
         if callback:
             if callback_is_MPI_aware or is_main_process:
-                callback(model, gpr, gp_acquisition, convergence, options, progress,
+                callback(model, gpr, acquisition, convergence, options, progress,
                          old_gpr, new_X, new_y, y_pred)
             mpi_comm.barrier()
 

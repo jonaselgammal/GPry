@@ -9,6 +9,8 @@ from gpry.mpi import mpi_rank
 from cobaya.model import Model
 import warnings
 from scipy.linalg import eigh
+from scipy.special import erf, gamma
+from scipy.optimize import newton
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -173,6 +175,53 @@ def is_valid_covmat(covmat):
         return False
     except (AttributeError, np.linalg.LinAlgError):
         return False
-        
 
 
+def cl_of_nstd(d, n):
+    """
+    Confidence level of hypervolume corresponding to n std's distance
+    on a normalised multivariate Gaussian of dimension d.
+
+    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
+    """
+    if d == 1:
+        return erf(n / np.sqrt(2))
+    if d == 2:
+        return 1 - np.exp(-n**2 / 2)
+    # d > 2
+    return cl_of_nstd(d - 2, n) - \
+        (n / np.sqrt(2))**(d - 2) * np.exp(-n**2 / 2) / gamma(d / 2)
+
+
+def partial_n_cl_of_nstd(d, n):
+    """
+    Derivative w.r.t. n of `cl_of_std`.
+
+    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
+    """
+    if d == 1:
+        return np.sqrt(2 / np.pi) * np.exp(-n**2 / 2)
+    if d == 2:
+        return n * np.exp(-n**2 / 2)
+    # d > 2
+    return partial_n_cl_of_nstd(d - 2, n) + \
+        (n ** (d - 3) * (n**2 - d + 2) * 2**(1 - d / 2) *
+         np.exp(-n**2 / 2) / gamma(d / 2))
+
+
+def nstd_of_cl(d, p):
+    """
+    Radius of hypervolume for a given confidence level in units of std's of a
+    normalised multivariate Gaussian of dimension d.
+
+    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
+    """
+    if d == 2:  # analytic!
+        return np.sqrt(-2 * np.log(1 - p))
+    return newton(lambda n: cl_of_nstd(d, n) - p, np.sqrt(d - 1),
+                  fprime=lambda n: partial_n_cl_of_nstd(d, n))
+
+
+def volume_sphere(r, dim=3):
+    """Volume of a sphere of radius ``r`` in dimension ``dim``."""
+    return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim

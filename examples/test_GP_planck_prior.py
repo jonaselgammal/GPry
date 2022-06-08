@@ -66,9 +66,9 @@ doplot = False
 #cname = "check26"
 #ch_name2 = "chains/GP30"
 # 5) 3
-iplot = "prior3"
-cname = "check_prior3"
-ch_name2 = "chains/GP_prior3"
+iplot = "prior_0806"
+cname = "check_prior_0806"
+ch_name2 = "chains/GP_prior_0806"
 
 stype = "polychord"
 
@@ -183,7 +183,7 @@ def callback(model, gpr, gp_acquisition, convergence, options, something,
 if np.all(_check_checkpoint(cname)):
   _, gpr, _, _, _ = _read_checkpoint(cname)
 else:
-  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000,'n_initial':50,'random_proposal_fraction':0.0,'zeta_scaling':1.1,'prop_mean':bf},callback=callback,checkpoint=cname,convergence_options={'n_correct':30,'threshold':0.01,'abstol':0.00},load_checkpoint="overwrite")
+  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000,'n_initial':50,'zeta_scaling':1.1,'prop_mean':bf,'proposer':'meancovmat'},callback=callback,checkpoint=cname,convergence_options={'n_correct':30,'threshold':0.01,'abstol':0.00},load_checkpoint="overwrite")
 #zeta_scaling=1.1
 
 

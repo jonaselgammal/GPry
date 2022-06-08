@@ -50,19 +50,22 @@ should not be needed.
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
 from collections.abc import Iterable
-import math
 from inspect import signature
 import warnings
 
 import numpy as np
-from scipy.special import kv, gamma, logsumexp
-from scipy.spatial.distance import pdist, cdist, squareform
 from scipy.stats import norm
 from sklearn.base import clone
 
+def safe_log_expm1(x):
+    mask = x<1
+    ret = np.empty_like(x)
+    ret[mask] = np.log(np.expm1(x[mask]))
+    ret[~mask] = x[~mask] + np.log1p(-np.exp(-x[~mask]))
+    return ret
 
 class Acquisition_Function(metaclass=ABCMeta):
-    """ Base class for all Acquisition Functions (AF's). All acquisition
+    """Base class for all Acquisition Functions (AF's). All acquisition
     functions are derived from this class.
 
     Currently several acquisition functions are supported which should be
@@ -146,8 +149,8 @@ class Acquisition_Function(metaclass=ABCMeta):
         init_sign = signature(init)
         args, varargs = [], []
         for parameter in init_sign.parameters.values():
-            if (parameter.kind != parameter.VAR_KEYWORD
-                    and parameter.name != 'self'):
+            if parameter.kind != parameter.VAR_KEYWORD and \
+               parameter.name != 'self':
                 args.append(parameter.name)
             if parameter.kind == parameter.VAR_POSITIONAL:
                 varargs.append(parameter.name)
@@ -247,7 +250,8 @@ class Acquisition_Function(metaclass=ABCMeta):
             The reshaped array of input data X
         """
         if not isinstance(X, np.ndarray):
-            raise ValueError("Expected a numpy array for X, instead got %s"%X)
+            raise ValueError(
+                "Expected a numpy array for X, instead got %s" % X)
 
         if X.ndim == 1:
             return X.reshape(1, -1)
@@ -256,8 +260,7 @@ class Acquisition_Function(metaclass=ABCMeta):
 
     @property
     def n_dims(self):
-        """Returns the number of non-fixed hyperparameters of the acquisition
-        function."""
+        """Returns the number of non-fixed hyperparameters of the acquisition function."""
         return self.theta.shape[0]
 
     @property
@@ -295,6 +298,7 @@ class Acquisition_Function(metaclass=ABCMeta):
     @theta.setter
     def theta(self, theta):
         """Sets the (flattened, log-transformed) non-fixed hyperparameters.
+
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)
@@ -379,13 +383,13 @@ class Acquisition_Function(metaclass=ABCMeta):
 
 
 class ConstantAcqFunc(Acquisition_Function):
-    """Constant Acquisition function.
+    r"""Constant Acquisition function.
 
     Can be used as part of a product-Composition where it scales the magnitude
     of the other factor or as part of a sum.
 
     .. math::
-        A_f(X) = constant\\_value \\;\\forall\\; X
+        A_f(X) = constant\_value \;\forall\; X
 
     Parameters
     ----------
@@ -447,7 +451,7 @@ class ConstantAcqFunc(Acquisition_Function):
 
 
 class Mu(Acquisition_Function):
-    """:math:`\mu(X)` of the surrogate model.
+    r""":math:`\mu(X)` of the surrogate model.
 
     .. math::
         A_f(X) = a\cdot\mu(X)
@@ -519,7 +523,7 @@ class Mu(Acquisition_Function):
 
 
 class Exponential_mu(Acquisition_Function):
-    """:math:`\exp[\mu(X)]` of the surrogate model.
+    r""":math:`\exp[\mu(X)]` of the surrogate model.
 
     .. math::
         A_f(X) = \exp(a\cdot\mu(X))
@@ -588,7 +592,7 @@ class Exponential_mu(Acquisition_Function):
 
 
 class Std(Acquisition_Function):
-    """:math:`\sigma(X)` of the surrogate model.
+    r""":math:`\sigma(X)` of the surrogate model.
 
     .. math::
         A_f(X) = a\cdot\sigma(X)
@@ -660,7 +664,7 @@ class Std(Acquisition_Function):
 
 
 class Exponential_std(Acquisition_Function):
-    """:math:`\exp[\sigma(X)]` of the surrogate model.
+    r""":math:`\exp[\sigma(X)]` of the surrogate model.
 
     .. math::
         A_f(X) = \exp(a\cdot\sigma(X))
@@ -674,6 +678,7 @@ class Exponential_std(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, a=1.0, fixed=False, dimension=None):
         self.a = a
         self.fixed = fixed
@@ -730,7 +735,7 @@ class Exponential_std(Acquisition_Function):
 
 
 class Expected_improvement(Acquisition_Function):
-    """Computes the (negative) Expected improvement function.
+    r"""Computes the (negative) Expected improvement function.
 
     The conditional probability `P(y=f(x) | x)` form a gaussian with a certain
     mean and standard deviation approximated by the model.
@@ -752,6 +757,7 @@ class Expected_improvement(Acquisition_Function):
     fixed: bool, default=False,
         whether the constant value shall be fixed or not.
     """
+
     def __init__(self, xi=0.01, fixed=False, dimension=None):
         self.xi = xi
         self.fixed = fixed
@@ -832,26 +838,12 @@ class Expected_improvement(Acquisition_Function):
     def __repr__(self):
         return "{0:.3f}".format(self.xi)
 
-class Log_exp(Acquisition_Function):
-    """Acquisition function which is designed to efficiently sample
+
+class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
+    r"""Acquisition function which is designed to efficiently sample
     log-probability distributions. This is achieved by transforming
     :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
-    probability distribution) to logarithmic space using gaussian error
-    propagation. This gives the acquisition function
-
-    .. math::
-
-        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot (\sigma(X)-\sigma_n)
-
-    For numerical convenience we take the log of this expression which yields:
-
-    .. math::
-
-        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
-
-    .. note::
-        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
-        GP regressor which follows the **log**-probability distribution.
+    probability distribution) to logarithmic space.
 
     Parameters
     ----------
@@ -877,25 +869,30 @@ class Log_exp(Acquisition_Function):
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
-        
+
     dimension: double, default=None
         the dimension of the parameter space used for auto-scaling the zeta
-    
+
     zeta_scaling: double, default=1.1
         the scaling power of the zeta with dimension, if auto-scaled
     """
 
-    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None, zeta_scaling=1.1):
+    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None,
+                 zeta_scaling=1.1, linear=True):
         if zeta is None:
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
                                  "guess an appropriate zeta value.")
-            self.zeta = self.auto_zeta(dimension,scaling=zeta_scaling)
+            self.zeta = self.auto_zeta(dimension, scaling=zeta_scaling)
         else:
             self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
         self.hasgradient = True
+
+    @abstractmethod
+    def f(mu, std, zeta):
+        return
 
     @property
     def hyperparameter_zeta(self):
@@ -948,26 +945,27 @@ class Log_exp(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True,doprint=is_verbose)
 
+        noise_var = gp.alpha
         if self.sigma_n is None:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                sigma_n = np.mean(sigma_n)
+                # TODO: prob not correct, but not used
+                noise_var += np.mean(sigma_n)**2
+            else:
+                noise_var += sigma_n**2
         else:
-            sigma_n = self.sigma_n
+            noise_var = self.sigma_n**2
         zeta = self.zeta
 
-        mask = (std > sigma_n) & np.isfinite(mu)
-        if is_report_infinite:
-          print("s" if std>sigma_n else "m",end="|")
-        #if not np.all(mask):
+        var = std**2 - noise_var
+        mask = (var > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
         baseline = gp.y_max
-        if is_verbose:
-          print("acq.py :: X,m,s,s_n,m-b,zeta*(m-b),log(s-s_n)",X,mu,std,sigma_n, mu-baseline,2*zeta*(mu[mask]-baseline),np.log(std[mask]-sigma_n))
+
         # Alternative option, but found not to work extremely well
         #baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):
-            values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*(mu[mask]-baseline)
+            values[mask] = self.f(mu[mask] - baseline, np.sqrt(var[mask]), zeta)
         if np.any(~mask):
             values[~mask] = - np.inf
         if eval_gradient:
@@ -990,6 +988,36 @@ class Log_exp(Acquisition_Function):
 
     def __repr__(self):
         return "{0:.3f}".format(self.zeta)
+
+
+class Nonlinear_log_exp(Base_log_exp):
+
+    @staticmethod
+    def f(mu, std, zeta):
+        """Exponentiated log-error bar"""
+        return 2 * zeta * mu + safe_log_expm1(std)
+
+class Log_exp(Base_log_exp):
+    r"""This gives the acquisition function
+
+    .. math::
+
+        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot (\sigma(X)-\sigma_n)
+
+    For numerical convenience we take the log of this expression which yields:
+
+    .. math::
+
+        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
+
+    .. note::
+        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
+        GP regressor which follows the **log**-probability distribution."""
+
+    @staticmethod
+    def f(mu, std, zeta):
+        """Linearized exponentiated log-error bar"""
+        return 2 * zeta * mu + np.log(std)
 
 
 # Function for determining whether an object is an acquisition function
@@ -1041,6 +1069,7 @@ class Hyperparameter(namedtuple('Hyperparameter',
         Whether the value of this hyperparameter is fixed, i.e., cannot be
         changed during hyperparameter tuning.
     """
+
     # A raw namedtuple is very memory efficient as it packs the attributes
     # in a struct to get rid of the __dict__ of attributes in particular it
     # does not copy the string for the keys on each instance.
@@ -1059,15 +1088,14 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
-        return (self.name == other.name
-                and self.value_type == other.value_type
-                and self.n_elements == other.n_elements
-                and self.fixed == other.fixed)
+        return (self.name == other.name and
+                self.value_type == other.value_type and
+                self.n_elements == other.n_elements and
+                self.fixed == other.fixed)
 
 
 class Acquisition_Function_Operator(Acquisition_Function):
-    """Base class for all AF operators.
-    """
+    """Base class for all AF operators."""
 
     def __init__(self, k1, k2):
         self.k1 = k1
@@ -1235,8 +1263,8 @@ class Exponentiation(Acquisition_Function):
         """Returns a list of all hyperparameter."""
         r = []
         for hyperparameter in self.acquisition_function.hyperparameters:
-            r.append(Hyperparameter("acquisition_function__"
-                                    + hyperparameter.name,
+            r.append(Hyperparameter("acquisition_function__" +
+                                    hyperparameter.name,
                                     hyperparameter.value_type,
                                     hyperparameter.n_elements))
         return r
@@ -1272,8 +1300,8 @@ class Exponentiation(Acquisition_Function):
     def __eq__(self, b):
         if type(self) != type(b):
             return False
-        return (self.acquisition_function == b.acquisition_function
-                and self.exponent == b.exponent)
+        return (self.acquisition_function == b.acquisition_function and
+                self.exponent == b.exponent)
 
     def __call__(self, X, gp, eval_gradient=False):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its

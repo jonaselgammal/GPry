@@ -1,33 +1,15 @@
-import sys
 import warnings
-from math import log
-from numbers import Number
-
 import numpy as np
-from numpy.linalg import det
-from numpy import trace as tr
-
 import scipy.optimize
-from scipy.special import logsumexp
-
-from sklearn.base import clone
+from copy import deepcopy
 from sklearn.base import is_regressor
-from joblib import Parallel, delayed
-from sklearn.multioutput import MultiOutputRegressor
 from sklearn.utils import check_random_state
-from sklearn.utils.optimize import _check_optimize_result
-from gpry.acquisition_functions import Log_exp
-from gpry.acquisition_functions import is_acquisition_function
-from gpry.gpr import GaussianProcessRegressor
-from gpry.proposal import UniformProposer
 
+from gpry.acquisition_functions import Log_exp, Nonlinear_log_exp
+from gpry.acquisition_functions import is_acquisition_function
+from gpry.proposal import UniformProposer
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
     split_number_for_parallel_processes, multi_gather_array
-
-from copy import deepcopy
-from functools import partial
-
-import pdb
 
 
 class GP_Acquisition(object):
@@ -124,7 +106,7 @@ class GP_Acquisition(object):
     """
 
     def __init__(self, bounds,
-                 proposer = None,
+                 proposer=None,
                  acq_func="Log_exp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
@@ -145,7 +127,7 @@ class GP_Acquisition(object):
 
         # If nothing is provided for the proposal, we use a uniform sampling
         if self.proposer is None:
-            self.proposer = UniformProposer(self.bounds,self.n_d)
+            self.proposer = UniformProposer(self.bounds)
         else:
             # TODO: Catch error if it's not the right instance
             self.proposer = proposer
@@ -155,10 +137,16 @@ class GP_Acquisition(object):
         elif acq_func == "Log_exp":
             # If the Log_exp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(dimension=self.n_d, zeta_scaling=zeta_scaling)
+            self.acq_func = Log_exp(
+                dimension=self.n_d, zeta_scaling=zeta_scaling)
+        elif acq_func == "Nonlinear_log_exp":
+            # If the Log_exp acquisition function is chosen it's zeta is set
+            # automatically using the dimensionality of the prior.
+            self.acq_func = Nonlinear_log_exp(
+                dimension=self.n_d, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
-                            "or 'Log_exp', instead got %s" % acq_func)
+                            "or 'Log_exp' or 'Nonlinear_log_exp', instead got %s" % acq_func)
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -234,7 +222,7 @@ class GP_Acquisition(object):
                 if eval_gradient:
                     acq, grad = self.acq_func(X, self.gpr_,
                                               eval_gradient=True)
-                    return -1*acq, -1*grad
+                    return -1 * acq, -1 * grad
                 else:
                     return -1 * self.acq_func(X, self.gpr_,
                                               eval_gradient=False)
@@ -248,7 +236,7 @@ class GP_Acquisition(object):
         else:
             transformed_bounds = self.bounds
 
-        if i==-1:
+        if i == 0:
             # Perform first run from last training point
             x0 = self.gpr_.X_train[-1]
             if self.preprocessing_X is not None:
@@ -257,11 +245,11 @@ class GP_Acquisition(object):
                                                   transformed_bounds)
         else:
             n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
-            x0s = np.empty((self.n_repeats_propose+1,self.bounds.shape[0]))
-            values = np.empty(self.n_repeats_propose+1)
+            x0s = np.empty((self.n_repeats_propose + 1, self.bounds.shape[0]))
+            values = np.empty(self.n_repeats_propose + 1)
             ifull = 0
             for n_try in range(n_tries):
-                x0 = self.proposer.get(random_state = random_state)
+                x0 = self.proposer.get(random_state=random_state)
                 value = self.acq_func(x0, self.gpr_)
                 if not np.isfinite(value):
                     continue
@@ -273,7 +261,7 @@ class GP_Acquisition(object):
                     if self.preprocessing_X is not None:
                         x0 = self.preprocessing_X.transform(x0)
                     return self._constrained_optimization(self.obj_func, x0,
-                                                        transformed_bounds)
+                                                          transformed_bounds)
             # if there's at least one finite value try optimizing from
             # there, otherwise take the last x0 and add that to the GP
             if ifull > 0:
@@ -281,19 +269,19 @@ class GP_Acquisition(object):
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
                 return self._constrained_optimization(self.obj_func, x0,
-                                                    transformed_bounds)
+                                                      transformed_bounds)
             else:
                 #quit()
                 if self.verbose > 1:
                     print(f"of {n_tries} initial samples for the "
-                           "acquisition optimizer none returned a "
-                           "finite value")
+                          "acquisition optimizer none returned a "
+                          "finite value")
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                return x0, -1*value
+                return x0, -1 * value
 
-    def multi_add(self, gpr, n_points = 1, random_state = None):
-        """Method to query multiple points where the objective function
+    def multi_add(self, gpr, n_points=1, random_state=None):
+        r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
         changing the hyperparameters of the model.
@@ -350,22 +338,26 @@ class GP_Acquisition(object):
             gpr_ = deepcopy(gpr)
         gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
         n_acq_per_process = \
-          split_number_for_parallel_processes(self.n_restarts_optimizer)
+            split_number_for_parallel_processes(self.n_restarts_optimizer)
         n_acq_this_process = n_acq_per_process[mpi_rank]
         i_acq_this_process = sum(n_acq_per_process[:mpi_rank])
-        proposal_X = np.empty((n_acq_this_process,gpr_.d))
+        proposal_X = np.empty((n_acq_this_process, gpr_.d))
         acq_X = np.empty((n_acq_this_process,))
         for ipoint in range(n_points):
-            # Optimize the acquisition function to get a few possible next proposal points (done in parallel)
+            # Optimize the acquisition function to get a few possible next proposal points
+            # (done in parallel)
             for i in range(n_acq_this_process):
-                proposal_X[i],acq_X[i] = self.propose(gpr_, i+i_acq_this_process, random_state = random_state)
-            proposal_X_main, acq_X_main = multi_gather_array([proposal_X, acq_X])
+                proposal_X[i], acq_X[i] = self.propose(
+                    gpr_, i + i_acq_this_process, random_state=random_state)
+            proposal_X_main, acq_X_main = multi_gather_array(
+                [proposal_X, acq_X])
             # Reset the objective function, such that afterwards the correct one is used
             self.obj_func = None
             # Now take the best and add it to the gpr (done in sequence)
             if is_main_process:
                 # Find out which one of these is the best
-                max_pos = np.argmin(acq_X_main) if np.any(np.isfinite(acq_X_main)) else len(acq_X_main)-1
+                max_pos = np.argmin(acq_X_main) if np.any(
+                    np.isfinite(acq_X_main)) else len(acq_X_main) - 1
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
@@ -385,7 +377,7 @@ class GP_Acquisition(object):
                 ##print(X_opt,X_opt-gpr_.X_train[-1])
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
-                if ipoint < n_points-1:
+                if ipoint < n_points - 1:
                     # Take the mean of errors as supposed measurement error
                     if np.iterable(gpr_.noise_level):
                         lie_noise_level = np.array(
@@ -405,7 +397,7 @@ class GP_Acquisition(object):
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
 
         gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
-        return ((X_opts, y_lies, acq_vals) if is_main_process else (None,None,None))
+        return ((X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 

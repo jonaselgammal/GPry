@@ -3,8 +3,9 @@ Example code for a simple GP Characterization of a likelihood.
 """
 
 import os
-from gpry.mpi import is_main_process, mpi_comm
-from gpry.plots import getdist_add_training
+from gpry.mpi import is_main_process
+from gpry.plots import getdist_add_training, plot_distance_distribution, \
+    plot_2d_model_acquisition
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
@@ -21,7 +22,8 @@ def lkl(x, y):
     return np.log(rv.pdf(np.array([x, y]).T))
 
 
-def callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion):
+def callback(model, current_gpr, gp_acquisition, convergence_criterion, options, progress,
+             previous_gpr, new_X, new_y, y_pred):
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
     print(current_gpr)
     print(previous_gpr)
@@ -29,11 +31,19 @@ def callback(current_gpr, previous_gpr, new_X, new_y, convergence_criterion):
     for x, y in zip(new_X, new_y):
         print(x, y)
     print(convergence_criterion)
+    # Plot distribution of points, and contours of model and acquisition
+    plot_distance_distribution(current_gpr.X_train, mean, cov)
+    plt.savefig("images/Distance_distribution.png", dpi=300)
+    plot_distance_distribution(current_gpr.X_train, mean, cov, density=True)
+    plt.savefig("images/Distance_density_distribution.png", dpi=300)
+    plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
+    plt.savefig("images/Contours_model_acquisition.png", dpi=300)
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
+    # input("Press key to continue...")
 
 
 # Uncomment this line to disable the example callback function above
-callback = None
+callback = callback
 
 #############################################################
 # Plotting the likelihood
@@ -60,7 +70,7 @@ if is_main_process:
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
     cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
-    if not "images" in os.listdir("."):
+    if "images" not in os.listdir("."):
         os.makedirs("images")
     plt.savefig("images/Ground_truth.png", dpi=300)
     plt.close()
@@ -88,7 +98,9 @@ model, gpr, acquisition, convergence, options = run(
 from gpry.run import mc_sample_from_gp
 
 updated_info, sampler = mc_sample_from_gp(
-    model, gpr, convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
+    gpr, model.prior.bounds(confidence_for_unbounded=0.99995),
+    paramnames=model.parameterization.sampled_params(),
+    convergence=convergence, sampler=mc_sampler, output="chains/gp_model")
 
 # Plotting
 if is_main_process:
@@ -96,7 +108,8 @@ if is_main_process:
     import getdist.plots as gdplt
     gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_gp, list(info["params"]), filled=True)
+    gdplot.triangle_plot(
+        gdsamples_gp, model.parameterization.sampled_params(), filled=True)
     getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Surrogate_triangle.png", dpi=300)
 
