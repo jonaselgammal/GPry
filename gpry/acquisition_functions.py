@@ -57,6 +57,12 @@ import numpy as np
 from scipy.stats import norm
 from sklearn.base import clone
 
+def safe_log_expm1(x):
+    mask = x<1
+    ret = np.empty_like(x)
+    ret[mask] = np.log(np.expm1(x[mask]))
+    ret[~mask] = x[~mask] + np.log1p(-np.exp(-x[~mask]))
+    return ret
 
 class Acquisition_Function(metaclass=ABCMeta):
     """Base class for all Acquisition Functions (AF's). All acquisition
@@ -987,7 +993,7 @@ class Nonlinear_log_exp(Base_log_exp):
     @staticmethod
     def f(mu, std, zeta):
         """Exponentiated log-error bar"""
-        return 2 * zeta * mu + std + np.log(1 - np.exp(-std))
+        return 2 * zeta * mu + safe_log_expm1(std)
 
 class Log_exp(Base_log_exp):
     r"""This gives the acquisition function
