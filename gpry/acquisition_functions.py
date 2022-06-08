@@ -833,26 +833,11 @@ class Expected_improvement(Acquisition_Function):
         return "{0:.3f}".format(self.xi)
 
 
-class Log_exp(Acquisition_Function):
+class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
     r"""Acquisition function which is designed to efficiently sample
     log-probability distributions. This is achieved by transforming
     :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
-    probability distribution) to logarithmic space using gaussian error
-    propagation. This gives the acquisition function
-
-    .. math::
-
-        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot (\sigma(X)-\sigma_n)
-
-    For numerical convenience we take the log of this expression which yields:
-
-    .. math::
-
-        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
-
-    .. note::
-        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
-        GP regressor which follows the **log**-probability distribution.
+    probability distribution) to logarithmic space.
 
     Parameters
     ----------
@@ -884,9 +869,6 @@ class Log_exp(Acquisition_Function):
 
     zeta_scaling: double, default=1.1
         the scaling power of the zeta with dimension, if auto-scaled
-
-    linearized: bool, default False
-        whether to linearize the standard deviation term
     """
 
     def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None,
@@ -900,18 +882,11 @@ class Log_exp(Acquisition_Function):
             self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
-        self.f = self.f_linear if linear else self.f_exp
         self.hasgradient = True
 
-    @staticmethod
-    def f_exp(mu, std, zeta):
-        """Exponentiated log-error bar"""
-        return 2 * zeta * mu + std + np.log(1 - np.exp(-std))
-
-    @staticmethod
-    def f_linear(mu, std, zeta):
-        """Linearized exponentiated log-error bar"""
-        return 2 * zeta * mu + np.log(std)
+    @abstractmethod
+    def f(mu, std, zeta):
+        return
 
     @property
     def hyperparameter_zeta(self):
@@ -1005,6 +980,36 @@ class Log_exp(Acquisition_Function):
 
     def __repr__(self):
         return "{0:.3f}".format(self.zeta)
+
+
+class Nonlinear_log_exp(Base_log_exp):
+
+    @staticmethod
+    def f(mu, std, zeta):
+        """Exponentiated log-error bar"""
+        return 2 * zeta * mu + std + np.log(1 - np.exp(-std))
+
+class Log_exp(Base_log_exp):
+    r"""This gives the acquisition function
+
+    .. math::
+
+        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot (\sigma(X)-\sigma_n)
+
+    For numerical convenience we take the log of this expression which yields:
+
+    .. math::
+
+        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
+
+    .. note::
+        :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
+        GP regressor which follows the **log**-probability distribution."""
+
+    @staticmethod
+    def f(mu, std, zeta):
+        """Linearized exponentiated log-error bar"""
+        return 2 * zeta * mu + np.log(std)
 
 
 # Function for determining whether an object is an acquisition function

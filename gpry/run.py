@@ -189,9 +189,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
             # Construct the acquisition object if it's not already constructed
             if isinstance(gp_acquisition, str):
-                if gp_acquisition not in ["Log_exp"]:
+                if gp_acquisition not in ["Log_exp","Nonlinear_log_exp"]:
                     raise ValueError("Supported acquisition function is "
-                                     f"'Log_exp', got {gp_acquisition}")
+                                     f"'Log_exp', 'Nonlinear_log_exp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
                 acquisition = GP_Acquisition(bounds,
@@ -208,7 +208,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 acquisition = gp_acquisition
             else:
                 raise TypeError("gp_acquisition should be an Acquisition "
-                                f"object or 'Log_exp', got {gp_acquisition}")
+                                f"object or 'Log_exp', or 'Nonlinear_log_exp', got {gp_acquisition}")
 
             # Construct the convergence criterion
             if isinstance(convergence_criterion, str):

@@ -5,7 +5,7 @@ from copy import deepcopy
 from sklearn.base import is_regressor
 from sklearn.utils import check_random_state
 
-from gpry.acquisition_functions import Log_exp
+from gpry.acquisition_functions import Log_exp, Nonlinear_log_exp
 from gpry.acquisition_functions import is_acquisition_function
 from gpry.proposal import UniformProposer
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
@@ -137,9 +137,14 @@ class GP_Acquisition(object):
             # automatically using the dimensionality of the prior.
             self.acq_func = Log_exp(
                 dimension=self.n_d, zeta_scaling=zeta_scaling)
+        elif acq_func == "Nonlinear_log_exp":
+            # If the Log_exp acquisition function is chosen it's zeta is set
+            # automatically using the dimensionality of the prior.
+            self.acq_func = Nonlinear_log_exp(
+                dimension=self.n_d, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function "
-                            "or 'Log_exp', instead got %s" % acq_func)
+                            "or 'Log_exp' or 'Nonlinear_log_exp', instead got %s" % acq_func)
 
         # Configure optimizer
         # decide optimizer based on gradient information
