@@ -884,9 +884,13 @@ class Log_exp(Acquisition_Function):
 
     zeta_scaling: double, default=1.1
         the scaling power of the zeta with dimension, if auto-scaled
+
+    linearized: bool, default False
+        whether to linearize the standard deviation term
     """
 
-    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None, zeta_scaling=1.1):
+    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None,
+                 zeta_scaling=1.1, linear=True):
         if zeta is None:
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
@@ -896,7 +900,18 @@ class Log_exp(Acquisition_Function):
             self.zeta = zeta
         self.sigma_n = sigma_n
         self.fixed = fixed
+        self.f = self.f_linear if linear else self.f_exp
         self.hasgradient = True
+
+    @staticmethod
+    def f_exp(mu, std, zeta):
+        """Exponentiated log-error bar"""
+        return 2 * zeta * mu + std + np.log(1 - np.exp(-std))
+
+    @staticmethod
+    def f_linear(mu, std, zeta):
+        """Linearized exponentiated log-error bar"""
+        return 2 * zeta * mu + np.log(std)
 
     @property
     def hyperparameter_zeta(self):
@@ -949,21 +964,25 @@ class Log_exp(Acquisition_Function):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
+        noise_var = gp.alpha
         if self.sigma_n is None:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                sigma_n = np.mean(sigma_n)
+                # TODO: prob not correct, but not used
+                noise_var += np.mean(sigma_n)**2
+            else:
+                noise_var += sigma_n**2
         else:
-            sigma_n = self.sigma_n
+            noise_var = self.sigma_n**2
         zeta = self.zeta
-
-        mask = (std > sigma_n) & np.isfinite(mu)
+        var = std**2 - noise_var
+        mask = (var > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
         baseline = gp.y_max
         # Alternative option, but found not to work extremely well
         #baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):
-            values[mask] = np.log(std[mask]-sigma_n) + 2*zeta*(mu[mask]-baseline)
+            values[mask] = self.f(mu[mask] - baseline, np.sqrt(var[mask]), zeta)
         if np.any(~mask):
             values[~mask] = - np.inf
         if eval_gradient:

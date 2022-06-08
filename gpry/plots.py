@@ -197,12 +197,12 @@ def plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, color="deepskyblue", marker="o", edgecolors="k")
+            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
         if last_points is not None:
             points_last = ax[i].scatter(
-                *last_points.T, color="r", marker="o", edgecolors="k")
+                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$")
         # Bounds
         ax[i].set_xlim(bounds[0][0], bounds[0][1])
         ax[i].set_ylim(bounds[1][0], bounds[1][1])
