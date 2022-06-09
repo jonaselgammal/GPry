@@ -1,6 +1,6 @@
 """
 This module contains several classes and methods for calculating different
-convergence criterions which can be used to determine if the BQ algorithm has
+convergence criterions which can be used to determine if the BO loop has
 converged.
 """
 
@@ -861,11 +861,11 @@ class KL_from_draw_approx_alt(ConvergenceCriterionGaussianApprox):
         Parameters
         ----------
 
-        gp : SKLearn Gaussian Process Regressor
+        gp : GaussianProcessRegressor
             The first surrogate model from which the training data is
             retrieved.
 
-        gp_2 : SKLearn Gaussian Process Regressor, optional (default=None)
+        gp_2 : GaussianProcessRegressor, optional (default=None)
             The second surrogate model from which the training data is
             retrieved. If not specified, the previous mean and covmat are used.
 
@@ -1189,9 +1189,19 @@ class CorrectCounter(ConvergenceCriterion):
     """
     This convergence criterion is the standard one used by GPry. It determines
     convergence by requiring that the GP's predictions of the posterior values
-    in the last :math:`n` steps are correct up to a certain percentage.
+    in the last :math:`n` steps are correct up to a certain threshold.
+    This condition is fulfilled if
+
+    .. math::
+
+        |f(x)-\overline{f}_{\mathrm{GP}}(x)| < (f_{\mathrm{max}}(x) - f(x)) \cdot r + a
+
+    where the parameters :math:`r` and :math:`a` are the relative and absolute
+    tolerances controlled by the `reltol` and `abstol` parameters.
     We set the "value" of the criterion to be the maximum difference of the GP
     prediction and the true posterior in the last batch of accepted evaluations.
+    Furthermore this class contains an internal list `thres` which contains the
+    threshold values corresponding to this difference.
 
     Parameters
     ----------
@@ -1203,20 +1213,22 @@ class CorrectCounter(ConvergenceCriterion):
     params : dict
         Dict with the following keys:
 
-        * ``"n_correct"``: Value of KL required for convergence (default=1e-2)
-        * ``"threshold"``: Number of samples for calculating the mean and cov (default=5000)
+        * ``"n_correct"``: Number of consecutive samples which need to be under the threshold
+        * ``"reltol"``: Relative tolerance parameter
+        * ``"abstol"``: Absolute tolerance parameter
         * ``"verbose"``: Verbosity
 
     """
 
     def __init__(self, prior, params):
         self.ncorrect = params.get("n_correct", 5)
-        self.reltol = params.get("threshold", 0.01)
+        self.reltol = params.get("reltol", 0.01)
         self.abstol = params.get("abstol",0.05)
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
+        self.thres = []
         self.n_pred = 0
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -1230,9 +1242,12 @@ class CorrectCounter(ConvergenceCriterion):
         for yn,yl in zip(new_y, pred_y):
             #rel_difference = np.abs((yl-gp.y_max)/(yn-gp.y_max)-1.)
             diff = np.abs(yl-yn)
-            max_val = max(np.max(diff), max_val)
-            thresh = np.abs(yn-gp.y_max) * self.reltol + self.abstol
-            if diff < thresh:
+            thres = np.abs(yn-gp.y_max) * self.reltol + self.abstol
+            if diff/thres > max_val:
+                max_val = diff/thres
+                max_diff = diff
+                max_thres = thres
+            if diff < thres:
                 self.n_pred += 1
                 if self.verbose > 0:
                     print(f"Already {self.n_pred} correctly predicted \n")
@@ -1240,7 +1255,8 @@ class CorrectCounter(ConvergenceCriterion):
                 self.n_pred = 0
                 if self.verbose > 0:
                     print("Mispredict...")
-        self.values.append(max_val if n_new>0 else self.values[-1])
+        self.values.append(max_diff if n_new>0 else self.values[-1])
+        self.thres.append(max_thres if n_new>0 else self.thres[-1])
         self.n_accepted_evals.append(gp.n_accepted_evals)
         self.n_posterior_evals.append(gp.n_total_evals)
         return max_val if n_new>0 else self.values[-1]
