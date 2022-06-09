@@ -182,7 +182,33 @@ class GP_Acquisition(object):
         self.cov = None
 
     def propose(self, gpr, i, random_state=None):
+        """Exposes the optimization method for the acquisition function. When
+        called it proposes a single point where for where to sample next. Is
+        internally called in the :meth:`multi_add` method.
 
+        Parameters
+        ----------
+
+        gpr : GaussianProcessRegressor
+            The GP Regressor which is used as surrogate model.
+
+        i : int
+            Internal counter which is used to enable MPI support. If you want
+            to optimize from a single location and rerun the optimizer from
+            multiple starting locations loop over this parameter.
+
+        random_state : int or numpy.RandomState, optional
+            The generator used to initialize the centers. If an integer is
+            given, it fixes the seed. Defaults to the global numpy random
+            number generator.
+
+        Returns
+        -------
+        X_opt : numpy.ndarray, shape = (X_dim,)
+            The X value of the found optimum
+        func : float
+            The value of the acquisition function at X_opt
+        """
         # Update proposer with new gpr
         self.proposer.update(gpr)
 
