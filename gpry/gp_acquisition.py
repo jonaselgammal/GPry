@@ -232,7 +232,7 @@ class GP_Acquisition(object):
 
             def obj_func(X, eval_gradient=False):
 
-                # Nooooo, don't do checks here! calls are consistent!
+                # TODO: optionally suppress this checks if called by optimiser
                 # Check inputs
                 X = np.asarray(X)
                 X = np.expand_dims(X, axis=0)
