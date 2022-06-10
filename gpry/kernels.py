@@ -174,17 +174,17 @@ class Kernel(sk_Kernel):
                     if np.iterable(thetas):
                         for t, theta in enumerate(thetas):
                             if hyperparameter.max_length[t] is None:
-                                bounds.append([theta*1e-2, theta*1e2])
+                                bounds.append([theta*1e-2, theta*1.])
                             else:
                                 bounds.append(
                                     [hyperparameter.max_length[t]*1e-2,
-                                     hyperparameter.max_length[t]*1e2])
+                                     hyperparameter.max_length[t]*1.])
                     else:
                         if hyperparameter.max_length[0] is None:
-                            bounds.append([thetas*1e-2, thetas*1e2])
+                            bounds.append([thetas*1e-2, thetas*1.])
                         else:
                             bounds.append([hyperparameter.max_length[0]*1e-2,
-                                           hyperparameter.max_length[0]*1e2])
+                                           hyperparameter.max_length[0]*1.])
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
