@@ -897,8 +897,6 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
             self.zeta = self.auto_zeta(dimension, scaling=zeta_scaling)
         else:
             self.zeta = zeta
-        # TODO: should take in to account BOTH alpha and noise kernel!
-        #       and do sums/subtractions in variance, not in std
         self.sigma_n = sigma_n
         self.fixed = fixed
         self.hasgradient = True

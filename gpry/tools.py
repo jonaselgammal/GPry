@@ -222,3 +222,11 @@ def nstd_of_cl(d, p):
 def volume_sphere(r, dim=3):
     """Volume of a sphere of radius ``r`` in dimension ``dim``."""
     return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim
+
+
+def check_random_state(seed):
+    """Extension to sklearn.utils for numpy *Generators* to pass through."""
+    if isinstance(seed, np.random.Generator):
+        return seed
+    from sklearn.utils import check_random_state
+    return check_random_state(seed)

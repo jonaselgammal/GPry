@@ -27,7 +27,7 @@ def run(model, gp="RBF", gp_acquisition="LogExp",
         callback=None, callback_is_MPI_aware=False,
         convergence_options=None, options={}, checkpoint=None,
         load_checkpoint=None, verbose=3):
-    """
+    r"""
     This function takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. This is the easiest way to make use of the
     gpry algorithm. The minimum requirements for running this are a Cobaya

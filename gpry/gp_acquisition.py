@@ -3,13 +3,13 @@ import numpy as np
 import scipy.optimize
 from copy import deepcopy
 from sklearn.base import is_regressor
-from sklearn.utils import check_random_state
 
 from gpry.acquisition_functions import LogExp, NonlinearLogExp
 from gpry.acquisition_functions import is_acquisition_function
-from gpry.proposal import UniformProposer
+from gpry.proposal import PartialProposer, CentroidsProposer
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
     split_number_for_parallel_processes, multi_gather_array
+from gpry.tools import check_random_state
 
 
 class GP_Acquisition(object):
@@ -32,7 +32,8 @@ class GP_Acquisition(object):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    proposer : Proposer object, optional (default: "UniformProposer")
+    proposer : Proposer object, optional (default: "ParialProposer", producing a mixture
+        of points drawn from an "UniformProposer" and from a "CentroidsProposer")
         Proposes points from which the acquisition function should be optimized.
 
     acq_func : GPry Acquisition Function, optional (default: "LogExp")
@@ -124,7 +125,7 @@ class GP_Acquisition(object):
 
         # If nothing is provided for the proposal, we use a uniform sampling
         if self.proposer is None:
-            self.proposer = UniformProposer(self.bounds)
+            self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
         else:
             # TODO: Catch error if it's not the right instance
             self.proposer = proposer
@@ -273,7 +274,6 @@ class GP_Acquisition(object):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(random_state=random_state)
-                # is the proposer output pre-processed????
                 value = self.acq_func(x0, self.gpr_)
                 if not np.isfinite(value):
                     continue

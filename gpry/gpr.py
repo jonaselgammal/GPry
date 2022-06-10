@@ -11,6 +11,7 @@ import scipy.optimize
 # gpry kernels and SVM
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
+from gpry.tools import check_random_state
 
 # sklearn GP and kernel utilities
 from sklearn.gaussian_process import GaussianProcessRegressor \
@@ -18,7 +19,6 @@ from sklearn.gaussian_process import GaussianProcessRegressor \
 from sklearn.base import clone, BaseEstimator as BE
 
 # sklearn utilities
-from sklearn.utils import check_random_state
 from sklearn.utils.optimize import _check_optimize_result
 from sklearn.utils.validation import check_array
 
