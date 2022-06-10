@@ -324,9 +324,6 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             new_X, y_pred, acq_vals = acquisition.multi_add(
                 gpr, n_points=n_points_per_acq, random_state=get_random_state())
         progress.add_acquisition(timer_acq.time, timer_acq.evals)
-        if is_main_process:
-            print("run.py :: New X/y_lie/acq = ", new_X, y_pred, acq_vals)
-        # Get logposterior value(s) for the acquired points (in parallel)
         if multiple_processes:
             new_X = mpi_comm.bcast(new_X if is_main_process else None)
         new_X_this_process = new_X[
@@ -383,6 +380,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 is_converged = False
         sync_processes()
         progress.mpi_sync()
+        if is_main_process:
+            print(f"run - tot: {gpr.n_total_evals}, acc: {gpr.n_accepted_evals}, con: {convergence.values[-1]}, lim: {convergence.thres[-1]}")
         if is_converged:
             break
         # If the loop reaches n_left <= 0, then all processes need to break, not just the main process
