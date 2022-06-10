@@ -18,6 +18,9 @@ from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
 from gpry.mpi import mpi_rank, mpi_comm, is_main_process, multiple_processes
 
 
+# KL divernge + correct counter + don't converge
+# the KL is to learn how to cmpute it. Use either mcmc or whatever -- maybe unify these classes
+
 class ConvergenceCheckError(Exception):
     pass
 
@@ -31,7 +34,7 @@ def builtin_names():
                            obj is not ConvergenceCriterion)]
     return list_conv_names
 
-
+# comment on attribute self.limit (for plots!)
 class ConvergenceCriterion(metaclass=ABCMeta):
     """ Base class for all convergence criteria (CCs). A CC quantifies the
     convergence of the GP surrogate model. If this value goes below a certain,
@@ -766,6 +769,7 @@ class KL_from_MC_training(ConvergenceCriterionGaussianApprox):
             this_i = choice(range(len(gp.X_train)))
             this_X = np.copy(gp.X_train[this_i])
             logpost = model.logposterior(this_X, temperature=self.temperature)
+# esto es hacky. maybe add method to reset!
             mcmc_sampler.current_point.add(this_X, logpost)
             # reset the number of samples and run
             mcmc_sampler.collection = SampleCollection(

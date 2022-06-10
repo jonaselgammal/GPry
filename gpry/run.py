@@ -306,6 +306,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
     it = 0
     n_left = max_accepted - n_finite
     for it in range(n_iterations):
+        print(f"{mpi_rank} 0----------------------------")
         progress.add_iteration()
         progress.add_current_n_truth(gpr.n_total_evals, gpr.n_accepted_evals)
         if is_main_process:
@@ -318,26 +319,35 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                           f"(of at most {n_iterations} iterations) +++++++++")
             # Save old gp for convergence criterion
             old_gpr = deepcopy(gpr)
+        print(f"{mpi_rank} a----------------------------")
         gpr = mpi_comm.bcast(gpr if is_main_process else None)
+        print(f"{mpi_rank} b----------------------------")
         # Acquire new points in parallel with MPI-aware random state
         with TimerCounter(gpr) as timer_acq:
             new_X, y_pred, acq_vals = acquisition.multi_add(
                 gpr, n_points=n_points_per_acq, random_state=get_random_state())
         progress.add_acquisition(timer_acq.time, timer_acq.evals)
+        if is_main_process:
+            print("run.py :: New X/y_lie/acq = ", new_X, y_pred, acq_vals)
+        # Get logposterior value(s) for the acquired points (in parallel)
+        print(f"{mpi_rank} c----------------------------")
         if multiple_processes:
             new_X = mpi_comm.bcast(new_X if is_main_process else None)
         new_X_this_process = new_X[
             i_evals_this_process: i_evals_this_process + n_evals_this_process]
         new_y = np.empty(0)
+        print(f"{mpi_rank} d----------------------------")
         with Timer() as timer_truth:
             for x in new_X_this_process:
                 new_y = np.append(new_y, model.logpost(x))
         progress.add_truth(timer_truth.time, len(new_X))
+        print(f"{mpi_rank} e----------------------------")
         # Collect (if parallel) and append to the current model
         if multiple_processes:
             all_new_y = mpi_comm.gather(new_y)
         else:
             all_new_y = [new_y]
+            print(f"{mpi_rank} f----------------------------")
         if is_main_process:
             new_y = np.concatenate(all_new_y)
             do_simplified_fit = (it % fit_full_every != fit_full_every - 1)
@@ -346,13 +356,20 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                                    fit=True, simplified_fit=do_simplified_fit)
             progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             n_left = max_accepted - gpr.n_accepted_evals
+        print(f"{mpi_rank} g----------------------------")
+        print(f"{mpi_rank} {callback_is_MPI_aware=}")
+        # TODO: better failsafes for MPI_aware=False BUT actually using MPI
+        # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False?)
+# use dummy class that raises attr error!!!!
         if callback:
             if callback_is_MPI_aware or is_main_process:
                 callback(model, gpr, acquisition, convergence, options, progress,
                          old_gpr, new_X, new_y, y_pred)
             mpi_comm.barrier()
+        print(f"{mpi_rank} h----------------------------")
         # Calculate convergence and break if the run has converged
         if not convergence_is_MPI_aware:
+            print(f"{mpi_rank} ha----------------------------")
             if is_main_process:
                 try:
                     with TimerCounter(gpr, old_gpr) as timer_convergence:
@@ -366,6 +383,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
             if multiple_processes:
                 is_converged = mpi_comm.bcast(is_converged if is_main_process else None)
         else:  # run by all processes
+            print(f"{mpi_rank} hb----------------------------")
             # NB: this assumes that when the criterion fails,
             #     ALL processes raise ConvergenceCheckerror, not just rank 0
             if multiple_processes:
@@ -378,6 +396,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 progress.add_convergence(timer_convergence.time, timer_convergence.evals)
             except gpryconv.ConvergenceCheckError:
                 is_converged = False
+        print(f"{mpi_rank} got {is_converged=}")
+        print(f"{mpi_rank} i----------------------------")
         sync_processes()
         progress.mpi_sync()
         if is_main_process:
@@ -499,6 +519,7 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
                 X = model.prior.reference(warn_if_no_ref=False)
                 if verbose > 2:
                     print(f"Evaluating true posterior at {X}")
+# pero no esta parallelizado!!!!
                 y = model.logpost(X)
                 if verbose > 2:
                     print(f"Got {y}")
@@ -1013,7 +1034,8 @@ class Runner(object):
         self.paramnames = None
         self.bounds = None
         self.has_run = False
-    def run(self, model, gp="RBF", gp_acquisition="Log_exp",
+        
+    def run(self, model, gp="RBF", gp_acquisition="Nonlienar_log_exp",
             convergence_criterion="CorrectCounter",
             callback=None,
             convergence_options=None, options={}, checkpoint=None, verbose=3):

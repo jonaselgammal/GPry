@@ -202,7 +202,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         _update_model
         predict
     """
-
+# also, rbf vs matern!!! -- shorter corrlen???
     def __init__(self, kernel="RBF", noise_level=1e-2,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
@@ -215,7 +215,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.preprocessing_y = preprocessing_y
 
         self.noise_level = noise_level
-
+# check that it can be trusted!!!
+# compare with n_eval[S]
         self.n_eval = 0
         self.n_eval_loglike = 0
 
@@ -254,7 +255,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             elif kernel == "Matern":
                 kernel = C(1.0, [0.001, 10000]) \
                     * Matern([0.01] * self.d, "dynamic",
-                             prior_bounds=self.bounds_)
+                             prior_bounds=self.bounds_)#, nu=2.5)
 
         super(GaussianProcessRegressor, self).__init__(
             kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
@@ -267,6 +268,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             print("===========================================")
             print("Kernel:")
             if kernel == "RBF":
+                # ??????
                 print("ConstantKernel(1, [0.001, 10000])"
                       " * RBF([0.01]*n_dim, 'dynamic')")
             else:
@@ -289,6 +291,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             return self.X_train.shape[1]
         else:
             return self.bounds.shape[0]
+# maybe rename
 
     @property
     def n_total_evals(self):
@@ -653,6 +656,14 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Set alpha for the inbuilt fit function
         self.alpha = self.noise_level_**2.
 
+        # Prior for correlation lengths
+        # Sort points in desc order of probability
+        sorted_points = self.X_train_[np.argsort(-self.y_train)]
+        diffs = self.X_train_[:-1]
+        print(sorted_points)
+        print("ooooooooooooooooooooooooo")
+#        sorted_dists = sorted(self.X_train_[:, i])
+        
         if self.optimizer is not None and self.kernel_.n_dims > 0:
             # Choose hyperparameters based on maximizing the log-marginal
             # likelihood (potentially starting from several initial values)
@@ -664,11 +675,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 else:
                     return -self.log_marginal_likelihood(theta,
                                                          clone_kernel=False)
-
+            print("-=-=-=-=-=-=-")
+            self.kernel_.bounds[1] = None
+            
+            print(self.kernel_.bounds)
             # First optimize starting from theta specified in kernel
+            bounds = self.kernel_.bounds
+#            bounds[1] = [-4, np.log(0.5)]
+#            bounds[2] = [-4, np.log(0.5)]
             optima = [(self._constrained_optimization(obj_func,
                                                       self.kernel_.theta,
-                                                      self.kernel_.bounds))]
+                                                      bounds))]
 
             # Additional runs are performed from log-uniform chosen initial
             # theta
@@ -677,7 +694,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
-                bounds = np.copy(self.kernel_.bounds)
+#                bounds = np.copy(self.kernel_.bounds)
                 for iteration in range(self.n_restarts_optimizer):
                     theta_initial = \
                         self._rng.uniform(bounds[:, 0], bounds[:, 1])

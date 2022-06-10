@@ -26,6 +26,7 @@ def callback(model, current_gpr, gp_acquisition, convergence_criterion, options,
              previous_gpr, new_X, new_y, y_pred):
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
     print(current_gpr)
+    print("Current kernel:", current_gpr.kernel_)  # rescaled?????
     print(previous_gpr)
     print("New points")
     for x, y in zip(new_X, new_y):
@@ -38,8 +39,13 @@ def callback(model, current_gpr, gp_acquisition, convergence_criterion, options,
     plt.savefig("images/Distance_density_distribution.png", dpi=300)
     plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
     plt.savefig("images/Contours_model_acquisition.png", dpi=300)
+    old_zeta = gp_acquisition.acq_func.zeta
+    gp_acquisition.acq_func.zeta = 0
+    plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
+    plt.savefig("images/Contours_model_acquisition_std.png", dpi=300)
+    gp_acquisition.acq_func.zeta = old_zeta
     print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
-    # input("Press key to continue...")
+    input("Press Enter to continue...")
 
 
 # Uncomment this line to disable the example callback function above
@@ -88,11 +94,14 @@ info["params"] = {
 
 model = get_model(info)
 
+options={}#'zeta_scaling': 5}
+
 # Run the GP
 from gpry.run import run
 checkpoint = "output/simple"
 model, gpr, acquisition, convergence, options = run(
-    model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite")
+    model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite",
+    options=options)
 
 # Run the MCMC and extract samples
 from gpry.run import mc_sample_from_gp
@@ -160,3 +169,5 @@ if is_main_process:
                          legend_labels=['Truth', 'MC from GP'])
     getdist_add_training(gdplot, model, gpr)
     plt.savefig("images/Comparison_triangle.png", dpi=300)
+
+print(gpr.X_train)

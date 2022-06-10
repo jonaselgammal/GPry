@@ -1,3 +1,5 @@
+# THIS IS THE ONE!!!!!
+
 """
 runs the curved degeneracy example and tracks convergence, plots ...
 """

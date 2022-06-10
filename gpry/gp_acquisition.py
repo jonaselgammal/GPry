@@ -234,6 +234,7 @@ class GP_Acquisition(object):
 
             def obj_func(X, eval_gradient=False):
 
+                # Nooooo, don't do checks here! calls are consistent!
                 # Check inputs
                 X = np.asarray(X)
                 X = np.expand_dims(X, axis=0)
@@ -274,6 +275,7 @@ class GP_Acquisition(object):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(random_state=random_state)
+                # is the proposer output pre-processed????
                 value = self.acq_func(x0, self.gpr_)
                 if not np.isfinite(value):
                     continue
@@ -412,7 +414,7 @@ class GP_Acquisition(object):
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
-
+# what do we do with n_evals in MPI????
         gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
         return ((X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 

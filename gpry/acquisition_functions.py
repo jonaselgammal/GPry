@@ -58,7 +58,7 @@ from scipy.stats import norm
 from sklearn.base import clone
 
 def safe_log_expm1(x):
-    mask = x<1
+    mask = x < 1
     ret = np.empty_like(x)
     ret[mask] = np.log(np.expm1(x[mask]))
     ret[~mask] = x[~mask] + np.log1p(-np.exp(-x[~mask]))
@@ -886,6 +886,8 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
             self.zeta = self.auto_zeta(dimension, scaling=zeta_scaling)
         else:
             self.zeta = zeta
+        # TODO: should take in to account BOTH alpha and noise kernel!
+        #       and do sums/subtractions in variance, not in std
         self.sigma_n = sigma_n
         self.fixed = fixed
         self.hasgradient = True
@@ -967,6 +969,7 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
         if np.any(~mask):
             values[~mask] = - np.inf
         if eval_gradient:
+            # TODO: add correct gradient!!!!
             if np.array(std_grad).ndim > 1:
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
@@ -989,6 +992,7 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
 
 
 class Nonlinear_log_exp(Base_log_exp):
+    # TODO: docstring
 
     @staticmethod
     def f(mu, std, zeta):

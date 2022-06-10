@@ -267,6 +267,7 @@ class Centroids(Proposer):
         self.training = None
         # TODO: adapt lambd to dimensionality!!!
         # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
+# ;abda is more kicking or less kicking????
         self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
 
     @property
