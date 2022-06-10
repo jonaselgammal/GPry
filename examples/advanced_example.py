@@ -38,8 +38,8 @@ gpr = GaussianProcessRegressor(
     )
 
 # Construct Acquisition function
-from gpry.acquisition_functions import Log_exp
-af = Log_exp(zeta=0.1)
+from gpry.acquisition_functions import LogExp
+af = LogExp(zeta=0.1)
 
 # Construct Acquisition procedure
 from gpry.gp_acquisition import GP_Acquisition

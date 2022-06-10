@@ -22,7 +22,7 @@ import os
 import pandas as pd
 import time
 
-def run(model, gp="RBF", gp_acquisition="Log_exp",
+def run(model, gp="RBF", gp_acquisition="LogExp",
         convergence_criterion="CorrectCounter",
         callback=None, callback_is_MPI_aware=False,
         convergence_options=None, options={}, checkpoint=None,
@@ -50,8 +50,8 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
         be useful if the posterior is not very smooth.
         Otherwise a custom GP regressor can be created and passed.
 
-    gp_acquisition : GP_Acquisition, optional (default="Log_exp")
-        The acquisition object. If None is given the Log_exp acquisition
+    gp_acquisition : GP_Acquisition, optional (default="LogExp")
+        The acquisition object. If None is given the LogExp acquisition
         function is used (with the :math:`\zeta` value chosen automatically
         depending on the dimensionality of the prior) and the GP's X-values are
         preprocessed to be in the uniform hypercube before optimizing the
@@ -189,9 +189,9 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
 
             # Construct the acquisition object if it's not already constructed
             if isinstance(gp_acquisition, str):
-                if gp_acquisition not in ["Log_exp","Nonlinear_log_exp"]:
+                if gp_acquisition not in ["LogExp","NonlinearLogExp"]:
                     raise ValueError("Supported acquisition function is "
-                                     f"'Log_exp', 'Nonlinear_log_exp', got {gp_acquisition}")
+                                     f"'LogExp', 'NonlinearLogExp', got {gp_acquisition}")
 
                 bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
                 acquisition = GP_Acquisition(bounds,
@@ -208,7 +208,7 @@ def run(model, gp="RBF", gp_acquisition="Log_exp",
                 acquisition = gp_acquisition
             else:
                 raise TypeError("gp_acquisition should be an Acquisition "
-                                f"object or 'Log_exp', or 'Nonlinear_log_exp', got {gp_acquisition}")
+                                f"object or 'LogExp', or 'NonlinearLogExp', got {gp_acquisition}")
 
             # Construct the convergence criterion
             if isinstance(convergence_criterion, str):
