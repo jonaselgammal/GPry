@@ -11,7 +11,7 @@ from cobaya.tools import resolve_packages_path
 from functools import partial
 import scipy.stats
 import numpy as np
-from gpry.mc import generate_sampler_for_gp
+from gpry.mc import mc_sample_from_gp
 from cobaya.model import LogPosterior
 from gpry.tools import check_random_state
 
@@ -236,10 +236,9 @@ class SmallChainProposer(Proposer):
 
     def update(self, gpr):
         self.samples = []
-        surr_info, sampler = generate_sampler_for_gp(
-            gpr, self.bounds, sampler="mcmc", add_options={
+        surr_info, sampler = mc_sample_from_gp(
+            gpr, self.bounds, sampler="mcmc", run=False, add_options={
                 'max_samples': self.npoints, 'max_tries': 10 * self.npoints})
-        surr_info
         self.sampler = sampler
         self.parnames = list(surr_info['params'])
         self.gpr = gpr

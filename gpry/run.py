@@ -9,18 +9,15 @@ from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GP_Acquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
-from gpry.tools import cobaya_gp_model_input, mcmc_info_from_run, polychord_info_from_run
-from gpry.mc import generate_sampler_for_gp
 import gpry.convergence as gpryconv
 from cobaya.model import Model, get_model
-from cobaya.output import get_output
-from cobaya.sampler import get_sampler
 from copy import deepcopy
 import numpy as np
 import warnings
 import os
 import pandas as pd
 import time
+
 
 def run(model, gp="RBF", gp_acquisition="LogExp",
         convergence_criterion="CorrectCounter",
@@ -566,80 +563,6 @@ def get_initial_sample(model, gpr, n_initial, max_init=None, verbose=3, progress
         progress.mpi_sync()
     return gpr
 
-def mc_sample_from_gp(gp, bounds=None, paramnames=None, sampler="mcmc", convergence=None, options=None,
-                      output=None, add_options=None, restart=False):
-    """
-    This function is essentially just a wrapper for the Cobaya MCMC sampler
-    (monte python) which runs an MCMC on the fitted GP regressor. It returns
-    the chains which can then be used with GetDist to get the triangle plots or
-    be postprocessed in any other way.
-    The plotting is explained in the
-    `Cobaya documentation <https://cobaya.readthedocs.io/en/latest/example_advanced.html#from-the-shell>`_.
-
-    Parameters
-    ----------
-
-    gp : GaussianProcessRegressor, which has been fit to data and returned from
-        the ``run`` function.
-        Alternatively a string containing a path with the
-        location of a saved GP run (checkpoint) can be provided (the same path
-        that was used to save the checkpoint in the ``run`` function).
-
-    bounds : List of boundaries (lower,upper), optional
-        By default it doesn't use boundaries
-
-    paramnames : List of parameter strings, optional
-        By default it uses some dummy strings, which affects the updated_info
-
-    convergence : Convergence_criterion, optional
-        The convergence criterion which has been used to fit the GP. This is
-        used to extract the covariance matrix if it is available from the
-        Convergence_criterion class. Alternatively a string containing a path
-        with the location of a saved GP run (checkpoint) can be provided (the
-        same path that was used to save the checkpoint in the ``run`` function).
-
-    options: dict, optional
-        Containing the options for the mcmc sampler
-        defined in the "sampler" block of the Cobaya input. For more
-        information see
-        `here <https://cobaya.readthedocs.io/en/latest/sampler.html>`.
-
-        .. note::
-            If you specify any options here you need to define the whole
-            "sampler" block. This leaves room for the possibility to also use
-            other samplers which are built into Cobaya (i.e. PolyChord).
-
-    output: path, optional
-        The path where the output of the MCMC (chains) shall be stored.
-
-    Returns
-    -------
-
-    updated_info : dict
-        The (expanded) dictionary that was used to run the MCMC on the GP.
-
-    sampler : Sampler instance
-        The sampler instance contains the chains etc. and can be used for
-        plotting etc.
-    """
-    sampler_name = sampler
-    surr_info, sampler = generate_sampler_for_gp(gp, bounds=bounds, paramnames=paramnames, sampler=sampler, convergence=convergence, options=options, output=output, add_options=add_options, restart=restart)
-
-    # Run the sampler
-    print("Running the sampler")
-    sampler.run()
-
-    updated_info = surr_info.copy()
-    updated_info["sampler"] = {sampler_name: sampler.info()}
-
-    return updated_info, sampler
-
-
-# FOR BACKWARDS COMPATIBILITY --> DELETE AT SOME POINT BEFORE RELEASE!
-def mcmc(model_truth, gp, convergence=None, options=None, output=None, add_options=None):
-    return mc_sample_from_gp(gp, model_truth.prior.bounds(confidence_for_unbounded=0.99995), model_truth.prior.params, sampler="mcmc", convergence=None,
-                             options=None, output=None, add_options=None)
-
 
 def _save_checkpoint(path, model, gp, gp_acquisition, convergence_criterion, options,
                      progress, plots=True):
@@ -795,6 +718,7 @@ class Progress:
     """
     Pandas DataFrame to store progress, timing, numbers of evaluations, etc.
     """
+
     _colnames = {
         "n_train": "number of training points at the start of the iteration",
         "n_accepted": ("number of finite-posterior training points "

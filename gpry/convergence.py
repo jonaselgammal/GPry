@@ -9,8 +9,7 @@ import numpy as np
 import sys
 import inspect
 from copy import deepcopy
-from gpry.tools import kl_norm, cobaya_input_prior, cobaya_input_likelihood, \
-    mcmc_info_from_run, is_valid_covmat
+from gpry.tools import kl_norm, is_valid_covmat
 from gpry.mpi import mpi_comm, is_main_process, multiple_processes
 
 
