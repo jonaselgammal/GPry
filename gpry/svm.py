@@ -1,4 +1,4 @@
-"""
+r"""
 This module uses a Support vector machine (SVM) with an RBF kernel to classify
 regions which are "safe" to explore in contrast to regions which are "unsafe"
 to explore since they are infinite. This is done in an attempt to hinder the
@@ -16,8 +16,9 @@ from scipy.stats import chi2
 from scipy.special import erfc
 from sklearn.svm import SVC
 
+
 class SVM(SVC):
-    """Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_. Implements the same
+    r"""Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_. Implements the same
     "append_to_data" function as the GP Regressor and is designed to be passed
     to a GP regressor. This is done to classify the data into a "finite" group
     (values with a finite log-likelihood) and an "infinite" group. That way the
@@ -116,6 +117,7 @@ class SVM(SVC):
         Controls the pseudo random number generation for shuffling the data for
         probability estimates. Ignored when `probability` is False.
         Pass an int for reproducible output across multiple function calls.
+
     Attributes
     ----------
     all_finite : bool
@@ -250,7 +252,7 @@ class SVM(SVC):
         return self.finite[-newly_appended:]
 
     def fit(self, X, y, fit_preprocessors=True):
-        """
+        r"""
         Wrapper for the fit value of the sklearn SVM which fits the SVM with
         two categorial classes:
 
@@ -317,7 +319,7 @@ class SVM(SVC):
         Returns True for finite values above the current threshold, and False otherwise.
         """
         threshold = self.threshold_preprocessed if y_is_preprocessed else self.threshold
-        return np.logical_and(np.isfinite(y), y-np.max(y) > threshold)
+        return np.logical_and(np.isfinite(y), y - np.max(y) > threshold)
 
     def predict(self, X):
         """

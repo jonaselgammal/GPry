@@ -5,7 +5,7 @@ from operator import itemgetter
 
 # numpy and scipy
 import numpy as np
-from scipy.linalg import cholesky, cho_solve, solve_triangular
+from scipy.linalg import cholesky, solve_triangular
 import scipy.optimize
 
 # gpry kernels and SVM
@@ -19,7 +19,6 @@ from sklearn.gaussian_process import GaussianProcessRegressor \
 from sklearn.base import clone, BaseEstimator as BE
 
 # sklearn utilities
-from sklearn.utils.optimize import _check_optimize_result
 from sklearn.utils.validation import check_array
 
 
@@ -44,7 +43,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Parameters
     ----------
-
     kernel : kernel object, optional (default: "RBF")
         The kernel specifying the covariance function of the GP. If
         "RBF"/"Matern" is passed, the asymmetric kernel::
@@ -137,7 +135,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Attributes
     ----------
-
     X_train : array-like, shape = (n_samples, n_features)
         Original (untransformed) feature values in training data. Intended to be
         used when one wants to access the training data for any purpose.
@@ -202,7 +199,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         _update_model
         predict
     """
-# also, rbf vs matern!!! -- shorter corrlen???
+
     def __init__(self, kernel="RBF", noise_level=1e-2,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
@@ -215,8 +212,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.preprocessing_y = preprocessing_y
 
         self.noise_level = noise_level
-# check that it can be trusted!!!
-# compare with n_eval[S]
+
         self.n_eval = 0
         self.n_eval_loglike = 0
 
@@ -255,7 +251,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             elif kernel == "Matern":
                 kernel = C(1.0, [0.001, 10000]) \
                     * Matern([0.01] * self.d, "dynamic",
-                             prior_bounds=self.bounds_)#, nu=2.5)
+                             prior_bounds=self.bounds_)
 
         super(GaussianProcessRegressor, self).__init__(
             kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
@@ -268,7 +264,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             print("===========================================")
             print("Kernel:")
             if kernel == "RBF":
-                # ??????
+                # TODO: fix this!
                 print("ConstantKernel(1, [0.001, 10000])"
                       " * RBF([0.01]*n_dim, 'dynamic')")
             else:
@@ -369,6 +365,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         fit : Bool, optional (default: True)
             Whether the model is refit to new :math:`\\theta`-parameters
             or just updated using the blockwise matrix-inversion lemma.
+
+        simplified_fit : Bool, optional (default: False)
+            If True and ``fit=True``, hyperparameters are only optimised from the last
+            optimum (otherwise, a number of optimisation processes are also started from
+            samples of the hyperparameters' priors).
 
         Returns
         -------
@@ -576,6 +577,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             None should only be passed if it is called from the
             ``append to data`` method.
 
+        simplified : bool, default: False
+            If True, runs the optimiser only from the last optimum of the hyperparameters
+            (otherwise, a number of optimisation processes are also started from samples
+            of the hyperparameters' priors).
+
         Returns
         -------
         self
@@ -656,14 +662,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Set alpha for the inbuilt fit function
         self.alpha = self.noise_level_**2.
 
-        # Prior for correlation lengths
-        # Sort points in desc order of probability
-        sorted_points = self.X_train_[np.argsort(-self.y_train)]
-        diffs = self.X_train_[:-1]
-        print(sorted_points)
-        print("ooooooooooooooooooooooooo")
-#        sorted_dists = sorted(self.X_train_[:, i])
-        
         if self.optimizer is not None and self.kernel_.n_dims > 0:
             # Choose hyperparameters based on maximizing the log-marginal
             # likelihood (potentially starting from several initial values)
@@ -675,26 +673,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 else:
                     return -self.log_marginal_likelihood(theta,
                                                          clone_kernel=False)
-            print("-=-=-=-=-=-=-")
-            self.kernel_.bounds[1] = None
-            
-            print(self.kernel_.bounds)
             # First optimize starting from theta specified in kernel
             bounds = self.kernel_.bounds
-#            bounds[1] = [-4, np.log(0.5)]
-#            bounds[2] = [-4, np.log(0.5)]
             optima = [(self._constrained_optimization(obj_func,
                                                       self.kernel_.theta,
                                                       bounds))]
 
-            # Additional runs are performed from log-uniform chosen initial
-            # theta
+            # Additional runs are performed from log-uniform chosen initial theta
             if self.n_restarts_optimizer > 0 and not simplified:
                 if not np.isfinite(self.kernel_.bounds).all():
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
-#                bounds = np.copy(self.kernel_.bounds)
                 for iteration in range(self.n_restarts_optimizer):
                     theta_initial = \
                         self._rng.uniform(bounds[:, 0], bounds[:, 1])
@@ -780,10 +770,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended:
             raise ValueError("The number of added points doesn't match the "
                              "dimensions of the K_inv matrix. %s != %s"
-                             % (self.K_inv_.shape[0], self.y_train_.size-self.newly_appended))
+                             % (self.K_inv_.shape[0],
+                                self.y_train_.size - self.newly_appended))
 
         # Define all neccessary variables
-        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT! # TODO :: investigate closer
+        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT!
+        # TODO :: investigate closer
         """
         K_inv = self.K_inv_
         X_1 = self.X_train_[:-self.newly_appended]
@@ -848,6 +840,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return_std_grad : bool, default: False
             Whether or not to return the gradient of the std.
             Only valid when X is a single point.
+
+        do_check_array : bool, default: True
+            If False, ``X`` is assumed to be correctly formatted, and no checks are
+            performed on it. Reduces overhead. Use only for repeated calls when the input
+            is programmatically generated to be correct at each stage.
 
         .. note::
 
