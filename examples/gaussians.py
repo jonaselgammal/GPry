@@ -101,7 +101,7 @@ for d in dims:
             # model = mpi_comm.bcast(model if is_main_process else None)
 
             # Run model until it's converged
-            _, gpr, acquisition, convergence, options = run(model, checkpoint="checkpoint/16d_1m", verbose=verbose, options={"n_points_per_acq":k, "max_accepted":700}, convergence_criterion="CorrectCounter", convergence_options={"threshold": 0.01, "abstol": 0.05}) # , convergence_criterion="ConvergenceCriterionGaussianMCMC", convergence_options={"threshold": 0.5/d}
+            _, gpr, acquisition, convergence, options, progress = run(model, checkpoint="checkpoint/16d_1m", verbose=verbose, options={"n_points_per_acq":k, "max_accepted":700}, convergence_criterion="CorrectCounter", convergence_options={"threshold": 0.01, "abstol": 0.05}) # , convergence_criterion="ConvergenceCriterionGaussianMCMC", convergence_options={"threshold": 0.5/d}
 
             # Run MCMC
             updated_info2, sampler2 = mcmc(model, gpr, add_options = {"mcmc": {"Rminus1_stop": rminusone, "max_tries": 10000}})

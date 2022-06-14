@@ -130,7 +130,7 @@ def callback(model, gpr, gp_acquisition, convergence, options,
 if np.all(_check_checkpoint(cname)):
   _, gpr, _, _, _ = _read_checkpoint(cname)
 else:
-  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000},callback=callback,checkpoint=cname)
+  _, gpr, _, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000},callback=callback,checkpoint=cname)
 
 
 

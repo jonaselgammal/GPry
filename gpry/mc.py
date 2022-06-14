@@ -55,7 +55,7 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     # TODO :: this is very artificial and probably should be removed eventually.
     # It was added here by Jonas, so I am leaving it for now until we discuss further
     epsilon = [1e-3 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
-    for p, eps in zip(info["params"], epsilon):
+    for p, eps in zip(info["params"].values(), epsilon):
         p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
 
     def lkl(**kwargs):
@@ -107,7 +107,7 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
                       output=None, run=True, restart=False, convergence=None):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
-    ready to be run on the surrogate model.
+    and runs it on the surrogate model.
 
     Parameters
     ----------

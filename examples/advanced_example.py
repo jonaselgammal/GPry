@@ -60,7 +60,7 @@ options = {"max_init": 100, "max_points": 200,
 
 # Run the GP
 from gpry.run import run
-model, gpr, acquisition, convergence, options = run(
+model, gpr, acquisition, convergence, options, progress = run(
     model, gp=gpr, gp_acquisition=acq,
     convergence_criterion=conv, options=options)
 
