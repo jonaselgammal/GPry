@@ -147,7 +147,7 @@ class DontConverge(ConvergenceCriterion):
         return False
 
 
-class ConvergenceCriterionGaussianMCMC(ConvergenceCriterion):
+class GaussianKL(ConvergenceCriterion):
     """
     This convergence criterion estimates the mean and covariance of a mode of the GP
     (assumed uni-modal) by running an MCMC sampler on the GP, and compares this to the
