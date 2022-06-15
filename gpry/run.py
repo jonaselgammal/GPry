@@ -296,7 +296,7 @@ class Runner(object):
     @property
     def d(self):
         """Dimensionality of the problem."""
-        return self.gpr.d
+        return self.model.prior.d()
 
     def log(self, msg, level=None):
         """
