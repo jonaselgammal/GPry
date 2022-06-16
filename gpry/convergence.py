@@ -437,6 +437,8 @@ class CorrectCounter(ConvergenceCriterion):
         n_new = len(new_y)
         assert(n_new == len(pred_y))
         max_val = 0
+        max_diff = 0
+        max_thres = 0
         for yn, yl in zip(new_y, pred_y):
             # rel_difference = np.abs((yl - gp.y_max) / (yn - gp.y_max) - 1.)
             diff = np.abs(yl - yn)
