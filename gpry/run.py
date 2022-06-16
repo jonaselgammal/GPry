@@ -19,7 +19,7 @@ from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
-from gpry.io import check_checkpoint, read_checkpoint, save_checkpoint
+from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp
 from gpry.plots import plot_convergence
 
@@ -142,7 +142,12 @@ class Runner(object):
         self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
+            create_path(self.checkpoint)
             self.plots_path = os.path.join(self.checkpoint, "images")
+            create_path(self.plots_path)
+        else:
+            self.plots_path = "images"
+            create_path(self.plots_path)
         self.options = options
         self.verbose = verbose
         self.rng = get_random_state()
@@ -169,85 +174,84 @@ class Runner(object):
                         if np.any(checkpoint_files):
                             self.log("warning: Found checkpoint files but they were "
                                      "incomplete. Ignoring them...", level=2)
-                # Check model
-                if not isinstance(model, Model):
-                    raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+            # Check model
+            if not isinstance(model, Model):
+                raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+            try:
+                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+            except Exception as excpt:
+                raise RuntimeError("There seems to be something wrong with "
+                                   f"the model instance: {excpt}")
+            # Construct GP if it's not already constructed
+            if isinstance(gpr, str):
+                if gpr not in ["RBF", "Matern"]:
+                    raise ValueError("Supported standard kernels are 'RBF' "
+                                     f"and Matern, got {gpr}")
+                self.gpr = GaussianProcessRegressor(
+                    kernel=gpr,
+                    n_restarts_optimizer=10 + 2 * self.d,
+                    preprocessing_X=Normalize_bounds(prior_bounds),
+                    preprocessing_y=Normalize_y(),
+                    bounds=prior_bounds,
+                    verbose=verbose
+                )
+            elif not isinstance(gpr, GaussianProcessRegressor):
+                raise TypeError("gpr should be a GP regressor, 'RBF' or 'Matern'"
+                                f", got {gpr}")
+            else:
+                self.gpr = gpr
+            # Construct the acquisition object if it's not already constructed
+            if isinstance(gp_acquisition, str):
+                if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
+                    raise ValueError("Supported acquisition function is 'LogExp', "
+                                     f"'NonlinearLogExp', got {gp_acquisition}")
+                bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                self.acquisition = GP_Acquisition(
+                    bounds, proposer=None, acq_func=gp_acquisition,
+                    acq_optimizer="fmin_l_bfgs_b",
+                    n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
+                    preprocessing_X=Normalize_bounds(prior_bounds),
+                    zeta_scaling=options.get("zeta_scaling", 1.1), verbose=verbose)
+            elif isinstance(gp_acquisition, GP_Acquisition):
+                self.acquisition = gp_acquisition
+            else:
+                raise TypeError(
+                    "gp_acquisition should be an Acquisition object or "
+                    f"'LogExp', or 'NonlinearLogExp', got {gp_acquisition}")
+            # Construct the convergence criterion
+            if isinstance(convergence_criterion, str):
                 try:
-                    prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                except Exception as excpt:
-                    raise RuntimeError("There seems to be something wrong with "
-                                       f"the model instance: {excpt}")
-                # Construct GP if it's not already constructed
-                dim = model.prior.d()
-                if isinstance(gpr, str):
-                    if gpr not in ["RBF", "Matern"]:
-                        raise ValueError("Supported standard kernels are 'RBF' "
-                                         f"and Matern, got {gpr}")
-                    self.gpr = GaussianProcessRegressor(
-                        kernel=gpr,
-                        n_restarts_optimizer=10 + 2 * dim,
-                        preprocessing_X=Normalize_bounds(prior_bounds),
-                        preprocessing_y=Normalize_y(),
-                        bounds=prior_bounds,
-                        verbose=verbose
-                    )
-                elif not isinstance(gpr, GaussianProcessRegressor):
-                    raise TypeError("gpr should be a GP regressor, 'RBF' or 'Matern'"
-                                    f", got {gpr}")
-                else:
-                    self.gpr = gpr
-                # Construct the acquisition object if it's not already constructed
-                if isinstance(gp_acquisition, str):
-                    if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
-                        raise ValueError("Supported acquisition function is 'LogExp', "
-                                         f"'NonlinearLogExp', got {gp_acquisition}")
-                    bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-                    self.acquisition = GP_Acquisition(
-                        bounds, proposer=None, acq_func=gp_acquisition,
-                        acq_optimizer="fmin_l_bfgs_b",
-                        n_restarts_optimizer=5 * dim, n_repeats_propose=10,
-                        preprocessing_X=Normalize_bounds(prior_bounds),
-                        zeta_scaling=options.get("zeta_scaling", 1.1), verbose=verbose)
-                elif isinstance(gp_acquisition, GP_Acquisition):
-                    self.acquisition = gp_acquisition
-                else:
-                    raise TypeError(
-                        "gp_acquisition should be an Acquisition object or "
-                        f"'LogExp', or 'NonlinearLogExp', got {gp_acquisition}")
-                # Construct the convergence criterion
-                if isinstance(convergence_criterion, str):
-                    try:
-                        conv_class = getattr(gpryconv, convergence_criterion)
-                    except AttributeError:
-                        raise ValueError(
-                            f"Unknown convergence criterion {convergence_criterion}. "
-                            f"Available convergence criteria: {gpryconv.builtin_names()}")
-                    self.convergence = conv_class(model.prior, convergence_options or {})
-                elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
-                    self.convergence = convergence_criterion
-                else:
-                    raise TypeError("convergence_criterion should be a "
-                                    "Convergence_criterion object or "
-                                    f"{gpryconv.builtin_names()}, got "
-                                    f"{convergence_criterion}")
-                self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
+                    conv_class = getattr(gpryconv, convergence_criterion)
+                except AttributeError:
+                    raise ValueError(
+                        f"Unknown convergence criterion {convergence_criterion}. "
+                        f"Available convergence criteria: {gpryconv.builtin_names()}")
+                self.convergence = conv_class(model.prior, convergence_options or {})
+            elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
+                self.convergence = convergence_criterion
+            else:
+                raise TypeError("convergence_criterion should be a "
+                                "Convergence_criterion object or "
+                                f"{gpryconv.builtin_names()}, got "
+                                f"{convergence_criterion}")
+            self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
             # Read in options for the run
             if options is None:
                 self.log(
                     "No options dict found. Defaulting to standard parameters.", level=3)
                 options = {}
-            self.n_initial = options.get("n_initial", 3 * dim)
+            self.n_initial = options.get("n_initial", 3 * self.d)
             self.max_points = options.get("max_points", 1000)
             self.max_accepted = options.get("max_accepted", self.max_points)
-            self.max_init = options.get("max_init", 10 * dim * self.n_initial)
+            self.max_init = options.get("max_init", 10 * self.d * self.n_initial)
             self.n_points_per_acq = options.get("n_points_per_acq", mpi_size)
             self.fit_full_every = options.get(
-                "fit_full_every", max(int(2 * np.sqrt(dim)), 1))
+                "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
             if self.n_points_per_acq < mpi_size:
                 self.log("Warning: parallellisation not fully utilised! It is advised to "
                          "make ``n_points_per_acq`` equal to the number of MPI processes "
                          "(default when not specified).", level=2)
-            if self.n_points_per_acq > 2 * dim:
+            if self.n_points_per_acq > 2 * self.d:
                 self.log("Warning: The number kriging believer samples per "
                          "acquisition step is larger than 2x number of dimensions of "
                          "the feature space. This may lead to slow convergence."
@@ -268,8 +272,6 @@ class Runner(object):
             self.callback_is_MPI_aware = callback_is_MPI_aware
             # Print resume
             self.log("Initialized GPry.", level=3)
-            if not self.loaded_from_checkpoint:
-                self.log("Starting by drawing initial samples.", level=3)
         if multiple_processes:
             for attr in ("n_initial", "max_init", "max_points", "max_accepted",
                          "n_points_per_acq", "gpr", "acquisition",
@@ -292,6 +294,7 @@ class Runner(object):
         # Prepare progress summary table; the table key is the iteration number
         self.progress = Progress()
         self.has_run = False
+        self.has_converged = False
 
     @property
     def d(self):
@@ -333,6 +336,7 @@ class Runner(object):
             return
         if not self.loaded_from_checkpoint:
             # Define initial training set
+            self.log("Starting by drawing initial samples.", level=3)
             self.do_initial_training()
             if is_main_process:
                 # Save checkpoint
@@ -455,6 +459,7 @@ class Runner(object):
                          f"con: {self.convergence.values[-1]}, "
                          f"lim: {self.convergence.thres[-1]}")
             if is_converged:
+                self.has_converged = True
                 break
             # If the loop reaches n_left <= 0, then all processes need to break,
             # not just the main process
