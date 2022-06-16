@@ -16,6 +16,10 @@ _checkpoint_filenames = {
     "model": "mod.pkl", "gpr": "gpr.pkl", "acquisition": "acq.pkl",
     "convergence": "con.pkl", "options": "opt.pkl", "progress": "pro.pkl"}
 
+def create_path(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        print("Successfully created the directory %s" % path)
 
 def check_checkpoint(path=None):
     """
@@ -107,9 +111,7 @@ def save_checkpoint(path, model, gpr, acquisition, convergence, options, progres
     if path is None:
         return
     pickle = _get_dill()
-    if not os.path.exists(path):
-        os.makedirs(path)
-        print("Successfully created the directory %s" % path)
+    create_path(path)
     try:
         with open(os.path.join(path, _checkpoint_filenames["model"]), 'wb') as f:
             # Save model as dict
