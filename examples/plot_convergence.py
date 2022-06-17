@@ -11,7 +11,7 @@ from time import time
 import pickle
 
 # GPry things needed for building the model
-from gpry.acquisition_functions import Log_exp
+from gpry.acquisition_functions import LogExp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds

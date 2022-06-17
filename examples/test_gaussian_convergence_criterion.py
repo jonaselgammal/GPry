@@ -15,7 +15,7 @@ from time import time
 import pickle
 
 # GPry things needed for building the model
-from gpry.acquisition_functions import Log_exp
+from gpry.acquisition_functions import LogExp
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, ConstantKernel as C
 from gpry.preprocessing import Normalize_y, Normalize_bounds
@@ -101,7 +101,7 @@ for n_r in range(n_repeats):
                                   preprocessing_y=Normalize_y(),
                                   n_restarts_optimizer=5,
                                   noise_level=1e-3)
-    af = Log_exp(zeta=z, dimension=dim)
+    af = LogExp(zeta=z, dimension=dim)
     acquire = GP_Acquisition(bnds,
                              acq_func=af,
                              preprocessing_X=Normalize_bounds(bnds),

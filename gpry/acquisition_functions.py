@@ -3,11 +3,11 @@ Base Class
 ==========
 All acquisition functions are derived from this class. If you want to define
 your own acquisition functions it needs to inherit from this class. A tutorial
-on how to define such a class is given in :class:`.Acquisition_Function`
+on how to define such a class is given in :class:`.AcquisitionFunction`
 
 .. autosummary::
 
-     Acquisition_Function
+     AcquisitionFunction
 
 Inbuilt Acquisition Functions
 =============================
@@ -17,17 +17,17 @@ to the value of the acquisition function at point X.
 
 The inbuilt acquisition functions should offer a great deal of flexibility.
 If you want to define your own acquisition function please refer to
-:class:`Acquisition_Function`.
+:class:`AcquisitionFunction`.
 
 .. autosummary::
 
      ConstantAcqFunc
      Mu
      Std
-     Exponential_mu
-     Exponential_std
-     Expected_improvement
-     Log_exp
+     ExponentialMu
+     ExponentialStd
+     ExpectedImprovement
+     LogExp
 
 Additional things
 =================
@@ -39,7 +39,7 @@ should not be needed.
 
      is_acquisition_function
      Hyperparameter
-     Acquisition_Function_Operator
+     AcquisitionFunctionOperator
      Sum
      Product
      Exponentiation
@@ -57,14 +57,20 @@ import numpy as np
 from scipy.stats import norm
 from sklearn.base import clone
 
+
+# UNUSED
 def safe_log_expm1(x):
-    mask = x<1
+    """
+    Numerically safer ``log(exp(x) - 1)``.
+    """
+    mask = x < 1
     ret = np.empty_like(x)
     ret[mask] = np.log(np.expm1(x[mask]))
     ret[~mask] = x[~mask] + np.log1p(-np.exp(-x[~mask]))
     return ret
 
-class Acquisition_Function(metaclass=ABCMeta):
+
+class AcquisitionFunction(metaclass=ABCMeta):
     """Base class for all Acquisition Functions (AF's). All acquisition
     functions are derived from this class.
 
@@ -345,22 +351,22 @@ class Acquisition_Function(metaclass=ABCMeta):
         """Evaluate the acquisition function."""
 
     def __add__(self, b):
-        if not isinstance(b, Acquisition_Function):
+        if not isinstance(b, AcquisitionFunction):
             return Sum(self, ConstantAcqFunc(b))
         return Sum(self, b)
 
     def __radd__(self, b):
-        if not isinstance(b, Acquisition_Function):
+        if not isinstance(b, AcquisitionFunction):
             return Sum(ConstantAcqFunc(b), self)
         return Sum(b, self)
 
     def __mul__(self, b):
-        if not isinstance(b, Acquisition_Function):
+        if not isinstance(b, AcquisitionFunction):
             return Product(self, ConstantAcqFunc(b))
         return Product(self, b)
 
     def __rmul__(self, b):
-        if not isinstance(b, Acquisition_Function):
+        if not isinstance(b, AcquisitionFunction):
             return Product(ConstantAcqFunc(b), self)
         return Product(b, self)
 
@@ -382,7 +388,7 @@ class Acquisition_Function(metaclass=ABCMeta):
                                  ", ".join(map("{0:.3g}".format, self.theta)))
 
 
-class ConstantAcqFunc(Acquisition_Function):
+class ConstantAcqFunc(AcquisitionFunction):
     r"""Constant Acquisition function.
 
     Can be used as part of a product-Composition where it scales the magnitude
@@ -450,7 +456,8 @@ class ConstantAcqFunc(Acquisition_Function):
         return "{0:.3g}**2".format(np.sqrt(self.constant_value))
 
 
-class Mu(Acquisition_Function):
+# UNUSED
+class Mu(AcquisitionFunction):
     r""":math:`\mu(X)` of the surrogate model.
 
     .. math::
@@ -522,7 +529,8 @@ class Mu(Acquisition_Function):
         return "{0:.3g}**2".format(np.sqrt(self.a))
 
 
-class Exponential_mu(Acquisition_Function):
+# UNUSED
+class ExponentialMu(AcquisitionFunction):
     r""":math:`\exp[\mu(X)]` of the surrogate model.
 
     .. math::
@@ -591,7 +599,8 @@ class Exponential_mu(Acquisition_Function):
         return "{0:.3g}**2".format(np.sqrt(self.a))
 
 
-class Std(Acquisition_Function):
+# UNUSED
+class Std(AcquisitionFunction):
     r""":math:`\sigma(X)` of the surrogate model.
 
     .. math::
@@ -663,7 +672,8 @@ class Std(Acquisition_Function):
         return "{0:.3f}".format(self.a)
 
 
-class Exponential_std(Acquisition_Function):
+# UNUSED
+class ExponentialStd(AcquisitionFunction):
     r""":math:`\exp[\sigma(X)]` of the surrogate model.
 
     .. math::
@@ -734,7 +744,8 @@ class Exponential_std(Acquisition_Function):
         return "{0:.3f}".format(self.a)
 
 
-class Expected_improvement(Acquisition_Function):
+# UNUSED
+class ExpectedImprovement(AcquisitionFunction):
     r"""Computes the (negative) Expected improvement function.
 
     The conditional probability `P(y=f(x) | x)` form a gaussian with a certain
@@ -839,7 +850,7 @@ class Expected_improvement(Acquisition_Function):
         return "{0:.3f}".format(self.xi)
 
 
-class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
+class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
     r"""Acquisition function which is designed to efficiently sample
     log-probability distributions. This is achieved by transforming
     :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
@@ -949,7 +960,6 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
         if self.sigma_n is None:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                # TODO: prob not correct, but not used
                 noise_var += np.mean(sigma_n)**2
             else:
                 noise_var += sigma_n**2
@@ -963,7 +973,7 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
         baseline = gp.y_max
 
         # Alternative option, but found not to work extremely well
-        #baseline = gp.preprocessing_y.inverse_transform([0])[0]
+        # baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):
             values[mask] = self.f(mu[mask] - baseline, np.sqrt(var[mask]), zeta)
         if np.any(~mask):
@@ -973,15 +983,15 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
                     grad[mask] = np.array(std_grad)[mask] / \
-                        (std[mask]-sigma_n) + 2*zeta*np.array(mu_grad)[mask]
+                        (std[mask] - sigma_n) + 2 * zeta * np.array(mu_grad)[mask]
                 if np.any(~mask):
-                    grad[~mask] = np.ones_like(std_grad[~mask])*np.inf
+                    grad[~mask] = np.ones_like(std_grad[~mask]) * np.inf
             else:
                 std = std[0]
                 if std > sigma_n:
-                    grad = std_grad/(std-sigma_n) + 2*zeta*mu_grad
+                    grad = std_grad / (std - sigma_n) + 2 * zeta * mu_grad
                 else:
-                    grad = np.ones_like(std_grad)*np.inf
+                    grad = np.ones_like(std_grad) * np.inf
             return values, grad
         else:
             return values
@@ -990,15 +1000,9 @@ class Base_log_exp(Acquisition_Function,metaclass=ABCMeta):
         return "{0:.3f}".format(self.zeta)
 
 
-class Nonlinear_log_exp(Base_log_exp):
-
-    @staticmethod
-    def f(mu, std, zeta):
-        """Exponentiated log-error bar"""
-        return 2 * zeta * mu + safe_log_expm1(std)
-
-class Log_exp(Base_log_exp):
-    r"""This gives the acquisition function
+class LogExp(BaseLogExp):
+    r"""
+    This gives the acquisition function
 
     .. math::
 
@@ -1012,12 +1016,23 @@ class Log_exp(Base_log_exp):
 
     .. note::
         :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
-        GP regressor which follows the **log**-probability distribution."""
+        GP regressor which follows the **log**-probability distribution.
+    """
 
     @staticmethod
     def f(mu, std, zeta):
-        """Linearized exponentiated log-error bar"""
+        """Linearized exponentiated log-error bar."""
         return 2 * zeta * mu + np.log(std)
+
+
+# UNUSED
+# TODO: gradient assumed by parent class is not correct for this acquisition function
+class NonlinearLogExp(BaseLogExp):
+
+    @staticmethod
+    def f(mu, std, zeta):
+        """Exponentiated log-error bar"""
+        return 2 * zeta * mu + safe_log_expm1(std)
 
 
 # Function for determining whether an object is an acquisition function
@@ -1036,7 +1051,7 @@ def is_acquisition_function(acq_func):
         whether the specified object is an acquisition
         function.
     """
-    return isinstance(acq_func, Acquisition_Function)
+    return isinstance(acq_func, AcquisitionFunction)
 
 
 class Hyperparameter(namedtuple('Hyperparameter',
@@ -1094,7 +1109,7 @@ class Hyperparameter(namedtuple('Hyperparameter',
                 self.fixed == other.fixed)
 
 
-class Acquisition_Function_Operator(Acquisition_Function):
+class AcquisitionFunctionOperator(AcquisitionFunction):
     """Base class for all AF operators."""
 
     def __init__(self, k1, k2):
@@ -1176,7 +1191,7 @@ class Acquisition_Function_Operator(Acquisition_Function):
             or (self.k1 == b.k2 and self.k2 == b.k1)
 
 
-class Sum(Acquisition_Function_Operator):
+class Sum(AcquisitionFunctionOperator):
     """Overwrites the ``+`` operator for two or more AF's.
     Additionally gradients are computed and calculated together
     according to the rules of differentiation.
@@ -1197,7 +1212,7 @@ class Sum(Acquisition_Function_Operator):
         return "{0} + {1}".format(self.k1, self.k2)
 
 
-class Product(Acquisition_Function_Operator):
+class Product(AcquisitionFunctionOperator):
     """Overwrites the ``*`` operator for two or more AF's.
     Additionally gradients are computed and calculated together
     according to the rules of differentiation.
@@ -1218,7 +1233,7 @@ class Product(Acquisition_Function_Operator):
         return "{0} * {1}".format(self.k1, self.k2)
 
 
-class Exponentiation(Acquisition_Function):
+class Exponentiation(AcquisitionFunction):
     """Defines the expontentiation of an AF with a real number.
     Additionally gradients are computed and calculated together
     according to the rules of differentiation.
@@ -1279,7 +1294,6 @@ class Exponentiation(Acquisition_Function):
 
         Returns
         -------
-
         theta : ndarray of shape (n_dims,)
             The non-fixed, log-transformed hyperparameters of the acquisition
             function
@@ -1289,6 +1303,7 @@ class Exponentiation(Acquisition_Function):
     @theta.setter
     def theta(self, theta):
         """Sets the (flattened, log-transformed) non-fixed hyperparameters.
+
         Parameters
         ----------
         theta : ndarray of shape (n_dims,)

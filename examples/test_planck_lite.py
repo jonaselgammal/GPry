@@ -42,7 +42,7 @@ kwargs = {
     "convergence_criterion": "ConvergenceCriterionGaussianMCMC",
     "convergence_options": {"limit": 2e-2}}
 
-model, gpr, acquisition, convergence, options = run(model, **kwargs)
+model, gpr, acquisition, convergence, options, progress = run(model, **kwargs)
 
 
 # Run the MCMC and extract samples

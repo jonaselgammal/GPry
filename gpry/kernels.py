@@ -3,8 +3,6 @@ from math import sqrt
 import numpy as np
 import warnings
 from sklearn.gaussian_process.kernels import Kernel as sk_Kernel
-from sklearn.gaussian_process.kernels import KernelOperator \
-    as sk_KernelOperator
 from sklearn.gaussian_process.kernels import ConstantKernel \
     as sk_ConstantKernel
 from sklearn.gaussian_process.kernels import DotProduct as sk_DotProduct
@@ -13,14 +11,10 @@ from sklearn.gaussian_process.kernels import Exponentiation \
 from sklearn.gaussian_process.kernels import ExpSineSquared \
     as sk_ExpSineSquared
 from sklearn.gaussian_process.kernels import Matern as sk_Matern
-from sklearn.gaussian_process.kernels import NormalizedKernelMixin \
-    as sk_NormalizedKernelMixin
 from sklearn.gaussian_process.kernels import Product as sk_Product
 from sklearn.gaussian_process.kernels import RationalQuadratic \
     as sk_RationalQuadratic
 from sklearn.gaussian_process.kernels import RBF as sk_RBF
-from sklearn.gaussian_process.kernels import StationaryKernelMixin \
-    as sk_StationaryKernelMixin
 from sklearn.gaussian_process.kernels import Sum as sk_Sum
 from sklearn.gaussian_process.kernels import WhiteKernel as sk_WhiteKernel
 
@@ -87,8 +81,8 @@ class Hyperparameter(namedtuple('Hyperparameter',
 
     def __new__(cls, name, value_type, bounds, max_length, n_elements=1, fixed=None,
                 dynamic=None):
-        if not isinstance(bounds, str) or (bounds != "fixed"
-                                           and bounds != "dynamic"):
+        if not isinstance(bounds, str) or (bounds != "fixed" and
+                                           bounds != "dynamic"):
             bounds = np.atleast_2d(bounds)
             if n_elements > 1:  # vector-valued parameter
                 if bounds.shape[0] == 1:
@@ -110,12 +104,12 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # are equal.
     def __eq__(self, other):
         return (self.name == other.name and
-                self.value_type == other.value_type
-                and np.all(self.bounds == other.bounds)
-                and self.n_elements == other.n_elements
-                and self.fixed == other.fixed
-                and self.dynamic == other.dynamic
-                and self.max_length == other.max_length)
+                self.value_type == other.value_type and
+                np.all(self.bounds == other.bounds) and
+                self.n_elements == other.n_elements and
+                self.fixed == other.fixed and
+                self.dynamic == other.dynamic and
+                self.max_length == other.max_length)
 
 
 class Kernel(sk_Kernel):
@@ -160,6 +154,7 @@ class Kernel(sk_Kernel):
     @property
     def bounds(self):
         """Returns the log-transformed bounds on the theta.
+
         Returns
         -------
         bounds : ndarray of shape (n_dims, 2)
@@ -174,17 +169,17 @@ class Kernel(sk_Kernel):
                     if np.iterable(thetas):
                         for t, theta in enumerate(thetas):
                             if hyperparameter.max_length[t] is None:
-                                bounds.append([theta*1e-2, theta*1e2])
+                                bounds.append([theta * 1e-2, theta * 1.])
                             else:
                                 bounds.append(
-                                    [hyperparameter.max_length[t]*1e-2,
-                                     hyperparameter.max_length[t]*1e2])
+                                    [hyperparameter.max_length[t] * 1e-2,
+                                     hyperparameter.max_length[t] * 1.])
                     else:
                         if hyperparameter.max_length[0] is None:
-                            bounds.append([thetas*1e-2, thetas*1e2])
+                            bounds.append([thetas * 1e-2, thetas * 1.])
                         else:
-                            bounds.append([hyperparameter.max_length[0]*1e-2,
-                                           hyperparameter.max_length[0]*1e2])
+                            bounds.append([hyperparameter.max_length[0] * 1e-2,
+                                           hyperparameter.max_length[0] * 1.])
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
@@ -626,6 +621,7 @@ class KernelOperator:
     """
     Updated to accomodate the new kernel hyperparameter definition.
     """
+
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter."""
@@ -676,10 +672,7 @@ class Sum(KernelOperator, Kernel, sk_Sum):
         return super(KernelOperator, self).hyperparameters
 
     def gradient_x(self, x, X_train):
-        return (
-            self.k1.gradient_x(x, X_train)
-            + self.k2.gradient_x(x, X_train)
-        )
+        return self.k1.gradient_x(x, X_train) + self.k2.gradient_x(x, X_train)
 
 
 class Product(KernelOperator, Kernel, sk_Product):
@@ -693,12 +686,12 @@ class Product(KernelOperator, Kernel, sk_Product):
         x = np.expand_dims(x, axis=0)
         X_train = np.asarray(X_train)
         f_ggrad = (
-            np.expand_dims(self.k1(x, X_train)[0], axis=1)
-            * self.k2.gradient_x(x, X_train)
+            np.expand_dims(self.k1(x, X_train)[0], axis=1) *
+            self.k2.gradient_x(x, X_train)
         )
         fgrad_g = (
-            np.expand_dims(self.k2(x, X_train)[0], axis=1)
-            * self.k1.gradient_x(x, X_train)
+            np.expand_dims(self.k2(x, X_train)[0], axis=1) *
+            self.k1.gradient_x(x, X_train)
         )
         return f_ggrad + fgrad_g
 

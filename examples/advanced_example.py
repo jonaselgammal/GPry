@@ -38,8 +38,8 @@ gpr = GaussianProcessRegressor(
     )
 
 # Construct Acquisition function
-from gpry.acquisition_functions import Log_exp
-af = Log_exp(zeta=0.1)
+from gpry.acquisition_functions import LogExp
+af = LogExp(zeta=0.1)
 
 # Construct Acquisition procedure
 from gpry.gp_acquisition import GP_Acquisition
@@ -60,7 +60,7 @@ options = {"max_init": 100, "max_points": 200,
 
 # Run the GP
 from gpry.run import run
-model, gpr, acquisition, convergence, options = run(
+model, gpr, acquisition, convergence, options, progress = run(
     model, gp=gpr, gp_acquisition=acq,
     convergence_criterion=conv, options=options)
 

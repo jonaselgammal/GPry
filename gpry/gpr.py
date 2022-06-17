@@ -5,12 +5,13 @@ from operator import itemgetter
 
 # numpy and scipy
 import numpy as np
-from scipy.linalg import cholesky, cho_solve, solve_triangular
+from scipy.linalg import cholesky, solve_triangular
 import scipy.optimize
 
 # gpry kernels and SVM
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
+from gpry.tools import check_random_state
 
 # sklearn GP and kernel utilities
 from sklearn.gaussian_process import GaussianProcessRegressor \
@@ -18,8 +19,6 @@ from sklearn.gaussian_process import GaussianProcessRegressor \
 from sklearn.base import clone, BaseEstimator as BE
 
 # sklearn utilities
-from sklearn.utils import check_random_state
-from sklearn.utils.optimize import _check_optimize_result
 from sklearn.utils.validation import check_array
 
 
@@ -44,7 +43,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Parameters
     ----------
-
     kernel : kernel object, optional (default: "RBF")
         The kernel specifying the covariance function of the GP. If
         "RBF"/"Matern" is passed, the asymmetric kernel::
@@ -137,7 +135,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Attributes
     ----------
-
     X_train : array-like, shape = (n_samples, n_features)
         Original (untransformed) feature values in training data. Intended to be
         used when one wants to access the training data for any purpose.
@@ -267,6 +264,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             print("===========================================")
             print("Kernel:")
             if kernel == "RBF":
+                # TODO: fix this!
                 print("ConstantKernel(1, [0.001, 10000])"
                       " * RBF([0.01]*n_dim, 'dynamic')")
             else:
@@ -289,6 +287,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             return self.X_train.shape[1]
         else:
             return self.bounds.shape[0]
+# maybe rename
 
     @property
     def n_total_evals(self):
@@ -366,6 +365,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         fit : Bool, optional (default: True)
             Whether the model is refit to new :math:`\\theta`-parameters
             or just updated using the blockwise matrix-inversion lemma.
+
+        simplified_fit : Bool, optional (default: False)
+            If True and ``fit=True``, hyperparameters are only optimised from the last
+            optimum (otherwise, a number of optimisation processes are also started from
+            samples of the hyperparameters' priors).
 
         Returns
         -------
@@ -574,6 +578,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             None should only be passed if it is called from the
             ``append to data`` method.
 
+        simplified : bool, default: False
+            If True, runs the optimiser only from the last optimum of the hyperparameters
+            (otherwise, a number of optimisation processes are also started from samples
+            of the hyperparameters' priors).
+
         Returns
         -------
         self
@@ -665,22 +674,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 else:
                     return -self.log_marginal_likelihood(theta,
                                                          clone_kernel=False)
-
             print("FINDING FIRST OPTIMUM")
+
             # First optimize starting from theta specified in kernel
+            bounds = self.kernel_.bounds
             optima = [(self._constrained_optimization(obj_func,
                                                       self.kernel_.theta,
-                                                      self.kernel_.bounds))]
+                                                      bounds))]
 
             print("FINDING ADDITIONAL OPTIMA",(self.n_restarts_optimizer if not simplified else 1))
-            # Additional runs are performed from log-uniform chosen initial
-            # theta
+            # Additional runs are performed from log-uniform chosen initial theta
             if self.n_restarts_optimizer > 0 and not simplified:
                 if not np.isfinite(self.kernel_.bounds).all():
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
-                bounds = np.copy(self.kernel_.bounds)
                 for iteration in range(self.n_restarts_optimizer):
                     theta_initial = \
                         self._rng.uniform(bounds[:, 0], bounds[:, 1])
@@ -768,10 +776,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended:
             raise ValueError("The number of added points doesn't match the "
                              "dimensions of the K_inv matrix. %s != %s"
-                             % (self.K_inv_.shape[0], self.y_train_.size-self.newly_appended))
+                             % (self.K_inv_.shape[0],
+                                self.y_train_.size - self.newly_appended))
 
         # Define all neccessary variables
-        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT! # TODO :: investigate closer
+        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT!
+        # TODO :: investigate closer
         """
         K_inv = self.K_inv_
         X_1 = self.X_train_[:-self.newly_appended]
@@ -842,6 +852,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return_std_grad : bool, default: False
             Whether or not to return the gradient of the std.
             Only valid when X is a single point.
+
+        do_check_array : bool, default: True
+            If False, ``X`` is assumed to be correctly formatted, and no checks are
+            performed on it. Reduces overhead. Use only for repeated calls when the input
+            is programmatically generated to be correct at each stage.
 
         .. note::
 

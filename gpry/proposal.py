@@ -8,14 +8,12 @@ function's optimizer.
 from abc import ABCMeta, abstractmethod
 from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
 from cobaya.tools import resolve_packages_path
-from cobaya.model import get_model
 from functools import partial
 import scipy.stats
 import numpy as np
-from random import choice
-from gpry.mc import generate_sampler_for_gp
+from gpry.mc import mc_sample_from_gp
 from cobaya.model import LogPosterior
-from gpry.tools import check_params_names_len
+from gpry.tools import check_random_state
 
 
 class Proposer(metaclass=ABCMeta):
@@ -28,7 +26,6 @@ class Proposer(metaclass=ABCMeta):
 
         Parameters
         ----------
-
         random_state : int or numpy.RandomState, optional
             The generator used to initialize the centers. If an integer is
             given, it fixes the seed. Defaults to the global numpy random
@@ -42,9 +39,8 @@ class Proposer(metaclass=ABCMeta):
 
         Parameters
         ----------
-
         gpr : GaussianProcessRegressor
-        The gpr instance that has been updated.
+            The gpr instance that has been updated.
         """
         return
 
@@ -63,7 +59,7 @@ class UniformProposer(Proposer):
     def __init__(self, bounds):
         n_d = len(bounds)
         proposal_pdf = scipy.stats.uniform(
-            loc=bounds[:, 0], scale=bounds[:, 1]-bounds[:, 0])
+            loc=bounds[:, 0], scale=bounds[:, 1] - bounds[:, 0])
         self.proposal_function = partial(proposal_pdf.rvs, size=n_d)
 
     def get(self, random_state=None):
@@ -71,6 +67,50 @@ class UniformProposer(Proposer):
         
     def update(self, gpr):
         return
+
+
+class PartialProposer(Proposer):
+    """
+    Combines any of the other proposers with a :class:`UniformProposer` with
+    a fraction drawn from the uniform proposer to encourage exploration.
+
+    Parameters
+    ----------
+    bounds : array-like, shape=(n_dims,2)
+        Array of bounds of the prior [lower, upper] along each dimension.
+
+    true_proposer: Proposer
+        The initialized Proposer instance to use instead of uniform for a
+        fraction of samples.
+
+    random_proposal_fraction : float, between 0 and 1, optional (default=0.25)
+        The fraction of proposals that is drawn from the UniformProposer.
+    """
+
+    # Either sample from true_proposer, or give a random prior sample
+    def __init__(self, bounds, true_proposer, random_proposal_fraction=0.25):
+
+        if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
+            raise ValueError(
+                "Cannot pass a fraction outside of [0,1]. "
+                f"You passed 'random_proposal_fraction={random_proposal_fraction}'")
+        if not isinstance(true_proposer, Proposer):
+            raise ValueError("The true proposer needs to be a valid proposer.")
+
+        self.rpf = random_proposal_fraction
+        # ToDo: Make this a sample of the prior instead of uniform hypercube.
+        self.random_proposer = UniformProposer(bounds)
+        self.true_proposer = true_proposer
+
+    def get(self, random_state=None):
+        rng = check_random_state(random_state)
+        if rng.random() > self.rpf:
+            return self.true_proposer.get(random_state=rng)
+        else:
+            return self.random_proposer.get(random_state=rng)
+
+    def update(self, gpr):
+        self.true_proposer.update(gpr)
 
 
 class MeanCovProposer(Proposer):
@@ -103,6 +143,7 @@ class MeanCovProposer(Proposer):
     def update(self, gpr):
         return
 
+# UNUSED (not really, but should not be here, being specific to one problem)
 class MeanAutoCovProposer(Proposer):
     """
     Does the same as :class:`MeanCovProposer` but tries to get an automatically
@@ -146,6 +187,7 @@ class FuncProposer(Proposer):
     def update(self, gpr):
         return
 
+# UNUSED
 class SmallChainProposer(Proposer):
     """
     Uses a short MCMC chain starting from a random training point of the GP to
@@ -186,24 +228,26 @@ class SmallChainProposer(Proposer):
             last, self.samples = self.samples[-1], self.samples[:-1]
             return last
         else:
-            self.resample()
+            self.resample(random_state)
             last, self.samples = self.samples[-1], self.samples[:-1]
             return last
 
-    def resample(self):
+    def resample(self, random_state=None):
+        rng = check_random_state(random_state)
         for i in range(self.nretries):
-            this_i = choice(range(len(self.gpr.X_train)))
+            this_i = rng.choice(range(len(self.gpr.X_train)))
             this_X = np.copy(self.gpr.X_train[this_i])
             logpost = self.gpr.y_train[this_i]
             self.sampler.current_point.add(this_X, LogPosterior(logpost=logpost))
-            # reset the number of samples and run
+            # reset random state and number of samples
+            self.sampler._rng = rng
             self.sampler.collection.reset()
             try:
                 self.sampler.run()
-                points = self.sampler.products()["sample"][self.parnames].values[::-self.nsteps]
-                self.samples = points
+                points = self.sampler.products()["sample"][self.parnames].values
+                self.samples = points[::-self.nsteps]
                 return
-            except:
+            except Exception:
                 pass
         # if resample_tries failed raise Warning and pass uniform points
         print("[proposer] WARNING: MC chain got stuck. Taking random uniform points")
@@ -213,59 +257,14 @@ class SmallChainProposer(Proposer):
 
     def update(self, gpr):
         self.samples = []
-        self.gpr = gpr
-        opts= {'max_samples': self.npoints, 'max_tries': 10*self.npoints}
-        if self.cmat is not None:
-          opts.update({'covmat':self.cmat,'covmat_params':check_params_names_len(self.parnames, len(self.bounds))})
-        surr_info, sampler = generate_sampler_for_gp(
-            gpr, self.bounds, paramnames = self.parnames, sampler="mcmc", add_options=opts)
+        surr_info, sampler = mc_sample_from_gp(
+            gpr, self.bounds, sampler="mcmc", run=False, add_options={
+                'max_samples': self.npoints, 'max_tries': 10 * self.npoints})
         self.sampler = sampler
         self.parnames = list(surr_info['params'])
 
 
-class PartialProposer(Proposer):
-    """
-    Combines any of the other proposers with a :class:`UniformProposer` with
-    a fraction drawn from the uniform proposer to encourage exploration.
-
-    Parameters
-    ----------
-    bounds : array-like, shape=(n_dims,2)
-        Array of bounds of the prior [lower, upper] along each dimension.
-
-    true_proposer: Proposer
-        The initialized Proposer instance to use instead of uniform for a
-        fraction of samples.
-
-    random_proposal_fraction : float, between 0 and 1, optional (default=0.25)
-        The fraction of proposals that is drawn from the UniformProposer.
-    """
-
-    # Either sample from true_proposer, or give a random prior sample
-    def __init__(self, bounds, true_proposer, random_proposal_fraction=0.25):
-
-        if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
-            raise ValueError(
-                "Cannot pass a fraction outside of [0,1]. "
-                f"You passed 'random_proposal_fraction={random_proposal_fraction}'")
-        if not isinstance(true_proposer, Proposer):
-            raise ValueError("The true proposer needs to be a valid proposer.")
-
-        self.rpf = random_proposal_fraction
-        # ToDo: Make this a sample of the prior instead of uniform hypercube.
-        self.random_proposer = UniformProposer(bounds)
-        self.true_proposer = true_proposer
-
-    def get(self, random_state=None):
-        if np.random.random() > self.rpf:
-            return self.true_proposer.get(random_state=random_state)
-        else:
-            return self.random_proposer.get(random_state=random_state)
-
-    def update(self, gpr):
-        self.true_proposer.update(gpr)
-
-class Centroids(Proposer):
+class CentroidsProposer(Proposer):
     """
     Proposes points at the centroids of subsets of dim-1 training points. It
     perturbs some of the proposals away from the centroids to encourage
@@ -285,26 +284,26 @@ class Centroids(Proposer):
         # before we have trained our model and it's updated in the propose
         # method.
         self.training = None
-        # TODO: adapt lambd to dimensionality!!!
+        # TODO: adapt lambda to dimensionality!
         # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
         self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
 
     @property
     def d(self):
+        """Dimensionality of the prior."""
         return len(self.bounds)
 
     def get(self, random_state=None):
-        # TODO: actually use the random_state!
+        rng = check_random_state(random_state)
         m = self.d + 1
-        subset = self.training[
-            np.random.choice(len(self.training), size=m, replace=False)]
+        subset = self.training[rng.choice(len(self.training), size=m, replace=False)]
         centroid = np.average(subset, axis=0)
         # perturb the point: per dimension, add a random multiple of the difference
         # between the centroid and one of the points.
         kick = -centroid + np.array(
             [subset[j][i] for i, j in enumerate(
-                np.random.choice(m, size=self.d, replace=False))])
-        kick *= self.kicking_pdf.rvs(self.d)
+                rng.choice(m, size=self.d, replace=False))])
+        kick *= self.kicking_pdf.rvs(self.d, random_state=rng)
         # This might have to be modified if the optimizer can't deal with
         # points which are exactly on the edges.
         return np.clip(centroid + kick, self.bounds[:, 0], self.bounds[:, 1])

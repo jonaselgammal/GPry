@@ -112,8 +112,9 @@ class Pipeline_X:
         return X_transformed
 
 
+# UNUSED
 class Whitening:
-    """
+    r"""
     **TODO:** Fix whitening transformation and make it somewhat robust or
     delete it altogether.
 
@@ -164,7 +165,6 @@ class Whitening:
         """
         Fits the whitening transformation
         """
-
         with warnings.catch_warnings():
             # Raise exception for all warnings to catch them.
             warnings.filterwarnings('error')
@@ -181,7 +181,7 @@ class Whitening:
                 self.mean_ = np.average(X_train, axis=0, weights=y_train)
                 self.cov = np.cov(X_train.T, aweights=y_train)
 
-            except:
+            except Exception:
                 print("Cannot whiten the data")
                 self.can_transform = False  # Cannot perform PCA transformation
                 return self
@@ -191,7 +191,7 @@ class Whitening:
                 self.evals, self.evecs = eigh(self.cov)
                 self.last_factor = (self.evals)**(-0.5)
                 self.can_transform = True
-            except:
+            except Exception:
                 print("Cannot whiten the data")
                 self.can_transform = False
                 return self
@@ -284,6 +284,9 @@ class Normalize_bounds:
         X : array-like, shape = (n_samples, n_dims)
             X-values that one wants to transform. Must be between bounds.
 
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
+
         Returns
         -------
         X_transformed : array-like, shape = (n_samples, n_dims)
@@ -292,7 +295,7 @@ class Normalize_bounds:
         # if np.any(X < self.bounds_min) or np.any(X > self.bounds_max):
         #     raise ValueError("all X must be between bounds.")
         X = np.copy(X) if copy else X
-        return (X - self.bounds_min)/(self.bounds_max - self.bounds_min)
+        return (X - self.bounds_min) / (self.bounds_max - self.bounds_min)
 
     def inverse_transform(self, X, copy=True):
         """Applies the inverse transformation
@@ -301,6 +304,9 @@ class Normalize_bounds:
         ----------
         X : array-like, shape = (n_samples, n_dims)
             Transformed X-values between 0 and 1.
+
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
 
         Returns
         -------
@@ -491,6 +497,9 @@ class Normalize_y:
         y : array-like, shape = (n_samples,)
             y-values that one wants to transform.
 
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
+
         Returns
         -------
         y_transformed : array-like, shape = (n_samples,)
@@ -501,13 +510,16 @@ class Normalize_y:
         y = np.copy(y) if copy else y
         return (y - self.mean_) / self.std_
 
-    def inverse_transform(self, y, copy=True):
+    def inverse_transform(self, y_transformed, copy=True):
         """Applies inverse transformation to y.
 
         Parameters
         ----------
         y_transformed : array-like, shape = (n_samples,)
             Transformed y-values.
+
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
 
         Returns
         -------
@@ -516,5 +528,5 @@ class Normalize_y:
         """
         if self.mean_ is None or self.std_ is None:
             raise TypeError("mean_ and std_ have not been fit before")
-        y = np.copy(y) if copy else y
+        y = np.copy(y_transformed) if copy else y_transformed
         return (y * self.std_) + self.mean_

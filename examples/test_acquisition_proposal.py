@@ -5,7 +5,7 @@ This file will become at some point a test for different proposals, comparing:
 - ...
 """
 
-from gpry.proposal import Centroids
+from gpry.proposal import CentroidsProposer
 import scipy.stats as stats
 import numpy as np
 from time import time
@@ -23,7 +23,7 @@ X = stats.multivariate_normal.rvs(mean=np.zeros(d), cov=np.eye(d), size=n_train)
 # adapt to dimensionality, softly: e.g. 1 for d=2 and 0.5 for d=30
 expon_lambda = 1
 
-prop = Centroids(d * [[0, 1]], X, lambd=expon_lambda)
+prop = CentroidsProposer(d * [[0, 1]], X, lambd=expon_lambda)
 
 start = time()
 proposed = np.array([prop.get() for _ in range(n_proposed)])

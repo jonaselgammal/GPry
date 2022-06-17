@@ -3,13 +3,13 @@ import numpy as np
 import scipy.optimize
 from copy import deepcopy
 from sklearn.base import is_regressor
-from sklearn.utils import check_random_state
 
-from gpry.acquisition_functions import Log_exp, Nonlinear_log_exp
+from gpry.acquisition_functions import LogExp, NonlinearLogExp
 from gpry.acquisition_functions import is_acquisition_function
-from gpry.proposal import UniformProposer
+from gpry.proposal import PartialProposer, CentroidsProposer
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
     split_number_for_parallel_processes, multi_gather_array
+from gpry.tools import check_random_state
 
 
 class GP_Acquisition(object):
@@ -32,12 +32,13 @@ class GP_Acquisition(object):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    proposer : Proposer object, optional (default: "UniformProposer")
-        Proposer to propose points from which the acquisition function should be optimized.
+    proposer : Proposer object, optional (default: "ParialProposer", producing a mixture
+        of points drawn from an "UniformProposer" and from a "CentroidsProposer")
+        Proposes points from which the acquisition function should be optimized.
 
-    acq_func : GPry Acquisition Function, optional (default: "Log_exp")
+    acq_func : GPry Acquisition Function, optional (default: "LogExp")
         Acquisition function to maximize/minimize. If none is given the
-        `Log_exp` acquisition function will be used
+        `LogExp` acquisition function will be used
 
     acq_optimizer : string or callable, optional (default: "auto")
         Can either be one of the internally supported optimizers for optimizing
@@ -90,7 +91,7 @@ class GP_Acquisition(object):
 
     zeta_scaling : float, optional (default: 1.1)
         The scaling of the acquisition function's zeta parameter with dimensionality
-        (Only if "Log_exp" is passed as acquisition_function)
+        (Only if "LogExp" is passed as acquisition_function)
 
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -99,7 +100,6 @@ class GP_Acquisition(object):
 
     Attributes
     ----------
-
     gpr_ : GaussianProcessRegressor
             The GP Regressor which is currently used for optimization.
 
@@ -107,7 +107,7 @@ class GP_Acquisition(object):
 
     def __init__(self, bounds,
                  proposer=None,
-                 acq_func="Log_exp",
+                 acq_func="LogExp",
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
                  n_repeats_propose=0,
@@ -127,26 +127,26 @@ class GP_Acquisition(object):
 
         # If nothing is provided for the proposal, we use a uniform sampling
         if self.proposer is None:
-            self.proposer = UniformProposer(self.bounds)
+            self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
         else:
             # TODO: Catch error if it's not the right instance
             self.proposer = proposer
 
         if is_acquisition_function(acq_func):
             self.acq_func = acq_func
-        elif acq_func == "Log_exp":
-            # If the Log_exp acquisition function is chosen it's zeta is set
+        elif acq_func == "LogExp":
+            # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Log_exp(
+            self.acq_func = LogExp(
                 dimension=self.n_d, zeta_scaling=zeta_scaling)
-        elif acq_func == "Nonlinear_log_exp":
-            # If the Log_exp acquisition function is chosen it's zeta is set
+        elif acq_func == "NonlinearLogExp":
+            # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
-            self.acq_func = Nonlinear_log_exp(
+            self.acq_func = NonlinearLogExp(
                 dimension=self.n_d, zeta_scaling=zeta_scaling)
         else:
-            raise TypeError("acq_func needs to be an Acquisition_Function "
-                            "or 'Log_exp' or 'Nonlinear_log_exp', instead got %s" % acq_func)
+            raise TypeError("acq_func needs to be an Acquisition_Function or "
+                            f"'LogExp' or 'NonlinearLogExp', instead got {acq_func}")
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -184,7 +184,32 @@ class GP_Acquisition(object):
         self.cov = None
 
     def propose(self, gpr, i, random_state=None):
+        """Exposes the optimization method for the acquisition function. When
+        called it proposes a single point where for where to sample next. Is
+        internally called in the :meth:`multi_add` method.
 
+        Parameters
+        ----------
+        gpr : GaussianProcessRegressor
+            The GP Regressor which is used as surrogate model.
+
+        i : int
+            Internal counter which is used to enable MPI support. If you want
+            to optimize from a single location and rerun the optimizer from
+            multiple starting locations loop over this parameter.
+
+        random_state : int or numpy.RandomState, optional
+            The generator used to initialize the centers. If an integer is
+            given, it fixes the seed. Defaults to the global numpy random
+            number generator.
+
+        Returns
+        -------
+        X_opt : numpy.ndarray, shape = (X_dim,)
+            The X value of the found optimum
+        func : float
+            The value of the acquisition function at X_opt
+        """
         # Update proposer with new gpr
         self.proposer.update(gpr)
 
@@ -210,6 +235,7 @@ class GP_Acquisition(object):
 
             def obj_func(X, eval_gradient=False):
 
+                # TODO: optionally suppress this checks if called by optimiser
                 # Check inputs
                 X = np.asarray(X)
                 X = np.expand_dims(X, axis=0)
@@ -292,7 +318,6 @@ class GP_Acquisition(object):
 
         Parameters
         ----------
-
         gpr : GaussianProcessRegressor
             The GP Regressor which is used as surrogate model.
 
@@ -312,7 +337,6 @@ class GP_Acquisition(object):
 
         Returns
         -------
-
         X : numpy.ndarray, shape = (X_dim, n_points)
             The X values of the found optima
         y_lies : numpy.ndarray, shape = (n_points,)
@@ -320,7 +344,6 @@ class GP_Acquisition(object):
         fval : numpy.ndarray, shape = (n_points,)
             The values of the acquisition function at X_opt
         """
-
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(
@@ -395,7 +418,6 @@ class GP_Acquisition(object):
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
-
         gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
         return ((X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 

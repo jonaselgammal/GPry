@@ -18,7 +18,6 @@ def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker
 
     Parameters
     ----------
-
     getdist_plot : `GetDist triangle plot <https://getdist.readthedocs.io/en/latest/plots.html?highlight=triangle_plot#getdist.plots.GetDistPlotter.triangle_plot>`_
         Contains the marginalized contours and potentially other things.
 
@@ -26,12 +25,14 @@ def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker
         The trained GP Regressor containing the samples.
 
     colormap : matplotlib colormap, optional (default="viridis")
+        Color map from which to get the color scale to represent the GP model value for
+        the training points.
 
     marker : matplotlib marker, optional (default=".")
+        Marker to be used for the training points.
 
     Returns
     -------
-
     The GetDist triangle plot with the added training points.
     """
     # Gather axes and bounds
@@ -67,6 +68,7 @@ def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker
     # TODO: actually add colorbar (see GetDist add_colorbar method)
     return getdist_plot
 
+
 def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     """
     Plots the value of the convergence criterion as function of the number of
@@ -74,7 +76,6 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
 
     Parameters
     ----------
-
     convergence_criterion : The instance of the convergence criterion which has
         been called in the BO loop
 
@@ -83,10 +84,10 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
         accepted steps.
 
     marker : matplotlib marker, optional (default="")
+        Marker used for the plot. Will be passed to ``matplotlib.pyplot.plot``.
 
     Returns
     -------
-
     The plot convergence criterion vs. number of training points
     """
     values, n_posterior_evals, n_accepted_evals = convergence_criterion.get_history()
@@ -99,7 +100,7 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
         raise ValueError("'evaluations' must be either 'total' or 'accepted'.")
     if hasattr(convergence_criterion, "limit"):
         ax.axhline(convergence_criterion.limit, ls="--", lw="0.5", c="0.5")
-    ax.set_xlabel(f"# {evaluations} posterior evaluations")
+    ax.set_xlabel(f"{evaluations} number of posterior evaluations")
     ax.set_ylabel("Value of convergence criterion")
     ax.set_yscale("log")
     ax.grid()
@@ -157,8 +158,6 @@ def plot_distance_distribution(points, mean, covmat, density=False):
     return fig, ax
 
 
-# TODO: careful: not sure preprocessing is dealt with correctly,
-#       both when evaluating model and acquisition
 def plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
