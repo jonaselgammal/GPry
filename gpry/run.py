@@ -213,7 +213,8 @@ class Runner(object):
                       prop = MeanAutoCovProposer(m1, model_info=model.info())
                     else:
                       raise Exception("Provide a proposer or a string")
-                  prop = options["proposer"]
+                  else:
+                    prop = options["proposer"]
                 else:
                   prop = None
                 self.acquisition = GP_Acquisition(
@@ -289,9 +290,9 @@ class Runner(object):
                          "loaded_from_checkpoint"):
                 setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None)))
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
-            if self.convergence_is_MPI_aware:
+            if self.convergence_is_MPI_aware or self.callback_is_MPI_aware:
                 self.convergence = mpi_comm.bcast(
-                    convergence if is_main_process else None)
+                    self.convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
                 self.callback = mpi_comm.bcast(
                     callback if is_main_process else None)
@@ -422,6 +423,10 @@ class Runner(object):
             n_left = self.max_accepted - self.gpr.n_accepted_evals
             # TODO: better failsafes for MPI_aware=False BUT actually using MPI
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
+            if multiple_processes:
+                self.gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
+                    (self.gpr, old_gpr, new_X, new_y, y_pred)
+                    if is_main_process else None)
             if self.callback:
                 if self.callback_is_MPI_aware or is_main_process:
                     # TODO: unify order of arguments with read/save_checkpoint.
@@ -448,10 +453,6 @@ class Runner(object):
             else:  # run by all processes
                 # NB: this assumes that when the criterion fails,
                 #     ALL processes raise ConvergenceCheckerror, not just rank 0
-                if multiple_processes:
-                    self.gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
-                        (self.gpr, old_gpr, new_X, new_y, y_pred)
-                        if is_main_process else None)
                 try:
                     with TimerCounter(self.gpr, old_gpr) as timer_convergence:
                         is_converged = self.convergence.is_converged(
@@ -460,7 +461,7 @@ class Runner(object):
                         timer_convergence.time, timer_convergence.evals)
                 except gpryconv.ConvergenceCheckError:
                     is_converged = False
-            self.log(f"{mpi_rank} got {is_converged=}")
+            #self.log(f"{mpi_rank} got is_converged={is_converged}")
             sync_processes()
             self.progress.mpi_sync()
             if is_main_process:
@@ -484,8 +485,8 @@ class Runner(object):
         self.save_checkpoint()
         if is_main_process:
             self.plot_progress()
-        if n_left <= 0 and not isinstance(self.convergence, gpryconv.DontConverge) \
-           and is_main_process and self.verbose > 1:
+        if n_left <= 0 and is_main_process \
+          and not isinstance(self.convergence, gpryconv.DontConverge) and self.verbose > 1:
             warnings.warn("The maximum number of accepted points was reached before "
                           "convergence. Either increase max_accepted or try to "
                           "choose a smaller prior.")

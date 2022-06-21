@@ -809,9 +809,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.K_inv_ = np.block([[(K_inv + K_inv @ K_XY @ beta), -1*beta.T],
                                 [-1*beta                      , alpha]])
         """
-        kernel = self.kernel_(self.X_train_)
-        kernel[np.diag_indices_from(kernel)] += self.alpha
-        self.K_inv_ = np.linalg.inv(kernel)
+        #kernel = self.kernel_(self.X_train_)
+        #kernel[np.diag_indices_from(kernel)] += self.alpha
+        #self.K_inv_ = np.linalg.inv(kernel)
 
         # OVERWRITING THE ABOVE CODE , JUST FOR DEBUGGINGGGG!!!!!!!!
         k = self.kernel_(self.X_train_)

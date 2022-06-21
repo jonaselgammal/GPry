@@ -132,6 +132,7 @@ class DontConverge(ConvergenceCriterion):
 
     def __init__(self, prior, params):
         self.values = []
+        self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         self.prior = prior
@@ -140,6 +141,7 @@ class DontConverge(ConvergenceCriterion):
         self.values.append(np.nan)
         self.n_posterior_evals.append(gp.n_total_evals)
         self.n_accepted_evals.append(gp.n_accepted_evals)
+        self.thres.append(np.nan)
         return np.nan
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -193,6 +195,7 @@ class GaussianKL(ConvergenceCriterion):
         self.limit = params.get("limit", 1e-2)
         self.limit_times = params.get("limit_times", 2)
         self.values = []
+        self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         # Number of MCMC chains to generate samples
@@ -326,6 +329,7 @@ class GaussianKL(ConvergenceCriterion):
         return updated_info, mcmc_sampler.products()["sample"]
 
     def criterion_value(self, gp, gp_2=None):
+        self.thres.append(self.limit)
         try:
             mean_new, cov_new = self._get_new_mean_and_cov(gp)
         except ConvergenceCheckError as excpt:
