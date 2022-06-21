@@ -219,7 +219,7 @@ class Runner(object):
                   prop = None
                 self.acquisition = GP_Acquisition(
                     bounds, proposer=prop, acq_func=gp_acquisition,
-                    acq_optimizer="fmin_l_bfgs_b",
+                    acq_optimizer=options.get('acq_optimizer',"fmin_l_bfgs_b"),
                     n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     zeta_scaling=options.get("zeta_scaling", 1.1), verbose=verbose)

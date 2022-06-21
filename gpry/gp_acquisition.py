@@ -166,6 +166,8 @@ class GP_Acquisition(object):
                 self.acq_optimizer = "fmin_l_bfgs_b"
             elif acq_optimizer == "sampling":
                 self.acq_optimizer = "sampling"
+            elif acq_optimizer == "acceptall":
+                self.acq_optimizer = "acceptall"
             else:
                 raise ValueError("Supported internal optimizers are 'auto', "
                                  "'lbfgs' or 'sampling', "
@@ -435,6 +437,8 @@ class GP_Acquisition(object):
                 obj_func, initial_X, args=(False), method="Powell",
                 bounds=bounds)
             theta_opt, func_min = opt_res.x, opt_res.fun
+        elif self.acq_optimizer == "acceptall":
+            theta_opt, func_min = initial_X, obj_func(initial_X)
         elif callable(self.acq_optimizer):
             theta_opt, func_min = \
                 self.acq_optimizer(obj_func, initial_X, bounds=bounds)
