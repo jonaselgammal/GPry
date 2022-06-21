@@ -132,12 +132,14 @@ class DontConverge(ConvergenceCriterion):
 
     def __init__(self, prior, params):
         self.values = []
+        self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         self.prior = prior
 
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
+        self.thres.append(np.nan)
         self.n_posterior_evals.append(gp.n_total_evals)
         self.n_accepted_evals.append(gp.n_accepted_evals)
         return np.nan
@@ -185,7 +187,6 @@ class GaussianKL(ConvergenceCriterion):
         return True
 
     def __init__(self, prior, params):
-        self.values = []
         self.n_posterior_evals = []
         self.prior = prior
         self.mean = None
@@ -193,6 +194,7 @@ class GaussianKL(ConvergenceCriterion):
         self.limit = params.get("limit", 1e-2)
         self.limit_times = params.get("limit_times", 2)
         self.values = []
+        self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         # Number of MCMC chains to generate samples
@@ -219,6 +221,7 @@ class GaussianKL(ConvergenceCriterion):
         return list(self.cobaya_input["params"])
 
     def _get_new_mean_and_cov(self, gp):
+        self.thres.append(self.limit)
         cov_mcmc = None
         if is_main_process:
             reused = False
