@@ -24,11 +24,11 @@ from gpry.plots import getdist_add_training
 from getdist.mcsamples import MCSamplesFromCobaya
 import getdist.plots as gdplt
 from cobaya.run import run
-from gpry.run import mcmc, mc_sample_from_gp
+from gpry.run import mc_sample_from_gp
 import gpry.run
 from gpry.tools import kl_norm
 from cobaya.cosmo_input import create_input
-from gpry.run import _check_checkpoint, _read_checkpoint
+from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 
 # Number of times that each combination of d and zeta is run with different
 # gaussians
@@ -66,9 +66,9 @@ doplot = False
 #cname = "check26"
 #ch_name2 = "chains/GP30"
 # 5) 3
-iplot = "prior_0806"
-cname = "check_prior_0806"
-ch_name2 = "chains/GP_prior_0806"
+iplot = "prior_1706"
+cname = "check_prior_1706"
+ch_name2 = "chains/GP_prior_1706"
 
 stype = "polychord"
 
@@ -180,10 +180,10 @@ def callback(model, gpr, gp_acquisition, convergence, options, something,
 #n_initial = 3*27
 #fit_full_every=2*sqrt(27)~=10
 #NOTE :: I changed SVM sigma to 14 at some point, but I don't think it matters
-if np.all(_check_checkpoint(cname)):
-  _, gpr, _, _, _ = _read_checkpoint(cname)
+if np.all(check_checkpoint(cname)):
+  _, gpr, _, _, _, _ = read_checkpoint(cname)
 else:
-  _, gpr, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000,'n_initial':50,'zeta_scaling':1.1,'prop_mean':bf,'proposer':'meancovmat'},callback=callback,checkpoint=cname,convergence_options={'n_correct':30,'threshold':0.01,'abstol':0.00},load_checkpoint="overwrite")
+  _, gpr, _, _, _, _ = gpry.run.run(model, convergence_criterion="CorrectCounter", verbose=verbose,options={'max_accepted':2000, 'max_points':10000,'n_initial':50,'zeta_scaling':1.1,'prop_mean':bf,'proposer':'meancovmat'},callback=callback,checkpoint=cname,convergence_options={'n_correct':30,'reltol':0.01,'abstol':0.00},load_checkpoint="overwrite")
 #zeta_scaling=1.1
 
 
