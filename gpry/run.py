@@ -142,12 +142,14 @@ class Runner(object):
         self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
-            create_path(self.checkpoint)
             self.plots_path = os.path.join(self.checkpoint, "images")
-            create_path(self.plots_path)
+            if is_main_process:
+                create_path(self.checkpoint)
+                create_path(self.plots_path)
         else:
             self.plots_path = "images"
-            create_path(self.plots_path)
+            if is_main_process:
+                create_path(self.plots_path)
         self.options = options
         self.verbose = verbose
         self.rng = get_random_state()
