@@ -331,9 +331,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         offers two different methods of updating the GPR after the training data
         (``X_train, y_train``) has been updated:
 
-           * Refit :math:`\\theta` using the
+           * Refit :math:`\theta` using the
              internal ``fit`` method.
-           * Keep :math:`\\theta` fixed and update
+           * Keep :math:`\theta` fixed and update
              :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using the blockwise matrix
              inversion lemma.
 
@@ -363,7 +363,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             is advisable to refit the hyperparameters of the kernel.
 
         fit : Bool, optional (default: True)
-            Whether the model is refit to new :math:`\\theta`-parameters
+            Whether the model is refit to new :math:`\theta`-parameters
             or just updated using the blockwise matrix-inversion lemma.
 
         simplified_fit : Bool, optional (default: False)
@@ -557,7 +557,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return super().log_marginal_likelihood(*args, **kwargs)
 
     def fit(self, X=None, y=None, noise_level=None, simplified=False):
-        r"""Optimizes the hyperparameters :math:`\\theta` for the training data
+        r"""Optimizes the hyperparameters :math:`\theta` for the training data
         given. The algorithm used to perform the optimization is very similar
         to the one provided by Scikit-learn. The only major difference is, that
         gradient information is used in addition to the values of the
@@ -729,18 +729,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def _update_model(self):
-        r"""Updates a preexisting model using the matrix inversion lemma.
+        r"""Updates a preexisting model using a single matrix inversion.
 
-        This method is used when a refitting of the :math:`\\theta`-parameters
+        This method is used when a refitting of the :math:`\theta`-parameters
         is not needed. In this case only the Inverse of the Covariance matrix
         is updated. This method does not take X or y as inputs and should only
         be called from the append_to_data method.
 
         The X and y values used for training are taken internally from the
-        instance. The method used to update the covariance matrix relies on
-        updating it by using the blockwise matrix inversion lemma in order to
-        reduce the computational complexity from :math:`n^3` to
-        :math:`n^2\\cdot m`.
+        instance.
 
         Returns
         -------
@@ -773,36 +770,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                              % (self.K_inv_.shape[0],
                                 self.y_train_.size - self.newly_appended))
 
-        # Define all neccessary variables
-        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT!
-        # TODO :: investigate closer
-        """
-        K_inv = self.K_inv_
-        X_1 = self.X_train_[:-self.newly_appended]
-        X_2 = self.X_train_[-self.newly_appended:]
-
-        # Get the B, C and D matrices
-        K_XY = self.kernel_(X_1, X_2)
-        K_YY = self.kernel_(X_2)
-
-        # Add the alpha value to the diagonal part of the matrix
-        if np.iterable(self.alpha):
-            K_YY[np.diag_indices_from(K_YY)] += \
-                self.alpha[-self.newly_appended:]
-        else:
-            K_YY[np.diag_indices_from(K_YY)] += self.alpha
-
-        # Inserting the new piece which uses the blockwise inversion lemma
-        # C * A^{-1}
-        gamma = K_XY.T @ K_inv
-        # (D - C*A^{-1}*B)^{-1} in 1D
-        alpha = np.linalg.inv(K_YY - gamma @ K_XY)
-        # Off-Diag. Term
-        beta = alpha @ gamma
-        # Put all together
-        self.K_inv_ = np.block([[(K_inv + K_inv @ K_XY @ beta), -1*beta.T],
-                                [-1*beta                      , alpha]])
-        """
         kernel = self.kernel_(self.X_train_)
         kernel[np.diag_indices_from(kernel)] += self.alpha
         self.K_inv_ = np.linalg.inv(kernel)
