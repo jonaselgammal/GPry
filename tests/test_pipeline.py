@@ -50,7 +50,7 @@ def test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
 
 if __name__ == '__main__':
     # Supported models:
-    # Himmelblau, Rosenbrock, Spike, Loggaussian, Ring, Gaussian, Curved_degeneracy
-    generator = Spike()
+    # Himmelblau, Rosenbrock, Spike, Loggaussian, Ring, Random_gaussian, Curved_degeneracy
+    generator = Random_gaussian()
     model = generator.get_model()
     test_pipeline(model)
