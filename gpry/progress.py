@@ -129,6 +129,15 @@ class Progress:
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
         self.data.iloc[-1][column] = mpi_comm.bcast(max_value)
 
+    def _x_ticks_for_bar_plot(self, fig, ax):
+        fig.canvas.draw()
+        xticks = ax.get_xticks()
+        labels = ax.get_xticklabels()
+        n_xticks = len(xticks)
+        xticks = xticks[::max(1, int(n_xticks/10.))]
+        labels = labels[::max(1, int(n_xticks/10.))]
+        ax.set_xticks(xticks, labels=labels)
+
     def plot_timing(self, truth=True, show=False, save="progress_timing.png"):
         """
         Plots as stacked bars the timing of each part of each iteration.
@@ -140,7 +149,7 @@ class Progress:
         """
         import matplotlib.pyplot as plt
         plt.set_loglevel('WARNING')  # avoids a useless message
-        plt.figure()
+        fig, ax = plt.subplots()
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
         bottom = np.zeros(len(self.data.index))
@@ -152,9 +161,11 @@ class Progress:
             if not truth and col == "time_truth":
                 continue
             dtype = self._dtypes[col]
-            plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
+            ax.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
             bottom += self.data[col].to_numpy(dtype=dtype)
         plt.xlabel("Iteration")
+        plt.draw()
+        self._x_ticks_for_bar_plot(fig, ax)
         multiprocess_str = " (max over processes)" if multiple_processes else ""
         plt.ylabel("Time (s)" + multiprocess_str)
         plt.legend()
@@ -175,7 +186,7 @@ class Progress:
         """
         import matplotlib.pyplot as plt
         plt.set_loglevel('WARNING')  # avoids a useless message
-        plt.figure()
+        fig, ax = plt.subplots()
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
         bottom = np.zeros(len(self.data.index))
@@ -184,9 +195,10 @@ class Progress:
                 "evals_fit": "GP fit",
                 "evals_convergence": "Convergence crit."}.items():
             dtype = self._dtypes[col]
-            plt.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
+            ax.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
             bottom += self.data[col].to_numpy(dtype=dtype)
-        plt.xlabel("Iteration")
+        ax.set_xlabel("Iteration")
+        self._x_ticks_for_bar_plot(fig, ax)
         multiprocess_str = " (summed over processes)" if multiple_processes else ""
         plt.ylabel("Number of evaluations" + multiprocess_str)
         plt.legend()
