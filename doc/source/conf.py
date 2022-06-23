@@ -19,8 +19,7 @@ import shlex
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-sys.path.insert(0, os.path.abspath('..'))
-sys.path.insert(0, "../../gpry")
+sys.path.insert(-1, os.path.abspath('../gpry'))
 
 # -- General configuration ------------------------------------------------
 
@@ -334,4 +333,5 @@ intersphinx_mapping = {'https://docs.python.org/': None,
                        'numpy': ('http://docs.scipy.org/doc/numpy/', None)}
 
 # Mock modules, so that readthedocs works!
-autodoc_mock_imports = ['numpy', 'cobaya', 'scipy', 'getdist', 'dill']
+autodoc_mock_imports = ['numpy', 'cobaya', 'scipy', 'getdist', 'dill', 'gpry',
+    'sklearn', 'mpi4py', 'pandas', 'matplotlib']
