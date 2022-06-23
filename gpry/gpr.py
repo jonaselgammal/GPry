@@ -334,8 +334,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
            * Refit :math:`\theta` using the
              internal ``fit`` method.
            * Keep :math:`\theta` fixed and update
-             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using the blockwise matrix
-             inversion lemma.
+             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using a single matrix inversion.
 
         While the first method can always be applied it is considerably slower
         than the second one. Therefore it can be useful to use the second

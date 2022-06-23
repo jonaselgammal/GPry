@@ -7,6 +7,8 @@ from gpry.mpi import is_main_process, multiple_processes, mpi_comm, sync_process
 class Progress:
     """
     Pandas DataFrame to store progress, timing, numbers of evaluations, etc.
+    A progress instance is created by the :class:`run.Runner` object and internally
+    populated when calling the :meth:`run.Runner.run` function.
     """
 
     _colnames = {

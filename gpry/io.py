@@ -17,6 +17,15 @@ _checkpoint_filenames = {
     "convergence": "con.pkl", "options": "opt.pkl", "progress": "pro.pkl"}
 
 def create_path(path):
+    """
+    Creates a path if it doesn't exist already and prints a message if creating a new
+    directory. If the directory already exits it does nothing.
+
+    Parameters
+    ----------
+    path : string or path
+        The path which shall be created.
+    """
     if not os.path.exists(path):
         os.makedirs(path)
         print("Successfully created the directory %s" % path)

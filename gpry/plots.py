@@ -1,7 +1,3 @@
-"""
-This module provides some plotting routines for plotting the marginalized
-posterior distribution and performance of the algorithm.
-"""
 import warnings
 import numpy as np
 import matplotlib
@@ -66,7 +62,7 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker=".
     # Add points
     for (i, j), ax in ax_dict.items():
         points = Xs[:, [i, j]]
-        ax.scatter(*points.T, marker=marker, c=norm(ys))
+        ax.scatter(*points.T, marker=marker, c=norm(ys), alpha=0.3)
 
     # TODO: actually add colorbar (see GetDist add_colorbar method)
     return getdist_plot
@@ -110,7 +106,7 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     return fig, ax
 
 
-def plot_distance_distribution(points, mean, covmat, density=False):
+def _plot_distance_distribution(points, mean, covmat, density=False):
     """
     Plots a histogram of the distribution of points with respect to the number of standard
     deviations. Bluer stacks represent newer points.
@@ -161,7 +157,7 @@ def plot_distance_distribution(points, mean, covmat, density=False):
     return fig, ax
 
 
-def plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
+def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
 

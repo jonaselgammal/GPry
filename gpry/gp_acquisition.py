@@ -123,7 +123,8 @@ class GP_Acquisition(object):
 
         self.rng = check_random_state(random_state)
 
-        # If nothing is provided for the proposal, we use a uniform sampling
+        # If nothing is provided for the proposal, we use a centroids proposer with
+        # a fraction of uniform samples.
         if self.proposer is None:
             self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
         else:

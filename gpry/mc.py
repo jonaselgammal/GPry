@@ -16,25 +16,46 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     If no other argument is passed, it samples within the bounds of the GP model,
     and uses generic parameter names.
 
-    Bounds can be overriden by passing a ``bounds`` argument as a list of pairs
-    ``[min, max]``, or taken from ``true_model`` (Cobaya ``Model``). ``bounds`` takes
-    priority.
+    Parameters
+    ----------
+    gpr : GaussianProcessRegressor, which has been fit to data and returned from
+        the ``run`` function.
 
-    Parameter names can be specified with ``paramnames``, or taken from ``true_model``
-    (Cobaya ``Model``). ``paramnames`` takes priority.
+    bounds : List of boundaries (lower,upper), optional
+        If none are provided it tries to extract the bounds from ``true_model``. If
+        that fails it tries extracting them from gpr. If none of those methods succeed
+        an error is raised.
+
+    paramnames : List of parameter strings, optional
+        If none are provided it tries to extract parameter names from ``true_model``.
+        If that fails it uses some dummy strings.
+
+    true_model : Cobaya Model, optional
+        If passed, it uses it to get bounds and parameter names (unless overriden by
+        the corresponding kwargs).
+
+    Returns
+    -------
+    info : dict
+        A dict containing the ``prior`` and ``likelihood`` blocks.
     """
     if bounds is not None:
-        if np.array(bounds).shape != np.array(gpr.bounds).shape:
+        if np.array(bounds).shape != np.array(gpr.bounds).shape \
+                and gpr.bounds is not None:
             raise ValueError(f"``bounds`` has the wrong shape {np.array(bounds).shape}. "
                              f"Expected {np.array(gpr.bounds).shape}.")
     elif true_model is not None:
         bounds = true_model.prior.bounds(confidence_for_unbounded=0.99995)
-        if np.array(bounds).shape != np.array(gpr.bounds).shape:
+        if np.array(bounds).shape != np.array(gpr.bounds).shape \
+                and gpr.bounds is not None:
             raise ValueError("The dimensionality of the prior of `true_model` "
                              f"({true_model.prior.d()}) does not correspond to that of "
                              f"the GP ({gpr.d}).")
-    else:
+    elif gpr.bounds is not None:
         bounds = deepcopy(gpr.bounds)
+    else:
+        raise ValueError("You need to either provide bounds, a model or a GP regressor "
+                         "with bounds.")
     paramlabels = None
     if paramnames is not None:
         if len(paramnames) != gpr.d:
@@ -54,7 +75,7 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
             info["params"][p]["latex"] = l
     # TODO :: this is very artificial and probably should be removed eventually.
     # It was added here by Jonas, so I am leaving it for now until we discuss further
-    epsilon = [1e-3 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
+    epsilon = [1e-8 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
     for p, eps in zip(info["params"].values(), epsilon):
         p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
 
@@ -73,6 +94,24 @@ def mcmc_info_from_run(model, gpr, cov=None):
 
     Changes ``model`` reference point to the best training sample
     (or the rank-th best if running in parallel).
+
+    Parameters
+    ----------
+    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Contains all information about the parameters in the likelihood and
+        their priors as well as the likelihood itself.
+
+    gpr : GaussianProcessRegressor, which has been fit to data and returned from
+        the ``run`` function.
+
+    cov : Covariance matrix, optional
+        A covariance matrix to speed up convergence of the MCMC. If none is provided the
+        MCMC will run without but it will be slower at converging.
+
+    Returns
+    -------
+    sampler : dict
+        a dict with the ``sampler`` block for Cobaya's run function.
     """
     # Set the reference point of the prior to the sampled location with maximum
     # posterior value
@@ -95,7 +134,12 @@ def mcmc_info_from_run(model, gpr, cov=None):
 
 def polychord_info_from_run():
     """
-    Creates appropriate PolyChord sampler inputs from the results of a run.
+    Creates a PolyChord sampler with standard parameters.
+
+    Returns
+    -------
+    sampler : dict
+        a dict with the ``sampler`` block for Cobaya's run function.
     """
     # Create sampler info
     sampler_info = {"polychord": {"measure_speeds": False}}
@@ -104,7 +148,7 @@ def polychord_info_from_run():
 
 def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
                       sampler="mcmc", options=None, add_options=None,
-                      output=None, run=True, restart=False, convergence=None):
+                      output=None, run=True, resume=False, convergence=None):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
     and runs it on the surrogate model.
@@ -143,7 +187,8 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
     run: bool, default: True
         Whether to run the sampler. If ``False``, returns just an initialised sampler.
 
-    restart: ????
+    resume: bool, optional (default=False)
+        Whether to resume from existing output files (True) or force overwrite (False)
 
     convergence: Convergence_criterion, optional
         The convergence criterion which has been used to fit the GP. This is
@@ -201,10 +246,10 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
     # TODO: what does restart do? it seems to be a bit conterintuitive
     out = None
     if output is not None:
-        if not restart:
+        if not resume:
             out = get_output(prefix=output, resume=False, force=True)
         else:
-            out = get_output(prefix=output, resume=restart, force=False)
+            out = get_output(prefix=output, resume=True, force=False)
     sampler = get_sampler(sampler_input, model=model_surrogate, output=out)
     surr_info = model_surrogate.info()
     if not run:

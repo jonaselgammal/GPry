@@ -20,6 +20,8 @@ from sklearn.gaussian_process.kernels import WhiteKernel as sk_WhiteKernel
 
 from collections import namedtuple
 
+# Copyright (c) 2016-2020 The scikit-optimize developers.
+# This module contains (heavily modified) code of the scikit-optimize package.
 
 class Hyperparameter(namedtuple('Hyperparameter',
                                 ('name', 'value_type', 'bounds',
