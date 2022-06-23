@@ -4,8 +4,9 @@ Example code for a simple GP Characterization of a likelihood.
 
 import os
 from gpry.mpi import is_main_process
-from gpry.plots import getdist_add_training, plot_distance_distribution, \
-    plot_2d_model_acquisition
+
+# Path for saving plots, make sure it exists!
+checkpoint = "output/simple"
 
 # Building the likelihood
 from scipy.stats import multivariate_normal
@@ -15,58 +16,8 @@ mean = [3, 2]
 cov = [[0.5, 0.4], [0.4, 1.5]]
 rv = multivariate_normal(mean, cov)
 
-# User Runner class
-use_Runner = True
-
-# Output folder for products
-checkpoint = "output/simple"
-
-# Output folder for images and chains
-path_plots = os.path.join(checkpoint, "images")
-path_chains = os.path.join(checkpoint, "chains")
-# Ensure that they exist
-for p in (path_plots, path_chains):
-    try:
-        os.makedirs(p)
-    except Exception:
-        pass
-
-
-# Sampler to use for tests: "mcmc" or "polychord"
-mc_sampler = "mcmc"
-
 def lkl(x, y):
     return np.log(rv.pdf(np.array([x, y]).T))
-
-
-def callback(model, current_gpr, gp_acquisition, convergence_criterion, options, progress,
-             previous_gpr, new_X, new_y, y_pred):
-    print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
-    print(current_gpr)
-    print("Current kernel:", current_gpr.kernel_)  # rescaled?????
-    print(previous_gpr)
-    print("New points")
-    for x, y in zip(new_X, new_y):
-        print(x, y)
-    print(convergence_criterion)
-    # Plot distribution of points, and contours of model and acquisition
-    plot_distance_distribution(current_gpr.X_train, mean, cov)
-    plt.savefig(os.path.join(path_plots, "Distance_distribution.png"), dpi=300)
-    plot_distance_distribution(current_gpr.X_train, mean, cov, density=True)
-    plt.savefig(os.path.join(path_plots, "Distance_density_distribution.png"), dpi=300)
-    plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
-    plt.savefig(os.path.join(path_plots, "Contours_model_acquisition.png"), dpi=300)
-    old_zeta = gp_acquisition.acq_func.zeta
-    gp_acquisition.acq_func.zeta = 0
-    plot_2d_model_acquisition(current_gpr, gp_acquisition, last_points=new_X)
-    plt.savefig(os.path.join(path_plots, "Contours_model_acquisition_std.png"), dpi=300)
-    gp_acquisition.acq_func.zeta = old_zeta
-    print("_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_+_")
-    # input("Press Enter to continue...")
-
-
-# Uncomment this line to disable the example callback function above
-callback = callback
 
 #############################################################
 # Plotting the likelihood
@@ -93,7 +44,7 @@ if is_main_process:
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
     cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
-    plt.savefig(os.path.join(path_plots, "Ground_truth.png"), dpi=300)
+    plt.savefig(os.path.join(checkpoint, "images/Ground_truth.png"), dpi=300)
     plt.close()
 
 #############################################################
@@ -109,98 +60,31 @@ info["params"] = {
 
 model = get_model(info)
 
-options={}#'zeta_scaling': 5}
+
+from gpry.run import Runner
+runner = Runner(model, checkpoint=checkpoint, load_checkpoint="overwrite")
 
 # Run the GP
-from gpry.run import run, Runner
+runner.run()
 
-if use_Runner:
-    runner = Runner(model, callback=callback, checkpoint=checkpoint,
-                    load_checkpoint="overwrite", options=options)
-    runner.run()
+# Run the MCMC and extract samples
+updated_info, sampler = runner.generate_mc_sample()
 
-    # Run the MCMC and extract samples
-    updated_info, sampler = runner.generate_mc_sample(sampler=mc_sampler)
+# Plotting
+runner.plot_mc(updated_info, sampler)
 
-    # Plotting
-    if is_main_process:
-        runner.plot_mc(updated_info, sampler)
-
-    # Will be used later
-    gpr = runner.gpr
-    from getdist.mcsamples import MCSamplesFromCobaya
-    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
-
-else:
-    model, gpr, acquisition, convergence, options, progress = run(
-        model, callback=callback, checkpoint=checkpoint, load_checkpoint="overwrite",
-        options=options)
-
-    # Run the MCMC and extract samples
-    from gpry.run import mc_sample_from_gp
-
-    updated_info, sampler = mc_sample_from_gp(
-        gpr, model.prior.bounds(confidence_for_unbounded=0.99995),
-        paramnames=model.parameterization.sampled_params(),
-        convergence=convergence, sampler=mc_sampler,
-        output=os.path.join(path_chains, "gp_model"))
-
-    # Plotting
-    if is_main_process:
-        from getdist.mcsamples import MCSamplesFromCobaya
-        import getdist.plots as gdplt
-        gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
-        gdplot = gdplt.get_subplot_plotter(width_inch=5)
-        gdplot.triangle_plot(
-            gdsamples_gp, model.parameterization.sampled_params(), filled=True)
-        getdist_add_training(gdplot, model, gpr)
-        plt.savefig(os.path.join(path_plots, "Surrogate_triangle.png"), dpi=300)
-
-#############################################################
-# Validation part
-
-# TODO: remove: we can use getdist's Gaussian mixtures for this
-
-# # MCMC run on the actual function
-# # NB: we don't re-initialise the model, but use the one defined above
-
-# # Optional: define an output driver
-# from cobaya.output import get_output
-# out = get_output(prefix="chains/truth", resume=False, force=True)
-
-# from cobaya.sampler import get_sampler
-# if mc_sampler.lower() == "mcmc":
-#     info_sampler = {"mcmc": {"Rminus1_stop": 0.005, "max_tries": 1e6}}
-# elif mc_sampler.lower() == "polychord":
-#     info_sampler = {"polychord": {"nlive": "50d", "num_repeats": "5d"}}
-# mcmc_sampler = get_sampler(info_sampler, model=model, output=out)
-# success = False
-# try:
-#     mcmc_sampler.run()
-#     success = True
-# except Exception as excpt:
-#     print(f"Chain failed: {str(excpt)}")
-#     pass
-# success = all(mpi_comm.allgather(success))
-# if not success and is_main_process:
-#     print("Sampling failed!")
-#     exit()
-# all_chains_truth = mpi_comm.gather(mcmc_sampler.products()["sample"], root=0)
-
+# Validation
 if is_main_process:
-    # from getdist.mcsamples import MCSamplesFromCobaya
-    # upd_info = model.info()
-    # upd_info["sampler"] = {"mcmc": sampler.info()}
-    # gdsamples_truth = MCSamplesFromCobaya(upd_info, all_chains_truth)
     from getdist.gaussian_mixtures import GaussianND
-    gdsamples_truth = GaussianND(mean, cov, names=list(info["params"]))
+    from getdist.mcsamples import MCSamplesFromCobaya
     import getdist.plots as gdplt
-    gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_truth, list(info["params"]), filled=True)
-    plt.savefig(os.path.join(path_plots, "Ground_truth_triangle.png"), dpi=300)
+    from gpry.plots import getdist_add_training
+    gpr = runner.gpr
+    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    gdsamples_truth = GaussianND(mean, cov, names=list(info["params"]))
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
     gdplot.triangle_plot([gdsamples_truth, gdsamples_gp], list(info["params"]),
                          filled=[False, True],
                          legend_labels=['Truth', 'MC from GP'])
     getdist_add_training(gdplot, model, gpr)
-    plt.savefig(os.path.join(path_plots, "Comparison_triangle.png"), dpi=300)
+    plt.savefig(os.path.join(checkpoint, "images/Comparison_triangle.png"), dpi=300)
