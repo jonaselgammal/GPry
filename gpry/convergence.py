@@ -9,6 +9,7 @@ import numpy as np
 import sys
 import inspect
 from copy import deepcopy
+from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
 from gpry.tools import kl_norm, is_valid_covmat
 from gpry.mpi import mpi_comm, is_main_process, multiple_processes
 
@@ -211,14 +212,17 @@ class GaussianKL(ConvergenceCriterion):
         # MCMC temperature
         # self.temperature = params.get("temperature", 2)
         # Prepare Cobaya's input
-        self.cobaya_input = cobaya_input_prior(prior)
+        self.bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
+        self.paramnames = self.prior.params
+        self.cobaya_input = None
+
         # Save last sample
         self._last_info = {}
         self._last_collection = None
 
     @property
     def cobaya_param_names(self):
-        return list(self.cobaya_input["params"])
+        return self.paramnames
 
     def _get_new_mean_and_cov(self, gp):
         self.thres.append(self.limit)
@@ -292,21 +296,22 @@ class GaussianKL(ConvergenceCriterion):
                 (mean_new, cov_new) if is_main_process else None)
         return mean_new, cov_new
 
-    def _sample_mcmc(self, gp, covmat=None):
+    def _sample_mcmc(self, gpr, covmat=None):
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
         from cobaya.log import LoggedError
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
-        self.cobaya_input.update(cobaya_input_likelihood(gp, self.cobaya_param_names))
+        self.cobaya_input = cobaya_generate_gp_model_input(gpr, self.bounds, self.paramnames)
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
         # Create model and sampler
         model = get_model(self.cobaya_input)
-        sampler_info = mcmc_info_from_run(model, gp, convergence=self)
         if covmat is not None and is_valid_covmat(covmat):
-            # Prefer the one explicitly passed
-            sampler_info["mcmc"]["covmat"] = covmat
+            cov = covmat
+        else:
+            cov = self.cov
+        sampler_info = mcmc_info_from_run(model, gpr, cov=cov)
         # TODO: restore temperature
         # sampler_info["mcmc"]["temperature"] = self.temperature
         high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
@@ -424,7 +429,7 @@ class CorrectCounter(ConvergenceCriterion):
     def __init__(self, prior, params):
         self.ncorrect = params.get("n_correct", 5)
         self.reltol = params.get("reltol", 0.01)
-        self.abstol = params.get("abstol", 0.05)
+        self.abstol = params.get("abstol", 0.1)
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
