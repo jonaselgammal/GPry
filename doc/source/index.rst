@@ -1,32 +1,34 @@
-.. GPry documentation
-
 ======================
 The GPry documentation
 ======================
 
-Welcome to the documentation of the `GPry`-Package. Currently this project is still
-in progress so please beware, that the contents might change frequently.
+`GPry` was developed as a result of my master thesis and and can be seen as an alternative
+to established samplers like MCMC and Nested Sampling. It is targeted at a specific class
+of posterior distributions (with the initial goal of speeding up inference in cosmology)
+with the aim of creating an algorithm which can efficiently obtain marginal quantities
+from (computationally) expensive likelihoods.
 
-The Goal of this project is to provide a framework for performing fast Bayesian inference on expensive posterior
-functions using Gaussian Processes.
-Additionally this package is designed to communicate with the `Cobaya-Package <https://pypi.org/project/cobaya/>`_
-to be able to use it easily in cosmological applications.
-This package is a result of my master thesis and implements several novel ideas. Most importantly this algorithm
-uses nested sampling to take advantage of speed hierarchies between different dimensions in the parameter space.
+Additionally this package is designed to communicate with the
+`Cobaya-Package <https://pypi.org/project/cobaya/>`_ making for easy use in cosmological
+applications.
+
+`Deployed on PyPI <https://pypi.org/project/gpry/>`_
+
+`Source code on GitHub <https://github.com/jonaselgammal/GPry>`_
 
 Contents:
 =========
 .. toctree::
   :maxdepth: 2
-  
+
   installation
   intro_example
   adv_example
-  modules	
+  running
+  modules
 
 Indices and tables
 ==================
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

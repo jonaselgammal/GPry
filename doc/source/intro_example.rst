@@ -31,16 +31,17 @@ The code to build this function looks like this::
 Let's see for reference how our function looks like (We plot the negative
 log-posterior because of the log-scale).
 
-.. image:: images/Ground_truth.png
+.. image:: images/simple_ground_truth.png
    :width: 600
 
 Building the model
 ==================
 
-In this example we will use the :py:meth:`run <run.run>` function to characterize
-the likelihood. For this we need to build a model which the run function
-can use. This is done by building the model dictionary and getting the
-model instance with the Cobaya `get_model <https://cobaya.readthedocs.io/en/latest/models.html?highlight=get_model#model.get_model>`_ function::
+In this example we will use the :py:class:`Runner <run.Runner>` object to do the active
+sampling and get the final MC sample of the GP. For this we need to build a cobaya model
+which the runner object understands. This is done by creating a model dictionary and
+getting the model instance with the Cobaya
+`get_model <https://cobaya.readthedocs.io/en/latest/models.html?highlight=get_model#model.get_model>`_ function::
 
     from cobaya.model import get_model
 
@@ -56,107 +57,105 @@ In this example we will leave all training parameters (the choice of GP,
 acquisition function, convergence criterion and options of the Bayesian
 optimization loop) as standard.
 
+Creating the Runner object
+==========================
+
+The runner object handles both the GP interpolation/active sampling and can also run an
+MC sampler on the GP in order to extract marginalised quantities. Furthermore we can
+specify a location where checkpoint files and progress plots are stored.
+
+Let's create our :py:class:`Runner <run.Runner>` object::
+
+    from gpry.run import Runner
+    checkpoint = "output/simple"
+    runner = Runner(model, checkpoint=checkpoint, load_checkpoint="overwrite")
+
+.. note::
+    If you set a checkpoint path you **must** decide a checkpoint policy (either "resume"
+    or "overwrite"). If set to "resume" the runner object will try to load the checkpoint
+    and resume from there, if set to "overwrite" it will start from scratch and overwrite
+    checkpoint files which already exist.
+
 Running the model
 =================
 
-Since all training parameters are chosen automatically all we have to do is to
-pass our model to the :py:meth:`run <run.run>` function::
+Since all training parameters are chosen automatically all we have to do is to call the
+:py:meth:`run <run.Runner.run>` function of the runner object::
 
-    from gpry.run import run
-    model, gpr, acquisition, convergence, options = run(model)
+    runner.run()
 
-This will run the Bayesian optimization loop until convergence is reached.
-Let's examine the output:
-
-    * ``model`` is the Cobaya model which we put into the function at the
-      beginning.
-    * ``gpr`` is the :py:class:`GaussianProcessRegressor <gpr.GaussianProcessRegressor>`
-      object trained on samples from the posterior distribution. This object
-      contains the core information that are needed for further processing.
-    * ``acquisition`` is the :py:class:`GP_Acquisition <gp_acquisition.GP_Acquisition>` object which contains the
-      acquisition function and the details of it's optimization.
-    * ``convergence`` is the :py:class:`Convergence_criterion <convergence.Convergence_criterion>` object which contains
-      all details on the way of determining convergence of the bayesian
-      optimization loop. In case of the standard convergence criterion this
-      also contains an approximate covariance matrix which can later be used
-      by the MCMC to accelerate convergence.
-    * ``options`` is the dictionary containing the training parameters of the
-      bayesian optimization loop.
-
-Of these five inputs we need only three to finally sample from the GP with an
-MCMC in order to get marginalized quantities.
+This will run the Bayesian optimization loop until convergence is reached. It also saves
+the checkpoint files after every iteration of the bayesian optimization loop and creates
+progress plots which are saved in ``[checkpoint]/images/`` (``./images/`` if checkpoint is
+None).
 
 Running the MCMC
 ================
 
 For running the MCMC on the GP surrogate we will again leave all options as
-standard and use the :py:meth:`mcmc <run.mcmc>` method. Calling this is again quite simple::
+standard and use the :py:meth:`generate_mc_sample <run.Runner.generate_mc_sample>` method
+of the runner. Calling this is again quite simple::
 
-    from gpry.run import mcmc
-    updated_info, sampler = mcmc(model, gpr, convergence)
+    updated_info, sampler = runner.generate_mc_sample()
 
 This returns the same as the `Cobaya run function <https://cobaya.readthedocs.io/en/latest/input.html#run-function>`_
-as it is essentially just a wrapper for it. For plotting etc. the sampler
-object is the important part as it contains the chains.
+as it is essentially just a wrapper for it.
+
+.. note::
+    If you want to just store the chains and process them later consider using the
+    ``output`` option.
 
 Plotting with GetDist
 =====================
 
-The easiest way to get corner plots is to use `GetDist <https://getdist.readthedocs.io/en/latest/>`_ .
-This program works seamlessly with Cobaya::
+.. warning::
+    GetDist is not a requirement for GPry nor Cobaya but a standalone package.
+    Therefore this code will only work if you have (manually) installed GetDist.
+    We highly encourage installing it though for a seamless experience.
+    GetDist can be installed ` here <https://pypi.org/project/GetDist/>`_
 
-    from getdist.mcsamples import MCSamplesFromCobaya
-    import getdist.plots as gdplt
-    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
-    gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_gp, ["x", "y"], filled=True)
+Conveniently our runner object can also create a corner plot by calling the
+:py:meth:`plot_mc <run.Runner.plot_mc>` method. It needs the output that we got in the
+last step. The plot is saved in the same location as the progress plots::
 
-
-If you want to just store the chains and process them later consider using the
-``output`` option.
-
-.. image:: images/Surrogate_triangle.png
-   :width: 600
-
-**TBD: Put correct plot there when convergence criterion is fixed**.
+    runner.plot_mc(updated_info, sampler)
 
 .. note::
-    GetDist is not a requirement for GPry nor Cobaya but a standalone package.
-    Therefore this code will only work if you have installed GetDist.
+    As standard :py:meth:`plot_mc <run.Runner.plot_mc>` plots the contours of the
+    marginalised quantities and the training samples on top. If you are only interested
+    in the contours use ``add_training=False``
+
+.. image:: images/simple_surrogate_triangle.png
+   :width: 600
 
 Validation
 ==========
 
-Lastly we run an MCMC on the likelihood directly to assess the accuracy of our
-method::
+.. note::
+    This part is optional and only relevant for validating the contours that
+    GPry produces. In a realistic scenario you would obviously not run a full
+    MCMC on the likelihood.
 
-    from cobaya.run import run as cobaya_run
-    info = {"likelihood": {"true_lkl": lkl}}
-    info["params"] = {
-        "x": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2},
-        "y": {"prior": {"min": -10, "max": 10}, "ref": 0.5, "proposal": 0.2}}
+Lastly we compare our result to the original gaussian (look into GetDist's/Cobaya's
+documentation if you are confused what this code does)::
 
-    info["sampler"] = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
-
-    updated_info, sampler = cobaya_run(info)
-
-    gdsamples_mcmc = MCSamplesFromCobaya(updated_info,
-                                         sampler.products()["sample"])
+    from getdist.gaussian_mixtures import GaussianND
+    from getdist.mcsamples import MCSamplesFromCobaya
+    import getdist.plots as gdplt
+    from gpry.plots import getdist_add_training
+    gpr = runner.gpr
+    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    gdsamples_truth = GaussianND(mean, cov, names=list(info["params"]))
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot(gdsamples_mcmc, ["x", "y"], filled=True)
+    gdplot.triangle_plot([gdsamples_truth, gdsamples_gp], list(info["params"]),
+                         filled=[False, True],
+                         legend_labels=['Truth', 'MC from GP'])
+    getdist_add_training(gdplot, model, gpr)
 
-    gdplot = gdplt.get_subplot_plotter(width_inch=5)
-    gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp], ["x", "y"], filled=True,
-                         legend_labels=['MCMC', 'GP'])
-
-.. image:: images/Comparison_triangle.png
+.. image:: images/simple_comparison_triangle.png
   :width: 600
-.. image:: images/Ground_truth_triangle.png
-   :width: 600
 
-**TBD: Add correct plots**
-
-As you can see the two agree almost perfectly! And we achieved this with just 13
-evaluations of the Posterior distribution!
+As you can see the two agree almost perfectly! And we achieved this with just 16
+evaluations of the posterior distribution!
 
 The code for the example is available at :download:`../../examples/simple_example.py`

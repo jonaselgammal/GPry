@@ -7,6 +7,16 @@ Bayesian optimization loop. This will be done using a less standard
 (non-gaussian) likelihood and we will walk through the modules and their
 functionalities one by one.
 
+.. warning::
+    Mind that this example is really just meant to show off how one *can* change things
+    in the BO loop. For the vast majority of posterior distribution which are compatible
+    with GPry the standard parameters will work just fine and probably produce the best
+    results.
+
+    Therefore it is usually a good idea to keep things as standard except if you want to
+    play around with the code and/or have very good reasons to customize things (i.e.
+    when you know that your posterior distribution isn't particularly smooth).
+
 Introduction
 ============
 
@@ -98,6 +108,8 @@ For details on the kernel construction see :mod:`kernels`.
 .. note::
     For kernels containing length-scales (i.e. RBF and Matèrn kernel) the
     bounds can automatically be adjusted according to the size of the prior.
+    For this you need to pass ``"dynamic"`` for the bounds parameter and
+    provide prior bounds to the kernel.
 
 GP Regressor
 """"""""""""
@@ -134,6 +146,12 @@ Details can be found in the :mod:`gpr` and :mod:`preprocessing` modules.
     the log-likelihood is relatively modest. If your log-likelihood ranges
     several orders of magnitude (i.e. when you have a big prior) it is usually
     a good idea to scale your target values using :class:`preprocessing.Normalize_y`
+
+.. note::
+    The likelihood/posterior samples from some theory codes may contain some form of
+    noise. If this is the case you might have to increase the ``noise_level`` parameter
+    in the GP (set to ``1e-2`` as standard) to the numerical noise of your
+    posterior samples.
 
 Acquisition
 ===========
@@ -184,19 +202,20 @@ it is also possible to construct custom convergence criteria.
 
 The standard :class:`convergence.CorrectCounter` convergence criterion works
 best in most cases and I highly recommend using it. For educational purposes
-we will use :class:`convergence.KL_from_draw_approx` which computes the KL
+we will use :class:`convergence.GaussianKL` which computes the KL
 divergence assuming that the target distribution is a multivariate gaussian.
-The KL divergence is computed by evaluating the GP at a number of sampling
-locations which are drawn from the prior. This method is very "brute force" and
-not very efficient though.
+The KL divergence is computed by running a short MCMC chain of the GP and
+estimating the mean and covariance matrix of the distribution from it.
+This convergence criterion is considerably slower than :class:`convergence.CorrectCounter`
+but it can be useful as it provides a more direct statistical measure of convergence.
 
 All convergence criteria are passed a prior object which is part of the model
 instance and an options dict. The options that can be set depend on the choice
-of the convergence criterion. In our case we set the KL divergence we want to
-reach to :math:`10^{-2}`::
+of the convergence criterion. In our case we set the KL divergence between
+steps that we want to reach to :math:`10^{-2}`::
 
-    from gpry.convergence import KL_from_draw_approx
-    conv = KL_from_draw_approx(model.prior, {"limit": 1e-2})
+    from gpry.convergence import GaussianKL
+    conv = GaussianKL(model.prior, {"limit": 1e-2})
 
 Training parameters
 ===================
@@ -217,26 +236,38 @@ algorithm draws from the posterior distribution before failing::
 Training
 ========
 
-Running the Bayesian optimization loop is very simple. We just have to plug the
-instances we have created into the :meth:`run.run` function and let it do it's
-thing!::
+Like in the simple example we simply create a :py:class:`run.Runner` object and use the
+:meth:`run.Runner.run` method to run the Bayesian optimization loop. The only difference
+is that we now have to pass our custom objects to the :py:class:`run.Runner` at
+initialization. To spice things up a bit we also now choose the ``"resume"`` checkpoint
+policy meaning that the run is automatically resumed from the checkpoint files if they
+exist::
 
-    from gpry.run import run
-    model, gpr, acquisition, convergence, options = run(
-        model, gp=gpr, gp_acquisition=acq,
-        convergence_criterion=conv, options=options)
+    from gpry.run import Runner
+    checkpoint = "output/advanced"
+    runner = Runner(
+        model, gpr=gpr, gp_acquisition=acq, convergence_criterion=conv, options=options,
+        checkpoint=checkpoint, load_checkpoint="resume")
+    runner.run()
 
 MCMC
 ====
 
 After having trained our GP we want to extract marginal parameters from it and
 plot them. For this we run an MCMC on the GP which we do using the
-:meth:`run.mcmc` function. Again we pass an options dictionary which contains
-the training parameters. This uses the `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_::
+:meth:`run.Runner.generate_mc_sample` function. Again we pass an options dictionary which
+contains the training parameters. This uses Cobaya's inbuilt
+`samplers <https://cobaya.readthedocs.io/en/latest/sampler.html>`_::
 
-    from gpry.run import mcmc
-    options = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
-    updated_info, sampler = mcmc(model, gpr, convergence, options=options)
+    options = {"Rminus1_stop": 0.01, "max_tries": 1000}
+    updated_info_gp, sampler_gp = runner.generate_mc_sample(add_options=options)
+
+.. note::
+    Even though Monte Carlo (Cobaya's inbuilt MCMC sampler) is used as standard it also
+    supports the nested sampler `PolyChord <https://arxiv.org/abs/1502.01856>`_ which can
+    be activated by setting ``sampler="polychord"``. Note that PolyChord is neither a
+    requirement for GPry nor Cobaya so you might have to install it manually (or through
+    Cobaya).
 
 Validation
 ==========
@@ -280,15 +311,18 @@ samples using the :meth:`plots.getdist_add_training` method::
 
 Furthermore we can simply plot the convergence history (value of KL divergence
 vs number of posterior evaluations) using the :meth:`plots.plot_convergence`
-method (here we plot against the number of accepted, i.e. *finite* points)::
+method (here we plot against the number of accepted, i.e. *finite* points). Note
+that this plot is also saved by the :class:`run.Runner` when calling ``run``::
 
     from gpry.plots import plot_convergence
     plot_convergence(convergence, evaluations="accepted")
 
-As you can see the contours generated by GPry agree very well with the MCMC.
+As you can see the contours generated by GPry agree relatively well with MCMC.
 Furthermore you can see that the points spread apart rather far. This is due
 to the relatively low choice of :math:`\zeta` in the acquisition function which
 pushes the algorithm to favour exploration over exploitation.
+
+As expected the result is not as it would be using the standard training parameters.
 
 .. image:: images/advanced_triangle.png
    :width: 600
