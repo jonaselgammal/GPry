@@ -333,5 +333,4 @@ intersphinx_mapping = {'https://docs.python.org/': None,
                        'numpy': ('http://docs.scipy.org/doc/numpy/', None)}
 
 # Mock modules, so that readthedocs works!
-autodoc_mock_imports = ['numpy', 'cobaya', 'scipy', 'getdist', 'dill', 'gpry',
-    'sklearn', 'mpi4py', 'pandas', 'matplotlib']
+autodoc_mock_imports = ['getdist', 'mpi4py', 'matplotlib']
