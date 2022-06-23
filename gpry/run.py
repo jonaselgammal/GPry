@@ -1,8 +1,3 @@
-"""
-Top level run file which constructs the loop for mapping a posterior
-distribution and sample the GP to get chains.
-"""
-
 import os
 import warnings
 import numpy as np
@@ -53,10 +48,10 @@ class Runner(object):
         preprocessed to be in the uniform hypercube before optimizing the
         acquistion function.
 
-    convergence_criterion : Convergence_criterion, optional (default="KL")
-        The convergence criterion. If None is given the KL-divergence between
-        consecutive runs is calculated with an MCMC run and the run converges
-        if KL<0.02 for two consecutive steps.
+    convergence_criterion : Convergence_criterion, optional (default="CorrectCounter")
+        The convergence criterion. If None is given the Correct counter convergence
+        criterion is used with a relative threshold of 0.01 and an absolute threshold of
+        0.05.
 
     convergence_options: optional parameters passed to the convergence criterion.
 
@@ -84,8 +79,7 @@ class Runner(object):
     callback: callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
-        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options,
-                   progress, previous_gpr, new_X, new_y, pred_y)``.
+        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``.
         When running in parallel, the function is run by the main process only.
 
     callback_is_MPI_aware: bool (default: False)
@@ -99,7 +93,7 @@ class Runner(object):
 
     load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
         Whether to resume from the checkpoint files if existing ones are found
-        at the location specified by ´checkpoint´.
+        at the location specified by `checkpoint`.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -166,6 +160,10 @@ class Runner(object):
                     self.loaded_from_checkpoint = np.all(checkpoint_files)
                     if self.loaded_from_checkpoint:
                         self.read_checkpoint()
+                        # Overwrite internal parameters by those loaded from checkpoint.
+                        model, gpr, gp_acquisition, convergence_criterion, options = \
+                            self.model, self.gpr, self.acquisition, self.convergence, \
+                            self.options
                         self.log("#########################################\n"
                                  "Checkpoint found. Resuming from there...\n"
                                  "If this behaviour is unintentional either\n"
@@ -294,7 +292,8 @@ class Runner(object):
                 if is_main_process:
                     self.callback = callback_func
         # Prepare progress summary table; the table key is the iteration number
-        self.progress = Progress()
+        if not self.loaded_from_checkpoint:
+            self.progress = Progress()
         self.has_run = False
         self.has_converged = False
 
@@ -437,6 +436,9 @@ class Runner(object):
                             timer_convergence.time, timer_convergence.evals,
                             self.convergence.last_value)
                     except gpryconv.ConvergenceCheckError:
+                        self.progress.add_convergence(
+                            timer_convergence.time, timer_convergence.evals,
+                            np.nan)
                         is_converged = False
                 if multiple_processes:
                     is_converged = mpi_comm.bcast(
@@ -449,8 +451,12 @@ class Runner(object):
                         is_converged = self.convergence.is_converged(
                             self.gpr, old_gpr, new_X, new_y, y_pred)
                     self.progress.add_convergence(
-                        timer_convergence.time, timer_convergence.evals)
+                        timer_convergence.time, timer_convergence.evals,
+                        self.convergence.last_value)
                 except gpryconv.ConvergenceCheckError:
+                    self.progress.add_convergence(
+                        timer_convergence.time, timer_convergence.evals,
+                        np.nan)
                     is_converged = False
             #self.log(f"{mpi_rank} got is_converged={is_converged}")
             sync_processes()
@@ -609,10 +615,9 @@ class Runner(object):
         plt.close(fig)
 
     def generate_mc_sample(self, sampler="mcmc", output=None, add_options=None,
-                           restart=False):
+                           resume=False):
         """
-        Runs an MC process using `Cobaya
-        <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
+        Runs an MC process using `Cobaya <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
 
         Parameters
         ----------
@@ -629,8 +634,8 @@ class Runner(object):
         output: path, optional (default: ``checkpoint/chains``, if ``checkpoint != None``)
             The path where the resulting Monte Carlo sample shall be stored.
 
-        # TODO
-        restart: ????
+        resume: bool, optional (default=False)
+            Whether to resume from existing output files (True) or force overwrite (False)
 
         Returns
         -------
@@ -649,27 +654,37 @@ class Runner(object):
             output = os.path.join(self.checkpoint, "chains/")
         return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,
                                  convergence=self.convergence, output=output,
-                                 add_options=add_options, restart=restart)
+                                 add_options=add_options, resume=resume)
 
-    def plot_mc(self, surr_info, sampler):
+    def plot_mc(self, surr_info, sampler, add_training=True):
         """
         Creates some progress plots and saves them at path (assumes path exists).
+
+        .. warning::
+            This method requires GetDist to be installed. It is neither a requirement
+            for GPry nor Cobaya so you might have to install it manually if you want to
+            use it (highly encouraged).
 
         Parameters
         ----------
         surr_info, sampler : dict, Cobaya.sampler
             Return values of method :func:`generate_mc_sample`
+
+        add_training : bool, optional (default=True)
+            Whether the training locations are plotted on top of the contours.
         """
-        from getdist.mcsamples import MCSamplesFromCobaya
-        import getdist.plots as gdplt
-        from gpry.plots import getdist_add_training
-        import matplotlib.pyplot as plt
-        gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
-        gdplot = gdplt.get_subplot_plotter(width_inch=5)
-        gdplot.triangle_plot(
-            gdsamples_gp, self.model.parameterization.sampled_params(), filled=True)
-        getdist_add_training(gdplot, self.model, self.gpr)
-        plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
+        if is_main_process:
+            from getdist.mcsamples import MCSamplesFromCobaya
+            import getdist.plots as gdplt
+            from gpry.plots import getdist_add_training
+            import matplotlib.pyplot as plt
+            gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
+            gdplot = gdplt.get_subplot_plotter(width_inch=5)
+            gdplot.triangle_plot(
+                gdsamples_gp, self.model.parameterization.sampled_params(), filled=True)
+            if add_training:
+                getdist_add_training(gdplot, self.model, self.gpr)
+            plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
 
 
 def run(model, gpr="RBF", gp_acquisition="LogExp",
@@ -678,11 +693,9 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         convergence_options=None, options={}, checkpoint=None,
         load_checkpoint=None, verbose=3):
     r"""
-    This function takes care of constructing the Bayesian quadrature/likelihood
-    characterization loop. This is the easiest way to make use of the
-    gpry algorithm. The minimum requirements for running this are a Cobaya
-    prior object and a likelihood. Furthermore the details of the GP and
-    and acquisition can be specified by the user.
+    This function is just a wrapper which internally creates a runner instance and runs
+    the bayesian optimization loop. This function will probably be depreciated in a few
+    versions.
 
     Parameters
     ----------
