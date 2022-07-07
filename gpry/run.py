@@ -682,7 +682,7 @@ class Runner(object):
             gdplot = gdplt.get_subplot_plotter(width_inch=5)
             gdplot.triangle_plot(
                 gdsamples_gp, self.model.parameterization.sampled_params(), filled=True)
-            if add_training:
+            if add_training and self.d > 1:
                 getdist_add_training(gdplot, self.model, self.gpr)
             plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
 

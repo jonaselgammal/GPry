@@ -27,8 +27,8 @@ class Progress:
         "evals_convergence": ("number of evaluations of the GP needed to compute the "
                               "convergence criterion"),
         "convergence_crit_value": "value of the convergence criterion"}
-    _dtypes = {col: (np.int if col.split("_")[0].lower() in ["n", "evals"]
-                     else np.float)
+    _dtypes = {col: (int if col.split("_")[0].lower() in ["n", "evals"]
+                     else float)
                for col in _colnames}
 
     def __init__(self):
