@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 from copy import deepcopy
 from itertools import chain
+from inspect import getfullargspec
 
 from cobaya.model import Model
 
@@ -79,8 +80,9 @@ class Runner(object):
     callback: callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
-        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``.
-        When running in parallel, the function is run by the main process only.
+        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``, or simply ``callback(runner_instance)``.
+        When running in parallel, the function is run by the main process only, unless
+        ``callback_is_MPI_aware=True``.
 
     callback_is_MPI_aware: bool (default: False)
         If True, the callback function is called for every process simultaneously, and
@@ -111,7 +113,7 @@ class Runner(object):
         This can be used to call an MCMC sampler for getting marginalized
         properties. This is the most crucial component.
 
-    gp_acquisition : GP_acquisition
+    gp_acquisition : GP_Acquisition
         The acquisition object that was used for the active sampling procedure.
 
     convergence_criterion : Convergence_criterion
@@ -205,9 +207,8 @@ class Runner(object):
                 if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
                     raise ValueError("Supported acquisition function is 'LogExp', "
                                      f"'NonlinearLogExp', got {gp_acquisition}")
-                bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
                 self.acquisition = GP_Acquisition(
-                    bounds, proposer=None, acq_func=gp_acquisition,
+                    prior_bounds, proposer=None, acq_func=gp_acquisition,
                     acq_optimizer="fmin_l_bfgs_b",
                     n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
                     preprocessing_X=Normalize_bounds(prior_bounds),
@@ -270,13 +271,15 @@ class Runner(object):
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
+            self.callback_is_single_arg = (callable(callback) and
+                                           len(getfullargspec(callback).args) == 1)
             # Print resume
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
             for attr in ("n_initial", "max_init", "max_points", "max_accepted",
                          "n_points_per_acq", "gpr", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
-                         "loaded_from_checkpoint"):
+                         "callback_is_single_arg", "loaded_from_checkpoint"):
                 setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None)))
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware or self.callback_is_MPI_aware:
@@ -284,7 +287,7 @@ class Runner(object):
                     convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
                 self.callback = mpi_comm.bcast(
-                    self.convergence if is_main_process else None)
+                    callback if is_main_process else None)
             else:  # for check of whether to call it
                 callback_func = callback
                 self.callback = mpi_comm.bcast(
@@ -378,7 +381,7 @@ class Runner(object):
                     self.gpr, n_points=self.n_points_per_acq, random_state=self.rng)
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if is_main_process:
-                self.log(f"New X {new_X} ; y_lie {y_pred} ; acq {acq_vals}")
+                self.log(f"New X {new_X} ; y_lie {y_pred} ; acq {acq_vals}", level=3)
             # Get logposterior value(s) for the acquired points (in parallel)
             if multiple_processes:
                 new_X = mpi_comm.bcast(new_X if is_main_process else None)
@@ -421,9 +424,13 @@ class Runner(object):
                 if self.callback_is_MPI_aware or is_main_process:
                     # TODO: unify order of arguments with read/save_checkpoint.
                     #       maybe even pass a runner object?
-                    self.callback(self.model, self.gpr, self.acquisition,
-                                  self.convergence, self.options, self.progress,
-                                  old_gpr, new_X, new_y, y_pred)
+                    if self.callback_is_single_arg:
+                        args = [self]
+                    else:
+                        args = [self.model, self.gpr, self.acquisition,
+                                self.convergence, self.options, self.progress,
+                                old_gpr, new_X, new_y, y_pred]
+                    self.callback(*args)
                 mpi_comm.barrier()
             # Calculate convergence and break if the run has converged
             if not self.convergence_is_MPI_aware:
@@ -458,14 +465,13 @@ class Runner(object):
                         timer_convergence.time, timer_convergence.evals,
                         np.nan)
                     is_converged = False
-            #self.log(f"{mpi_rank} got is_converged={is_converged}")
             sync_processes()
             self.progress.mpi_sync()
             if is_main_process:
                 self.log(f"run - tot: {self.gpr.n_total_evals}, "
                          f"acc: {self.gpr.n_accepted_evals}, "
                          f"con: {self.convergence.values[-1]}, "
-                         f"lim: {self.convergence.thres[-1]}")
+                         f"lim: {self.convergence.thres[-1]}", level=3)
             if is_converged:
                 self.has_converged = True
                 break

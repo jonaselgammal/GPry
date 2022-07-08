@@ -93,6 +93,9 @@ class GP_Acquisition(object):
         The scaling of the acquisition function's zeta parameter with dimensionality
         (Only if "LogExp" is passed as acquisition_function)
 
+    zeta: float, optional (default: None, uses zeta_scaling)
+        Specifies the value of the zeta parameter directly.
+
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -114,6 +117,7 @@ class GP_Acquisition(object):
                  preprocessing_X=None,
                  random_state=None,
                  zeta_scaling=1.1,
+                 zeta=None,
                  verbose=1):
 
         self.bounds = bounds
@@ -137,12 +141,12 @@ class GP_Acquisition(object):
             # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
             self.acq_func = LogExp(
-                dimension=self.n_d, zeta_scaling=zeta_scaling)
+                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
         elif acq_func == "NonlinearLogExp":
             # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
             self.acq_func = NonlinearLogExp(
-                dimension=self.n_d, zeta_scaling=zeta_scaling)
+                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function or "
                             f"'LogExp' or 'NonlinearLogExp', instead got {acq_func}")
