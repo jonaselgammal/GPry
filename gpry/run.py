@@ -366,8 +366,7 @@ class Runner(object):
         for it in range(n_iterations):
             self.current_iteration = it
             self.progress.add_iteration()
-            self.progress.add_current_n_truth(self.gpr.n_total_evals,
-                                              self.gpr.n_accepted_evals)
+            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n)
             if is_main_process:
                 if self.max_accepted != self.max_points:
                     self.log(f"+++ Iteration {it} "
@@ -418,7 +417,7 @@ class Runner(object):
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             if multiple_processes:
                 self.gpr = mpi_comm.bcast(self.gpr)
-            n_left = self.max_accepted - self.gpr.n_accepted_evals
+            n_left = self.max_accepted - self.gpr.n
             if multiple_processes:
                 self.gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
                     (self.gpr, old_gpr, new_X, new_y, y_pred)
@@ -473,8 +472,8 @@ class Runner(object):
             sync_processes()
             self.progress.mpi_sync()
             if is_main_process:
-                self.log(f"run - tot: {self.gpr.n_total_evals}, "
-                         f"acc: {self.gpr.n_accepted_evals}, "
+                self.log(f"run - tot: {self.gpr.n_total}, "
+                         f"acc: {self.gpr.n}, "
                          f"con: {self.convergence.values[-1]}, "
                          f"lim: {self.convergence.thres[-1]}", level=3)
             if is_converged:
