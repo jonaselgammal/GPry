@@ -276,50 +276,52 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                   % (account_for_inf is not None))
 
     @property
-    def n(self):
-        """Number of points in the training set."""
-        return self.X_train.shape[0]
-
-    @property
     def d(self):
         """Dimension of the feature space."""
         if self.bounds is None:
             return self.X_train.shape[1]
         else:
             return self.bounds.shape[0]
-# maybe rename
 
     @property
-    def n_total_evals(self):
+    def n(self):
         """
-        Extracts the total number of posterior evaluations (finite AND infinite)
-        from the gp.
+        Number of points in the training set.
+
+        This excludes infinite points if the GPR was initialized to account for them.
+
+        To get the total number of points added to the model, both finite and infinite,
+        use the property ``GaussianProcessRegressor.n_total``.
         """
-        if self.account_for_inf is None:
-            if hasattr(self, "y_train"):
-                n_evals = len(self.y_train)
-            else:
-                n_evals = 0
+        return len(getattr(self, "y_train", []))
+
+    @property
+    def n_total(self):
+        """
+        Returns the total number of points added to the model, both finite and infinite.
+
+        Infinite points, if accounted for, are not part of the training set of the GPR.
+        """
+        if self.account_for_inf:
+            # The SVM usually contains all points, but maybe it hasn't been trained yet.
+            # In that case, return the GPR's
+            return self.account_for_inf.n or self.n
         else:
-            if hasattr(self.account_for_inf, "y_train"):
-                n_evals = len(self.account_for_inf.y_train)
-            elif hasattr(self, "y_train"):
-                n_evals = len(self.y_train)
-            else:
-                n_evals = 0
-        return n_evals
+            return self.n
+
+    # DEPRECATED ON 2022-09-70
+    @property
+    def n_total_evals(self):
+        warnings.warn("This property will soon be deprecated in favour of ``n_total``. "
+                      "Please, change your code accordingly.")
+        return self.n_total
 
     @property
     def n_accepted_evals(self):
-        """
-        Extracts the number of accepted posterior evaluations (accepted means being
-        classified as *finite* by the GP).
-        """
-        if hasattr(self, "y_train"):
-            n_evals = len(self.y_train)
-        else:
-            n_evals = 0
-        return n_evals
+        warnings.warn("This property will soon be deprecated in favour of ``n``. "
+                      "Please, change your code accordingly.")
+        return self.n
+    # END OF DEPRECATION BLOCK
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.

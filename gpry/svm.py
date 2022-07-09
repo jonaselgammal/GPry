@@ -204,10 +204,7 @@ class SVM(SVC):
     @property
     def n(self):
         """Number of training points."""
-        try:
-            return self.X_train.shape[0]
-        except AttributeError:
-            return 0
+        return len(getattr(self, "y_train", []))
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """

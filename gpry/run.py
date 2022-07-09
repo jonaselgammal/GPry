@@ -54,7 +54,7 @@ class Runner(object):
         criterion is used with a relative threshold of 0.01 and an absolute threshold of
         0.05.
 
-    convergence_options: optional parameters passed to the convergence criterion.
+    convergence_options : optional parameters passed to the convergence criterion.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -77,14 +77,14 @@ class Runner(object):
               If the run fails repeatadly at initialization try decreasing the volume
               of your prior.
 
-    callback: callable, optional (default=None)
+    callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
         ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``, or simply ``callback(runner_instance)``.
         When running in parallel, the function is run by the main process only, unless
         ``callback_is_MPI_aware=True``.
 
-    callback_is_MPI_aware: bool (default: False)
+    callback_is_MPI_aware : bool (default: False)
         If True, the callback function is called for every process simultaneously, and
         it is expected to handle parallelisation internally. If false, only the main
         process calls it.
@@ -96,6 +96,9 @@ class Runner(object):
     load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
         Whether to resume from the checkpoint files if existing ones are found
         at the location specified by `checkpoint`.
+
+    plots : bool (default: True)
+        If True, produces some progress plots.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -134,19 +137,20 @@ class Runner(object):
     def __init__(self, model, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
-                 checkpoint=None, load_checkpoint=None, verbose=3):
+                 checkpoint=None, load_checkpoint=None, plots=True, verbose=3):
         self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
-            self.plots_path = os.path.join(self.checkpoint, "images")
+            self.plots_path = os.path.join(self.checkpoint, _plots_path)
             if is_main_process:
                 create_path(self.checkpoint)
                 create_path(self.plots_path)
         else:
-            self.plots_path = "images"
+            self.plots_path = _plots_path
             if is_main_process:
                 create_path(self.plots_path)
         self.options = options
+        self.plots = plots
         self.verbose = verbose
         self.rng = get_random_state()
         if is_main_process:
@@ -360,6 +364,7 @@ class Runner(object):
         it = 0
         n_left = self.max_accepted - n_finite
         for it in range(n_iterations):
+            self.current_iteration = it
             self.progress.add_iteration()
             self.progress.add_current_n_truth(self.gpr.n_total_evals,
                                               self.gpr.n_accepted_evals)
@@ -481,11 +486,11 @@ class Runner(object):
             if n_left <= 0:
                 break
             self.save_checkpoint()
-            if is_main_process:
+            if is_main_process and self.plots:
                 self.plot_progress()
         # Save
         self.save_checkpoint()
-        if is_main_process:
+        if is_main_process and self.plots:
             self.plot_progress()
         if n_left <= 0 and is_main_process \
             and not isinstance(self.convergence, gpryconv.DontConverge) and self.verbose > 1:
@@ -638,7 +643,8 @@ class Runner(object):
             Dict of additional options to be passed to the sampler.
 
         output: path, optional (default: ``checkpoint/chains``, if ``checkpoint != None``)
-            The path where the resulting Monte Carlo sample shall be stored.
+            The path where the resulting Monte Carlo sample shall be stored. If passed
+            explicitly ``False``, produces no output.
 
         resume: bool, optional (default=False)
             Whether to resume from existing output files (True) or force overwrite (False)
