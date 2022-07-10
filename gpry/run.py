@@ -668,7 +668,7 @@ class Runner(object):
                                  convergence=self.convergence, output=output,
                                  add_options=add_options, resume=resume)
 
-    def plot_mc(self, surr_info, sampler, add_training=True):
+    def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None):
         """
         Creates some progress plots and saves them at path (assumes path exists).
 
@@ -684,6 +684,9 @@ class Runner(object):
 
         add_training : bool, optional (default=True)
             Whether the training locations are plotted on top of the contours.
+
+        add_samples : dict(label, getdist.MCSamples), optional (default=None)
+            Whether the training locations are plotted on top of the contours.
         """
         if is_main_process:
             from getdist.mcsamples import MCSamplesFromCobaya
@@ -692,8 +695,11 @@ class Runner(object):
             import matplotlib.pyplot as plt
             gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
             gdplot = gdplt.get_subplot_plotter(width_inch=5)
+            to_plot = [gdsamples_gp]
+            if add_samples:
+                to_plot += list(add_samples.values())
             gdplot.triangle_plot(
-                gdsamples_gp, self.model.parameterization.sampled_params(), filled=True)
+                to_plot, self.model.parameterization.sampled_params(), filled=True)
             if add_training and self.d > 1:
                 getdist_add_training(gdplot, self.model, self.gpr)
             plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
