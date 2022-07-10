@@ -143,12 +143,12 @@ class Runner(object):
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
             if is_main_process:
-                create_path(self.checkpoint)
-                create_path(self.plots_path)
+                create_path(self.checkpoint, verbose=verbose >= 3)
+                create_path(self.plots_path, verbose=verbose >= 3)
         else:
             self.plots_path = _plots_path
             if is_main_process:
-                create_path(self.plots_path)
+                create_path(self.plots_path, verbose=verbose >= 3)
         self.options = options
         self.plots = plots
         self.verbose = verbose
@@ -311,10 +311,10 @@ class Runner(object):
 
     def log(self, msg, level=None):
         """
-        Print a message if verbosity level is equal or higher than the given one (or
+        Print a message if its verbosity level is equal or lower than the given one (or
         always if ``level=None``.
         """
-        if level is None or level >= self.verbose:
+        if level is None or level <= self.verbose:
             print(msg)
 
     def read_checkpoint(self):
@@ -659,8 +659,9 @@ class Runner(object):
             The sampler instance that has been run (or just initialised). The sampler
             products can be retrieved with the `Sampler.products()` method.
         """
-        if not self.has_run:
-            raise Exception("You have to first run before you can generate an mc_sample")
+        if not self.gpr.fitted:
+            raise Exception("You have to have added points to the GPR "
+                            "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/")
         return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,

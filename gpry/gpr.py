@@ -220,6 +220,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.verbose = verbose
 
+        self._fitted = False
         # Initialize SVM if given
         if account_for_inf == "SVM":
             self.account_for_inf = SVM()
@@ -322,6 +323,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                       "Please, change your code accordingly.")
         return self.n
     # END OF DEPRECATION BLOCK
+
+    def fitted(self):
+        """Whether the GPR has been fitted at least once."""
+        return self._fitted
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.
@@ -727,6 +732,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Reset newly_appended to 0
         self.newly_appended = 0
 
+        self._fitted = True
         return self
 
     def _update_model(self):
