@@ -42,7 +42,7 @@ def generate_inputs(bounds):
                          "n_initial": 3 * d,
                          "max_init": 10 * d,  # fail if sth funny: not useful for test
                          "n_points_per_acq": 1,  # 1 when not testing it in particular
-                         "max_points": 2 * n_approx_conv(d)}}
+                         "max_points": int(np.ceil(1.5 * n_approx_conv(d)))}}
     default_input["gp_acquisition"] = GP_Acquisition(
         bounds, acq_func="LogExp",
         proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
@@ -52,7 +52,7 @@ def generate_inputs(bounds):
     # Creating grid -- User modifications usually from here down
     # 1. zeta values
     inputs = {}
-    zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2]
+    zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5]
     for value in zetas:
         key = f"zeta_{value}"
         inputs[key] = deepcopy(default_input)
@@ -68,7 +68,7 @@ def generate_inputs(bounds):
 
 def n_approx_conv(dim):
     """Order-of-magnitude-approx number of true posterior evaluations for convergence."""
-    return 5 * dim**(3 / 2)
+    return 5 * dim**(5 / 3)
 
 
 def random_hex_name():
