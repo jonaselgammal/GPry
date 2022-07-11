@@ -26,6 +26,9 @@ from model_generator import Random_gaussian
 
 _kl_truth_col = "kl_truth"
 
+# Diagnosis mode: progress printing and plotting at every iteration.
+diag = False
+
 
 def generate_inputs(bounds):
     """
@@ -49,7 +52,7 @@ def generate_inputs(bounds):
     # Creating grid -- User modifications usually from here down
     # 1. zeta values
     inputs = {}
-    zetas = [0.01, 0.05, 0.1, 0.5, 1, 2]
+    zetas = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2]
     for value in zetas:
         key = f"zeta_{value}"
         inputs[key] = deepcopy(default_input)
@@ -75,7 +78,7 @@ def callback(runner):
     """
     # Do tests only if # training points is multiple of 5 * dim, and only after a while
     n_train = runner.gpr.n_total
-    if max(n_train, 1) % 5 * runner.gpr.d or n_train <= 5 * runner.gpr.d:
+    if max(n_train, 1) % 5 * runner.gpr.d or n_train <= 4 * runner.gpr.d:
         return
     true_mean = likelihood_generator.mean
     true_cov = likelihood_generator.cov
@@ -92,12 +95,13 @@ def callback(runner):
         runner.progress.data = runner.progress.data.assign(**{_kl_truth_col: np.nan})
     runner.progress.data.iloc[-1,
                               runner.progress.data.columns.get_loc(_kl_truth_col)] = kl
-    print(runner.progress)
-    from getdist.gaussian_mixtures import MixtureND
-    true_dist = MixtureND([true_mean], [true_cov], names=paramnames)
-    runner.plot_mc(surr_info, sampler, add_samples={"Truth": true_dist})
-    import matplotlib.pyplot as plt
-    plt.show()
+    if diag:
+        print(runner.progress)
+        from getdist.gaussian_mixtures import MixtureND
+        true_dist = MixtureND([true_mean], [true_cov], names=paramnames)
+        runner.plot_mc(surr_info, sampler, add_samples={"Truth": true_dist})
+        import matplotlib.pyplot as plt
+        plt.show()
 
 
 def generate(nruns, likelihood_generator, path=None):
@@ -105,18 +109,19 @@ def generate(nruns, likelihood_generator, path=None):
         path = "."
     for i_run in range(nruns):
         # TODO: MPI and randomness!
+        likelihood_generator.redraw()
         this_model = likelihood_generator.get_model()
         # Needs to generate inputs *after* model, bc they need bounds
         bounds = this_model.prior.bounds(confidence_for_unbounded=0.99995)
         inputs = generate_inputs(bounds)
         for this_label, this_input in inputs.items():
-            print("------", i_run, this_label)
             this_path = os.path.join(path, this_label, random_hex_name())
             this_input["checkpoint"] = this_path
             this_input["load_checkpoint"] = "overwrite"
             this_input["callback"] = callback
             runner = Runner(this_model, **this_input)
             runner.run()
+        print(f"--- Generated {len(inputs)} models.")
 
 
 if __name__ == "__main__":
