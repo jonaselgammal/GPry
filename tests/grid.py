@@ -41,8 +41,8 @@ def generate_inputs(bounds):
                      "verbose": verbose, "plots": False, "options": {
                          "n_initial": 3 * d,
                          "max_init": 10 * d,  # fail if sth funny: not useful for test
-                         "n_points_per_acq": 1,  # as many as parallel processes
-                         "max_points": 20 * d}}
+                         "n_points_per_acq": 1,  # 1 when not testing it in particular
+                         "max_points": 2 * n_approx_conv(d)}}
     default_input["gp_acquisition"] = GP_Acquisition(
         bounds, acq_func="LogExp",
         proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
@@ -52,7 +52,7 @@ def generate_inputs(bounds):
     # Creating grid -- User modifications usually from here down
     # 1. zeta values
     inputs = {}
-    zetas = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2]
+    zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2]
     for value in zetas:
         key = f"zeta_{value}"
         inputs[key] = deepcopy(default_input)
@@ -66,6 +66,11 @@ def generate_inputs(bounds):
     return inputs
 
 
+def n_approx_conv(dim):
+    """Order-of-magnitude-approx number of true posterior evaluations for convergence."""
+    return 5 * dim**(3 / 2)
+
+
 def random_hex_name():
     """Generates a random 8-character hexadecimal name."""
     return str(hex(int(random() * 1e9))[2:])
@@ -76,9 +81,10 @@ def callback(runner):
     Runs an MCMC on the current model at specific intervals, and computes KL_truth with
     a gaussian approximation.
     """
-    # Do tests only if # training points is multiple of 5 * dim, and only after a while
+    # Do tests only 5 times before expected convergence, and a few times after
     n_train = runner.gpr.n_total
-    if max(n_train, 1) % 5 * runner.gpr.d or n_train <= 4 * runner.gpr.d:
+    n_step = int(np.round(n_approx_conv(dim) / 5))
+    if max(n_train, 1) % n_step:
         return
     true_mean = likelihood_generator.mean
     true_cov = likelihood_generator.cov
@@ -127,14 +133,11 @@ def generate(nruns, likelihood_generator, path=None):
 if __name__ == "__main__":
     # contains a list of values for grid_parameter
     arg_err_msg = "Pass [dim N path] as arguments, or ['plot' path] as single argument."
-    if len(sys.argv[1:]) not in [2, 3]:
+    if len(sys.argv[1:]) != 3:
         raise ValueError(arg_err_msg)
-    elif isinstance(sys.argv[1], str) and sys.argv[1].lower() == "plot":
-        # TODO: check and add path
-        plot(path)
-        exit()
     try:
         # Assuming expected input
+        global dim
         dim = int(sys.argv[1])
         nruns = int(sys.argv[2])
         path = str(sys.argv[3])
