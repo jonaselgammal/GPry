@@ -20,6 +20,7 @@ from gpry.mc import mc_sample_from_gp
 from gpry.plots import plot_convergence
 
 
+_plots_path = "images"
 class Runner(object):
     r"""
     Class that takes care of constructing the Bayesian quadrature/likelihood
