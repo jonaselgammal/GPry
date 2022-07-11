@@ -12,8 +12,8 @@ class Progress:
     """
 
     _colnames = {
-        "n_train": "number of training points at the start of the iteration",
-        "n_accepted": ("number of finite-posterior training points "
+        "n_total": "number of training points at the start of the iteration",
+        "n_finite": ("number of finite-posterior training points "
                        "at the start of the iteration"),
         "time_acquire": "time needed to acquire candidates for truth evaluation",
         "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
@@ -53,8 +53,8 @@ class Progress:
         Adds the number of total and finite evaluations of the true model
         at the beginning of the iteration.
         """
-        self.data.iloc[-1, self.data.columns.get_loc("n_train")] = n_truth
-        self.data.iloc[-1, self.data.columns.get_loc("n_accepted")] = n_truth_finite
+        self.data.iloc[-1, self.data.columns.get_loc("n_total")] = n_truth
+        self.data.iloc[-1, self.data.columns.get_loc("n_finite")] = n_truth_finite
 
     def add_acquisition(self, time, evals):
         """Adds timing and #evals during acquisitions."""
