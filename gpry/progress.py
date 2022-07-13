@@ -12,8 +12,8 @@ class Progress:
     """
 
     _colnames = {
-        "n_train": "number of training points at the start of the iteration",
-        "n_accepted": ("number of finite-posterior training points "
+        "n_total": "number of training points at the start of the iteration",
+        "n_finite": ("number of finite-posterior training points "
                        "at the start of the iteration"),
         "time_acquire": "time needed to acquire candidates for truth evaluation",
         "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
@@ -53,32 +53,33 @@ class Progress:
         Adds the number of total and finite evaluations of the true model
         at the beginning of the iteration.
         """
-        self.data.iloc[-1]["n_train"] = n_truth
-        self.data.iloc[-1]["n_accepted"] = n_truth_finite
+        self.data.iloc[-1, self.data.columns.get_loc("n_total")] = n_truth
+        self.data.iloc[-1, self.data.columns.get_loc("n_finite")] = n_truth_finite
 
     def add_acquisition(self, time, evals):
         """Adds timing and #evals during acquisitions."""
-        self.data.iloc[-1]["time_acquire"] = time
-        self.data.iloc[-1]["evals_acquire"] = evals
+        self.data.iloc[-1, self.data.columns.get_loc("time_acquire")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("evals_acquire")] = evals
 
     def add_truth(self, time, evals):
         """Adds timing and #evals during truth evaluations."""
-        self.data.iloc[-1]["time_truth"] = time
-        self.data.iloc[-1]["evals_truth"] = evals
+        self.data.iloc[-1, self.data.columns.get_loc("time_truth")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("evals_truth")] = evals
 
     def add_fit(self, time, evals):
         """Adds timing and #evals during GP fitting."""
-        self.data.iloc[-1]["time_fit"] = time
-        self.data.iloc[-1]["evals_fit"] = evals
+        self.data.iloc[-1, self.data.columns.get_loc("time_fit")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("evals_fit")] = evals
 
     def add_convergence(self, time, evals, crit_value):
         """
         Adds timing and #evals during convergence computation, together with the new
         criterion value.
         """
-        self.data.iloc[-1]["time_convergence"] = time
-        self.data.iloc[-1]["evals_convergence"] = evals
-        self.data.iloc[-1]["convergence_crit_value"] = crit_value
+        self.data.iloc[-1, self.data.columns.get_loc("time_convergence")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("evals_convergence")] = evals
+        self.data.iloc[-1, \
+                       self.data.columns.get_loc("convergence_crit_value")] = crit_value
 
     def mpi_sync(self):
         """
@@ -124,12 +125,13 @@ class Progress:
 
     def _bcast_operation(self, column, operation):
         f = {"max": max, "sum": sum}[operation.lower()]
-        all_values = np.array(mpi_comm.gather(self.data.iloc[-1][column]))
+        all_values = np.array(mpi_comm.gather(
+            self.data.iloc[-1, self.data.columns.get_loc(column)]))
         max_value = None
         if is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
-        self.data.iloc[-1][column] = mpi_comm.bcast(max_value)
+        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi_comm.bcast(max_value)
 
     def _x_ticks_for_bar_plot(self, fig, ax):
         fig.canvas.draw()

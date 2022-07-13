@@ -141,8 +141,8 @@ class DontConverge(ConvergenceCriterion):
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
         self.thres.append(np.nan)
-        self.n_posterior_evals.append(gp.n_total_evals)
-        self.n_accepted_evals.append(gp.n_accepted_evals)
+        self.n_posterior_evals.append(gp.n_total)
+        self.n_accepted_evals.append(gp.n)
         return np.nan
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -188,7 +188,6 @@ class GaussianKL(ConvergenceCriterion):
         return True
 
     def __init__(self, prior, params):
-        self.n_posterior_evals = []
         self.prior = prior
         self.mean = None
         self.cov = None
@@ -338,8 +337,8 @@ class GaussianKL(ConvergenceCriterion):
             mean_new, cov_new = self._get_new_mean_and_cov(gp)
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         if gp_2 is not None:
             # TODO: Nothing yet to do with gp2
@@ -348,8 +347,8 @@ class GaussianKL(ConvergenceCriterion):
             # Nothing to compare to! But save mean, cov for next call
             self.mean, self.cov = mean_new, cov_new
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
             raise ConvergenceCheckError("No previous call: cannot compute criterion.")
         else:
             mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
@@ -363,8 +362,8 @@ class GaussianKL(ConvergenceCriterion):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
         return kl
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -483,6 +482,6 @@ class CorrectCounter(ConvergenceCriterion):
                     print("Mispredict...")
         self.values.append(max_diff if n_new > 0 else self.values[-1])
         self.thres.append(max_thres if n_new > 0 else self.thres[-1])
-        self.n_accepted_evals.append(gp.n_accepted_evals)
-        self.n_posterior_evals.append(gp.n_total_evals)
+        self.n_posterior_evals.append(gp.n_total)
+        self.n_accepted_evals.append(gp.n)
         return max_val if n_new > 0 else self.values[-1]

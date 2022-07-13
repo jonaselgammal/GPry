@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 from copy import deepcopy
 from itertools import chain
+from inspect import getfullargspec
 
 from cobaya.model import Model
 
@@ -19,6 +20,7 @@ from gpry.mc import mc_sample_from_gp
 from gpry.plots import plot_convergence
 
 
+_plots_path = "images"
 class Runner(object):
     r"""
     Class that takes care of constructing the Bayesian quadrature/likelihood
@@ -53,7 +55,7 @@ class Runner(object):
         criterion is used with a relative threshold of 0.01 and an absolute threshold of
         0.05.
 
-    convergence_options: optional parameters passed to the convergence criterion.
+    convergence_options : optional parameters passed to the convergence criterion.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -76,13 +78,14 @@ class Runner(object):
               If the run fails repeatadly at initialization try decreasing the volume
               of your prior.
 
-    callback: callable, optional (default=None)
+    callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
-        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``.
-        When running in parallel, the function is run by the main process only.
+        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``, or simply ``callback(runner_instance)``.
+        When running in parallel, the function is run by the main process only, unless
+        ``callback_is_MPI_aware=True``.
 
-    callback_is_MPI_aware: bool (default: False)
+    callback_is_MPI_aware : bool (default: False)
         If True, the callback function is called for every process simultaneously, and
         it is expected to handle parallelisation internally. If false, only the main
         process calls it.
@@ -94,6 +97,9 @@ class Runner(object):
     load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
         Whether to resume from the checkpoint files if existing ones are found
         at the location specified by `checkpoint`.
+
+    plots : bool (default: True)
+        If True, produces some progress plots.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -111,7 +117,7 @@ class Runner(object):
         This can be used to call an MCMC sampler for getting marginalized
         properties. This is the most crucial component.
 
-    gp_acquisition : GP_acquisition
+    gp_acquisition : GP_Acquisition
         The acquisition object that was used for the active sampling procedure.
 
     convergence_criterion : Convergence_criterion
@@ -132,19 +138,20 @@ class Runner(object):
     def __init__(self, model, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
-                 checkpoint=None, load_checkpoint=None, verbose=3):
+                 checkpoint=None, load_checkpoint=None, plots=True, verbose=3):
         self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
-            self.plots_path = os.path.join(self.checkpoint, "images")
+            self.plots_path = os.path.join(self.checkpoint, _plots_path)
             if is_main_process:
-                create_path(self.checkpoint)
-                create_path(self.plots_path)
+                create_path(self.checkpoint, verbose=verbose >= 3)
+                create_path(self.plots_path, verbose=verbose >= 3)
         else:
-            self.plots_path = "images"
+            self.plots_path = _plots_path
             if is_main_process:
-                create_path(self.plots_path)
+                create_path(self.plots_path, verbose=verbose >= 3)
         self.options = options
+        self.plots = plots
         self.verbose = verbose
         self.rng = get_random_state()
         if is_main_process:
@@ -205,9 +212,8 @@ class Runner(object):
                 if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
                     raise ValueError("Supported acquisition function is 'LogExp', "
                                      f"'NonlinearLogExp', got {gp_acquisition}")
-                bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
                 self.acquisition = GP_Acquisition(
-                    bounds, proposer=None, acq_func=gp_acquisition,
+                    prior_bounds, proposer=None, acq_func=gp_acquisition,
                     acq_optimizer="fmin_l_bfgs_b",
                     n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
                     preprocessing_X=Normalize_bounds(prior_bounds),
@@ -270,13 +276,15 @@ class Runner(object):
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
+            self.callback_is_single_arg = (callable(callback) and
+                                           len(getfullargspec(callback).args) == 1)
             # Print resume
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
             for attr in ("n_initial", "max_init", "max_points", "max_accepted",
                          "n_points_per_acq", "gpr", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
-                         "loaded_from_checkpoint"):
+                         "callback_is_single_arg", "loaded_from_checkpoint"):
                 setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None)))
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware or self.callback_is_MPI_aware:
@@ -304,10 +312,10 @@ class Runner(object):
 
     def log(self, msg, level=None):
         """
-        Print a message if verbosity level is equal or higher than the given one (or
+        Print a message if its verbosity level is equal or lower than the given one (or
         always if ``level=None``.
         """
-        if level is None or level >= self.verbose:
+        if level is None or level <= self.verbose:
             print(msg)
 
     def read_checkpoint(self):
@@ -357,9 +365,9 @@ class Runner(object):
         it = 0
         n_left = self.max_accepted - n_finite
         for it in range(n_iterations):
+            self.current_iteration = it
             self.progress.add_iteration()
-            self.progress.add_current_n_truth(self.gpr.n_total_evals,
-                                              self.gpr.n_accepted_evals)
+            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n)
             if is_main_process:
                 if self.max_accepted != self.max_points:
                     self.log(f"+++ Iteration {it} "
@@ -378,7 +386,7 @@ class Runner(object):
                     self.gpr, n_points=self.n_points_per_acq, random_state=self.rng)
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if is_main_process:
-                self.log(f"New X {new_X} ; y_lie {y_pred} ; acq {acq_vals}")
+                self.log(f"New X {new_X} ; y_lie {y_pred} ; acq {acq_vals}", level=3)
             # Get logposterior value(s) for the acquired points (in parallel)
             if multiple_processes:
                 new_X = mpi_comm.bcast(new_X if is_main_process else None)
@@ -410,7 +418,7 @@ class Runner(object):
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             if multiple_processes:
                 self.gpr = mpi_comm.bcast(self.gpr)
-            n_left = self.max_accepted - self.gpr.n_accepted_evals
+            n_left = self.max_accepted - self.gpr.n
             if multiple_processes:
                 self.gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
                     (self.gpr, old_gpr, new_X, new_y, y_pred)
@@ -421,9 +429,13 @@ class Runner(object):
                 if self.callback_is_MPI_aware or is_main_process:
                     # TODO: unify order of arguments with read/save_checkpoint.
                     #       maybe even pass a runner object?
-                    self.callback(self.model, self.gpr, self.acquisition,
-                                  self.convergence, self.options, self.progress,
-                                  old_gpr, new_X, new_y, y_pred)
+                    if self.callback_is_single_arg:
+                        args = [self]
+                    else:
+                        args = [self.model, self.gpr, self.acquisition,
+                                self.convergence, self.options, self.progress,
+                                old_gpr, new_X, new_y, y_pred]
+                    self.callback(*args)
                 mpi_comm.barrier()
             # Calculate convergence and break if the run has converged
             if not self.convergence_is_MPI_aware:
@@ -458,14 +470,13 @@ class Runner(object):
                         timer_convergence.time, timer_convergence.evals,
                         np.nan)
                     is_converged = False
-            #self.log(f"{mpi_rank} got is_converged={is_converged}")
             sync_processes()
             self.progress.mpi_sync()
             if is_main_process:
-                self.log(f"run - tot: {self.gpr.n_total_evals}, "
-                         f"acc: {self.gpr.n_accepted_evals}, "
+                self.log(f"run - tot: {self.gpr.n_total}, "
+                         f"acc: {self.gpr.n}, "
                          f"con: {self.convergence.values[-1]}, "
-                         f"lim: {self.convergence.thres[-1]}")
+                         f"lim: {self.convergence.thres[-1]}", level=3)
             if is_converged:
                 self.has_converged = True
                 break
@@ -475,11 +486,11 @@ class Runner(object):
             if n_left <= 0:
                 break
             self.save_checkpoint()
-            if is_main_process:
+            if is_main_process and self.plots:
                 self.plot_progress()
         # Save
         self.save_checkpoint()
-        if is_main_process:
+        if is_main_process and self.plots:
             self.plot_progress()
         if n_left <= 0 and is_main_process \
             and not isinstance(self.convergence, gpryconv.DontConverge) and self.verbose > 1:
@@ -632,7 +643,8 @@ class Runner(object):
             Dict of additional options to be passed to the sampler.
 
         output: path, optional (default: ``checkpoint/chains``, if ``checkpoint != None``)
-            The path where the resulting Monte Carlo sample shall be stored.
+            The path where the resulting Monte Carlo sample shall be stored. If passed
+            explicitly ``False``, produces no output.
 
         resume: bool, optional (default=False)
             Whether to resume from existing output files (True) or force overwrite (False)
@@ -648,15 +660,16 @@ class Runner(object):
             The sampler instance that has been run (or just initialised). The sampler
             products can be retrieved with the `Sampler.products()` method.
         """
-        if not self.has_run:
-            raise Exception("You have to first run before you can generate an mc_sample")
+        if not self.gpr.fitted:
+            raise Exception("You have to have added points to the GPR "
+                            "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/")
         return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,
                                  convergence=self.convergence, output=output,
                                  add_options=add_options, resume=resume)
 
-    def plot_mc(self, surr_info, sampler, add_training=True):
+    def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None):
         """
         Creates some progress plots and saves them at path (assumes path exists).
 
@@ -672,6 +685,9 @@ class Runner(object):
 
         add_training : bool, optional (default=True)
             Whether the training locations are plotted on top of the contours.
+
+        add_samples : dict(label, getdist.MCSamples), optional (default=None)
+            Whether the training locations are plotted on top of the contours.
         """
         if is_main_process:
             from getdist.mcsamples import MCSamplesFromCobaya
@@ -680,8 +696,11 @@ class Runner(object):
             import matplotlib.pyplot as plt
             gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
             gdplot = gdplt.get_subplot_plotter(width_inch=5)
+            to_plot = [gdsamples_gp]
+            if add_samples:
+                to_plot += list(add_samples.values())
             gdplot.triangle_plot(
-                gdsamples_gp, self.model.parameterization.sampled_params(), filled=True)
+                to_plot, self.model.parameterization.sampled_params(), filled=True)
             if add_training and self.d > 1:
                 getdist_add_training(gdplot, self.model, self.gpr)
             plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
