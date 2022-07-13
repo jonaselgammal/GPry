@@ -10,7 +10,7 @@ import sys
 import inspect
 from copy import deepcopy
 from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
-from gpry.tools import kl_norm, is_valid_covmat
+from gpry.tools import kl_norm, is_valid_covmat, nstd_of_cl
 from gpry.mpi import mpi_comm, is_main_process, multiple_processes
 
 
@@ -427,9 +427,27 @@ class CorrectCounter(ConvergenceCriterion):
     """
 
     def __init__(self, prior, params):
+        d = prior.d()
         self.ncorrect = params.get("n_correct", 5)
-        self.reltol = params.get("reltol", 0.01)
-        self.abstol = params.get("abstol", 0.1)
+        reltol = params.get("reltol", "0.01d")
+        if isinstance(reltol, str):
+            try:
+                assert reltol[-1] == "d"
+                reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
+            except:
+                raise("The 'reltol' parameter can either be a number " + \
+                    f"or a string with a number followed by 'd'. Got {reltol}")
+        self.reltol = reltol
+        abstol = params.get("abstol", "0.05d")
+        if isinstance(abstol, str):
+            try:
+                assert abstol[-1] == "d"
+                abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
+            except:
+                raise("The 'abstol' parameter can either be a number " + \
+                    f"or a string with a number followed by 'd'. Got {abstol}")
+        self.abstol = abstol
+        print(self.abstol)
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
