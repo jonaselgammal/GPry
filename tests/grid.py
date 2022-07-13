@@ -68,7 +68,8 @@ def generate_inputs(bounds):
 
 def n_approx_conv(dim):
     """Order-of-magnitude-approx number of true posterior evaluations for convergence."""
-    return 5 * dim**(5 / 3)
+    return 4.5 * dim**2
+    # was for 2, 4, 8: 5 * dim**(5 / 3)
 
 
 def random_hex_name():
