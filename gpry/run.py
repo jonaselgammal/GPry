@@ -284,7 +284,7 @@ class Runner(object):
                     convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
                 self.callback = mpi_comm.bcast(
-                    self.convergence if is_main_process else None)
+                    self.callback if is_main_process else None)
             else:  # for check of whether to call it
                 callback_func = callback
                 self.callback = mpi_comm.bcast(
