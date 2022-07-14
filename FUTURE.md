@@ -26,3 +26,5 @@ A few solutions have been proposed:
 - cut the prior boundaries so that they are closer to the mode.
 - run with full priors, but distribute together with the resulting GP a definition of a "region of interest"
 
+## Initial point generation in high dimensions
+As the mode/prior volume shrinks exponentially as function of the number of dimensions the finite log-posterior area becomes extremely small. In such a case drawing initial samples from the prior is typically unfeasable. While there is currently the option to pass a reference distribution which acts as a rough guess of where the mode lies it would be good to give the option to just pass a single finite point and run a very short (burn-in) MCMC chain from there to have some initial samples from where to start the BO loop.
