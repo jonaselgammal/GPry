@@ -46,7 +46,9 @@ class Progress:
         """
         Adds the next row to the table. New values will be added to this row.
         """
-        self.data = pd.concat([self.data, pd.Series(dtype=float)], axis=0)
+        self.data = pd.concat(
+            [self.data, pd.DataFrame({c: [np.nan] for c in self.data.columns})],
+            axis=0, ignore_index=True)
 
     def add_current_n_truth(self, n_truth, n_truth_finite):
         """
