@@ -289,4 +289,4 @@ class CentroidsProposer(Proposer):
 
     def update(self, gpr):
         # Get training locations from gpr and save them
-        self.training = gpr.X_train
+        self.training = np.copy(gpr.X_train)

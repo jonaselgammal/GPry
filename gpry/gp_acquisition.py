@@ -232,10 +232,6 @@ class GP_Acquisition(object):
                     "contains data when trying to optimize an acquisition "
                     "function on it as optimizing priors is not supported yet.")
 
-            # Make the surrogate instance so it can be used in the objective
-            # function
-            self.gpr_ = gpr
-
             def obj_func(X, eval_gradient=False):
 
                 # TODO: optionally suppress this checks if called by optimiser
@@ -249,12 +245,10 @@ class GP_Acquisition(object):
                     X = self.preprocessing_X.inverse_transform(X)
 
                 if eval_gradient:
-                    acq, grad = self.acq_func(X, self.gpr_,
-                                              eval_gradient=True)
+                    acq, grad = self.acq_func(X, gpr, eval_gradient=True)
                     return -1 * acq, -1 * grad
                 else:
-                    return -1 * self.acq_func(X, self.gpr_,
-                                              eval_gradient=False)
+                    return -1 * self.acq_func(X, gpr, eval_gradient=False)
 
             self.obj_func = obj_func
 
@@ -267,7 +261,7 @@ class GP_Acquisition(object):
 
         if i == 0:
             # Perform first run from last training point
-            x0 = self.gpr_.X_train[-1]
+            x0 = gpr.X_train[-1]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
             return self._constrained_optimization(self.obj_func, x0,
@@ -279,7 +273,7 @@ class GP_Acquisition(object):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(random_state=random_state)
-                value = self.acq_func(x0, self.gpr_)
+                value = self.acq_func(x0, gpr)
                 if not np.isfinite(value):
                     continue
                 x0s[ifull] = x0
