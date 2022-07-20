@@ -145,10 +145,11 @@ class Runner(object):
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
             if is_main_process:
                 create_path(self.checkpoint, verbose=verbose >= 3)
-                create_path(self.plots_path, verbose=verbose >= 3)
+                if plots:
+                    create_path(self.plots_path, verbose=verbose >= 3)
         else:
             self.plots_path = _plots_path
-            if is_main_process:
+            if plots and is_main_process:
                 create_path(self.plots_path, verbose=verbose >= 3)
         self.options = options
         self.plots = plots
