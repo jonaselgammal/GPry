@@ -52,7 +52,12 @@ def generate_inputs(bounds):
     # Creating grid -- User modifications usually from here down
     # 1. zeta values
     inputs = {}
-    zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5]
+    if d < 10:
+        zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5]
+    else:
+        zetas = [0.05, 0.1, 0.2, 0.5, 1]
+        from random import shuffle
+        shuffle(zetas)
     for value in zetas:
         key = f"zeta_{value}"
         inputs[key] = deepcopy(default_input)
@@ -68,7 +73,7 @@ def generate_inputs(bounds):
 
 def n_approx_conv(dim):
     """Order-of-magnitude-approx number of true posterior evaluations for convergence."""
-    return 4.5 * dim**2
+    return 3.5 * dim**2
     # was for 2, 4, 8: 5 * dim**(5 / 3)
 
 
