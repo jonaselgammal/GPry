@@ -186,10 +186,10 @@ class GP_Acquisition(object):
         self.mean_ = None
         self.cov = None
 
-    def propose(self, gpr, i, random_state=None):
+    def optimize_acquisition_function(self, gpr, i, random_state=None):
         """Exposes the optimization method for the acquisition function. When
-        called it proposes a single point where for where to sample next. Is
-        internally called in the :meth:`multi_add` method.
+        called it proposes a single point where for where to evaluate the true
+        model next. It is internally called in the :meth:`multi_add` method.
 
         Parameters
         ----------
@@ -366,7 +366,7 @@ class GP_Acquisition(object):
             # Optimize the acquisition function to get a few possible next proposal points
             # (done in parallel)
             for i in range(n_acq_this_process):
-                proposal_X[i], acq_X[i] = self.propose(
+                proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
                     gpr_, i + i_acq_this_process, random_state=random_state)
             proposal_X_main, acq_X_main = multi_gather_array(
                 [proposal_X, acq_X])
