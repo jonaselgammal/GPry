@@ -207,6 +207,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  copy_X_train=True, random_state=None,
                  verbose=1):
         self.newly_appended = 0
+        self.newly_appended_for_inv = 0
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
@@ -314,21 +315,46 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     @property
     def n_total_evals(self):
         warnings.warn("This property will soon be deprecated in favour of ``n_total``. "
-                      "Please, change your code accordingly.",
-                      warnings.DeprecationWarning)
+                      "Please, change your code accordingly.")
         return self.n_total
 
     @property
     def n_accepted_evals(self):
         warnings.warn("This property will soon be deprecated in favour of ``n``. "
-                      "Please, change your code accordingly.",
-                      warnings.DeprecationWarning)
+                      "Please, change your code accordingly.")
         return self.n
     # END OF DEPRECATION BLOCK
 
+    @property
     def fitted(self):
         """Whether the GPR has been fitted at least once."""
         return self._fitted
+
+    @property
+    def last_appended(self):
+        """
+        Returns a copy of the last appended training points (finite/accepted or not),
+        as (X, y).
+        """
+        if self.account_for_inf is None:
+            return self.last_appended
+        return self.account_for_inf.last_appended
+
+    @property
+    def n_last_appended(self):
+        """Returns the number last-appended training points (finite/accepted or not)."""
+        return self.last_appended[1].shape[0]
+
+    @property
+    def last_appended_finite(self):
+        """Returns a copy of the last appended GPR (finite) training points, as (X, y)."""
+        return (np.copy(self.X_train[-self.newly_appended:]),
+                np.copy(self.y_train[-self.newly_appended:]))
+
+    @property
+    def n_last_appended_finite(self):
+        """Returns the number last-appended GPR (finite) training points."""
+        return self.last_appended_finite[1].shape[0]
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.
@@ -473,6 +499,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         # The number of newly added points. Used for the update_model method
         self.newly_appended = y.shape[0]
+        self.newly_appended_for_inv = y.shape[0]
 
         if fit:
             self.fit(simplified=simplified_fit)
@@ -731,8 +758,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # leave this here if stuff doesnt work...
         # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
 
-        # Reset newly_appended to 0
-        self.newly_appended = 0
+        # Reset newly_appended_for_inv to 0
+        self.newly_appended_for_inv = 0
 
         self._fitted = True
         return self
@@ -754,9 +781,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         # Check if a model has previously been fit to the data, i.e. that a
         # K_inv_matrix, X_train_ and y_train_ exist. Furthermore check, that
-        # newly_appended > 0.
+        # newly_appended_for_inv > 0.
 
-        if self.newly_appended < 1:
+        if self.newly_appended_for_inv < 1:
             raise ValueError("No new points have been appended to the model. "
                              "Please append points with the 'append_to_data'-method "
                              "before trying to update.")
@@ -773,11 +800,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             raise ValueError("K_inv_ is missing. Most probably the model "
                              "hasn't been fit to the data previously.")
 
-        if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended:
+        if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended_for_inv:
             raise ValueError("The number of added points doesn't match the "
                              "dimensions of the K_inv matrix. %s != %s"
                              % (self.K_inv_.shape[0],
-                                self.y_train_.size - self.newly_appended))
+                                self.y_train_.size - self.newly_appended_for_inv))
 
         kernel = self.kernel_(self.X_train_)
         kernel[np.diag_indices_from(kernel)] += self.alpha
@@ -786,8 +813,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Also update alpha_ matrix
         self.alpha_ = self.K_inv_ @ self.y_train_
 
-        # Reset newly_appended to 0
-        self.newly_appended = 0
+        # Reset newly_appended_for_inv to 0
+        self.newly_appended_for_inv = 0
         return self
 
     def predict(self, X, return_std=False, return_cov=False,

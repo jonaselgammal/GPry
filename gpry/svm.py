@@ -184,6 +184,7 @@ class SVM(SVC):
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
         self.all_finite = False
+        self.newly_appended = 0
 
         super().__init__(C=C, kernel=kernel, degree=degree, gamma=gamma,
                          coef0=coef0, shrinking=shrinking, probability=probability,
@@ -205,6 +206,12 @@ class SVM(SVC):
     def n(self):
         """Number of training points."""
         return len(getattr(self, "y_train", []))
+
+    @property
+    def last_appended(self):
+        """Returns a copy of the last appended training points, as (X, y in [0, 1])."""
+        return (np.copy(self.X_train[-self.newly_appended:]),
+                np.copy(self.y_train[-self.newly_appended:]))
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """
@@ -233,7 +240,7 @@ class SVM(SVC):
         # Copy stuff
         X = np.copy(X)
         y = np.copy(y)
-        newly_appended = len(y)
+        self.newly_appended = len(y)
 
         # Check if X_train and y_train exist to see if a model
         # has previously been fit to the data
@@ -246,7 +253,7 @@ class SVM(SVC):
         # Fit SVM
         self.fit(X_train, y_train, fit_preprocessors=fit_preprocessors)
 
-        return self.finite[-newly_appended:]
+        return self.finite[-self.newly_appended:]
 
     def fit(self, X, y, fit_preprocessors=True):
         r"""

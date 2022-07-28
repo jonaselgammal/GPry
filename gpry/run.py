@@ -61,8 +61,12 @@ class Runner(object):
         A dict containing all options regarding the bayesian optimization loop.
         The available options are:
 
-            * n_initial : Number of initial samples before starting the BO loop
-              (default: 3*number of dimensions)
+            * n_initial : Number of finite initial truth evaluations before starting the
+              BO loop (default: 3*number of dimensions)
+            * max_initial : Maximum number of truth evaluations at initialization. If it
+              is reached before `n_initial` finite points have been found, the run will
+              fail. To avoid that, try decreasing the volume of your prior
+              (default: 10 * number of dimensions * n_initial).
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
@@ -73,11 +77,7 @@ class Runner(object):
               set before the run fails. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
-              saturated, try shrinking your prior boundaries (default: max_total).
-            * max_init : Maximum number of points drawn at initialization
-              before the run fails (default: 10 * number of dimensions * n_initial).
-              If the run fails repeatadly at initialization try decreasing the volume
-              of your prior.
+              saturated, try decreasing the volume of your prior (default: max_total).
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
@@ -250,6 +250,13 @@ class Runner(object):
                 options = {}
             self.n_initial = options.get("n_initial", 3 * self.d)
             # DEPRECATED ON 2022-07-28
+            if "max_init" in options:
+                warnings.warn("`max_init` will soon be deprecated "
+                              "in favour of `max_initial`.")
+                options["max_initial"] = options.pop("max_init")
+            # END OF DEPRECATION BLOCK
+            self.max_initial = options.get("max_initial", 10 * self.d * self.n_initial)
+            # DEPRECATED ON 2022-07-28
             if "max_points" in options:
                 warnings.warn("`max_points` will soon be deprecated "
                               "in favour of `max_total`.")
@@ -261,7 +268,6 @@ class Runner(object):
             # END OF DEPRECATION BLOCK
             self.max_total = options.get("max_total", 1000)
             self.max_finite = options.get("max_finite", self.max_total)
-            self.max_init = options.get("max_init", 10 * self.d * self.n_initial)
             self.n_points_per_acq = options.get("n_points_per_acq", mpi_size)
             self.fit_full_every = options.get(
                 "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
@@ -276,31 +282,42 @@ class Runner(object):
                          "Consider running it with less cores or decreasing "
                          "n_points_per_acq manually.", level=2)
             # Sanity checks
-            if self.n_initial >= self.max_total:
-                raise ValueError("The number of initial samples needs to be "
-                                 "smaller than the maximum number of points")
             if self.n_initial <= 0:
                 raise ValueError("The number of initial samples needs to be bigger "
                                  "than 0")
+            for attr in ["n_initial", "max_initial", "max_finite",
+                         "max_total", "n_points_per_acq"]:
+                if getattr(self, attr) < 0 or \
+                   getattr(self, attr) != int(getattr(self, attr)):
+                    raise ValueError(f"'{attr}' must be a positive integer.")
+            if self.n_initial >= self.max_finite:
+                raise ValueError("The number of initial samples needs to be smaller than "
+                                 "the maximum number of finite and total points.")
             if self.max_finite > self.max_total:
-                raise ValueError("You manually set max_finite > max_total, but "
-                                 " you cannot have more finite than total evaluated "
-                                 "points")
+                raise ValueError("The maximum number of initial truth evaluations needs "
+                                 "to be smaller than the maximum total number of "
+                                 "evaluations.")
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
+            # DEPRECATED ON 2022-07-28
             self.callback_is_single_arg = (callable(callback) and
                                            len(getfullargspec(callback).args) == 1)
+            if self.callback is not None and not self.callback_is_single_arg:
+                warnings.warn("callback functions should from now on take the Runner "
+                              "instance as a single argument. The multiple-arguments "
+                              "definition will be deprecated in the future.")
+            # END OF DEPRECATION BLOCK
             # Print resume
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
-            for attr in ("n_initial", "max_init", "max_total", "max_finite",
+            for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "options", "gpr", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "callback_is_single_arg", "loaded_from_checkpoint"):
                 self._share_attr(attr)
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
-            if self.convergence_is_MPI_aware or self.callback_is_MPI_aware:
+            if self.convergence_is_MPI_aware:
                 self.convergence = mpi_comm.bcast(
                     convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
@@ -409,7 +426,7 @@ class Runner(object):
             maybe_stop_before_max_total = (
                 (self.max_finite < self.max_total) or
                 not isinstance(self.convergence, gpryconv.DontConverge))
-        at_most_str = "at most " if maybe_stop_before_max_total else ""
+            at_most_str = "at most " if maybe_stop_before_max_total else ""
         while (self.n_total_left > 0 and self.n_finite_left > 0 and
                not self.has_converged):
             self.current_iteration += 1
@@ -480,7 +497,9 @@ class Runner(object):
                 hyperparams_or_not = "*not* " if do_simplified_fit else ""
                 self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new "
                          "acquired points, "
-                         f"{hyperparams_or_not}including GPR hyperparameters.", level=3)
+                         f"{hyperparams_or_not}including GPR hyperparameters. "
+                         f"{self.gpr.n_last_appended_finite} finite points were added to "
+                         "the GPR.", level=3)
             self._share_attr("gpr")
             sync_processes()
             # We *could* check the max_total/finite condition and stop now, but it is
@@ -490,15 +509,25 @@ class Runner(object):
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
             if self.callback:
                 if self.callback_is_MPI_aware or is_main_process:
-                    # TODO: unify order of arguments with read/save_checkpoint.
-                    #       maybe even pass a runner object?
+                    # DEPRECATED ON 2022-07-28 -- remove `else` clause
                     if self.callback_is_single_arg:
                         args = [self]
                     else:
-                        args = [self.model, self.gpr, self.acquisition,
-                                self.convergence, self.options, self.progress,
+                        # TODO: not ideal: duplicates memory innecessarily
+                        acquisition = mpi_comm.bcast(
+                            self.acquisition if is_main_process else None)
+                        if not self.convergence_is_MPI_aware:
+                            convergence = mpi_comm.bcast(
+                                self.convergence if is_main_process else None)
+                        args = [self.model, self.gpr, acquisition, convergence,
+                                self.options, self.progress,
                                 self.old_gpr, new_X, new_y, y_pred]
-                    self.callback(*args)
+                    # END OF DEPRECATION BLOCK
+                    with Timer() as timer_callback:
+                        self.callback(*args)
+                    if is_main_process:
+                        self.log(f"[CALLBACK] ({timer_callback.time:.2g} sec) Evaluated "
+                                 "the callback function.", level=3)
                 sync_processes()
             # Calculate convergence and break if the run has converged
             if not self.convergence_is_MPI_aware:
@@ -553,27 +582,21 @@ class Runner(object):
                     lines += ("- The maximum number of finite truth evaluations "
                               f"({self.max_finite}) has been reached.")
                 self.banner(lines)
-        # Sync rest of relevan attributes before returning (gpr and progress done already)
-        self._share_attr("convergence")
+        # Sync rest of relevant attribs before returning (gpr and progress done already)
+        # TODO: not ideal: duplicates memory innecessarily
         self._share_attr("acquisition")
+        if not self.convergence_is_MPI_aware:
+            self._share_attr("convergence")
         self.has_run = True
 
-    def do_initial_training(self, max_init=None):
+    def do_initial_training(self):
         """
         Draws an initial sample for the `gpr` GP model until it has a training set of size
         `n_initial`, counting only finite-target points ("finite" here meaning over the
         threshold of the SVM classifier, if present).
 
         This function is MPI-aware and broadcasts the initialized GPR to all processes.
-
-        Parameters
-        ----------
-        max_init : int, optional (default=None)
-            Will fail is it needed to evaluate the target more than `max_init`
-            times (defaults to 10 times the dimension of the problem times the
-            number of initial samples requested).
         """
-        max_init = max_init or 10 * self.d * self.n_initial
         self.progress.add_iteration()
         self.progress.add_current_n_truth(0, 0)
         self.progress.add_acquisition(0, 0)
@@ -605,7 +628,8 @@ class Runner(object):
             warnings.warn("The number of pretrained points exceeds the number of "
                           "initial samples")
             return
-        n_iterations_before_giving_up = int(np.ceil(max_init / n_to_sample_per_process))
+        n_iterations_before_giving_up = int(
+            np.ceil(self.max_initial / n_to_sample_per_process))
         # Initial samples loop. The initial samples are drawn from the prior
         # and according to the distribution of the prior.
         with Timer() as timer_truth:
@@ -657,14 +681,16 @@ class Runner(object):
             if not finished:
                 raise RuntimeError("The desired number of finite initial "
                                    "samples hasn't been reached. Try "
-                                   "increasing max_init or decreasing the "
+                                   "increasing max_initial or decreasing the "
                                    "volume of the prior")
             # Append the initial samples to the gpr
             with TimerCounter(self.gpr) as timer_fit:
                 self.gpr.append_to_data(X_init, y_init)
             self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
-                     " points, including GPR hyperparameters.", level=3)
+                     " points, including GPR hyperparameters. "
+                     f"{self.gpr.n_last_appended_finite} finite points were added to the "
+                     "GPR.", level=3)
         # Broadcast results
         self._share_attr("gpr")
         self.progress.mpi_sync()
@@ -805,8 +831,12 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         A dict containing all options regarding the bayesian optimization loop.
         The available options are:
 
-            * n_initial : Number of initial samples before starting the BO loop
-              (default: 3*number of dimensions)
+            * n_initial : Number of finite initial truth evaluations before starting the
+              BO loop (default: 3*number of dimensions)
+            * max_initial : Maximum number of truth evaluations at initialization. If it
+              is reached before `n_initial` finite points have been found, the run will
+              fail. To avoid that, try decreasing the volume of your prior
+              (default: 10 * number of dimensions * n_initial).
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
@@ -818,10 +848,6 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try shrinking your prior boundaries (default: max_total).
-            * max_init : Maximum number of points drawn at initialization
-              before the run fails (default: 10 * number of dimensions * n_initial).
-              If the run fails repeatadly at initialization try decreasing the volume
-              of your prior.
 
     callback: callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
