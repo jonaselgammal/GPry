@@ -314,13 +314,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     @property
     def n_total_evals(self):
         warnings.warn("This property will soon be deprecated in favour of ``n_total``. "
-                      "Please, change your code accordingly.")
+                      "Please, change your code accordingly.",
+                      warnings.DeprecationWarning)
         return self.n_total
 
     @property
     def n_accepted_evals(self):
         warnings.warn("This property will soon be deprecated in favour of ``n``. "
-                      "Please, change your code accordingly.")
+                      "Please, change your code accordingly.",
+                      warnings.DeprecationWarning)
         return self.n
     # END OF DEPRECATION BLOCK
 

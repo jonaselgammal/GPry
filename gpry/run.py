@@ -66,13 +66,14 @@ class Runner(object):
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
-            * max_points : Maximum number of attempted sampling points before the run
+            * max_total : Maximum number of attempted sampling points before the run
               fails. This is useful if you e.g. want to restrict the maximum computation
               resources (default: 1000).
-            * max_accepted : Maximum number of accepted sampling points before the run
-              fails. This might be useful if you use the DontConverge convergence
-              criterion, specifying exactly how many points you want to have in your GP
-              (default: max_points)
+            * max_finite : Maximum number of sampling points accepted into the GP training
+              set before the run fails. This might be useful if you use the DontConverge
+              convergence criterion, specifying exactly how many points you want to have
+              in your GP. If you set this limit by hand and find that it is easily
+              saturated, try shrinking your prior boundaries (default: max_total).
             * max_init : Maximum number of points drawn at initialization
               before the run fails (default: 10 * number of dimensions * n_initial).
               If the run fails repeatadly at initialization try decreasing the volume
@@ -130,7 +131,7 @@ class Runner(object):
         The options dict used for the active sampling loop.
 
     progress : Progress
-        Object containing per-iteration progress information: number of accepted training
+        Object containing per-iteration progress information: number of finite training
         points, number of GP evaluations, timing of different parts of the algorithm, and
         value of the convergence criterion.
     """
@@ -151,11 +152,11 @@ class Runner(object):
             self.plots_path = _plots_path
             if plots and is_main_process:
                 create_path(self.plots_path, verbose=verbose >= 3)
-        self.options = options
         self.plots = plots
         self.verbose = verbose
         self.rng = get_random_state()
         if is_main_process:
+            self.options = options
             # Check if a checkpoint exists already and if so resume from there
             self.loaded_from_checkpoint = False
             if checkpoint is not None:
@@ -238,7 +239,7 @@ class Runner(object):
                 self.convergence = convergence_criterion
             else:
                 raise TypeError("convergence_criterion should be a "
-                                "Convergence_criterion object or "
+                                "Convergence_criterion object or an instance of "
                                 f"{gpryconv.builtin_names()}, got "
                                 f"{convergence_criterion}")
             self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
@@ -248,8 +249,18 @@ class Runner(object):
                     "No options dict found. Defaulting to standard parameters.", level=3)
                 options = {}
             self.n_initial = options.get("n_initial", 3 * self.d)
-            self.max_points = options.get("max_points", 1000)
-            self.max_accepted = options.get("max_accepted", self.max_points)
+            # DEPRECATED ON 2022-07-28
+            if "max_points" in options:
+                warnings.warn("`max_points` will soon be deprecated "
+                              "in favour of `max_total`.")
+                options["max_total"] = options.pop("max_points")
+            if "max_accepted" in options:
+                warnings.warn("`max_accepted` will soon be deprecated "
+                              "in favour of `max_finite`.")
+                options["max_finite"] = options.pop("max_accepted")
+            # END OF DEPRECATION BLOCK
+            self.max_total = options.get("max_total", 1000)
+            self.max_finite = options.get("max_finite", self.max_total)
             self.max_init = options.get("max_init", 10 * self.d * self.n_initial)
             self.n_points_per_acq = options.get("n_points_per_acq", mpi_size)
             self.fit_full_every = options.get(
@@ -265,15 +276,16 @@ class Runner(object):
                          "Consider running it with less cores or decreasing "
                          "n_points_per_acq manually.", level=2)
             # Sanity checks
-            if self.n_initial >= self.max_points:
+            if self.n_initial >= self.max_total:
                 raise ValueError("The number of initial samples needs to be "
                                  "smaller than the maximum number of points")
             if self.n_initial <= 0:
                 raise ValueError("The number of initial samples needs to be bigger "
                                  "than 0")
-            if self.max_accepted > self.max_points:
-                raise ValueError("You manually set max_accepted > max_points, but "
-                                 " you cannot have more accepted than sampled points")
+            if self.max_finite > self.max_total:
+                raise ValueError("You manually set max_finite > max_total, but "
+                                 " you cannot have more finite than total evaluated "
+                                 "points")
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
@@ -282,18 +294,17 @@ class Runner(object):
             # Print resume
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
-            for attr in ("n_initial", "max_init", "max_points", "max_accepted",
-                         "n_points_per_acq", "gpr", "acquisition",
+            for attr in ("n_initial", "max_init", "max_total", "max_finite",
+                         "n_points_per_acq", "options", "gpr", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "callback_is_single_arg", "loaded_from_checkpoint"):
-                setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None)))
+                self._share_attr(attr)
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware or self.callback_is_MPI_aware:
                 self.convergence = mpi_comm.bcast(
                     convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
-                self.callback = mpi_comm.bcast(
-                    self.callback if is_main_process else None)
+                self._share_attr("callback")
             else:  # for check of whether to call it
                 callback_func = callback
                 self.callback = mpi_comm.bcast(
@@ -303,6 +314,7 @@ class Runner(object):
         # Prepare progress summary table; the table key is the iteration number
         if not self.loaded_from_checkpoint:
             self.progress = Progress()
+        self.current_iteration = 0
         self.has_run = False
         self.has_converged = False
 
@@ -318,6 +330,41 @@ class Runner(object):
         """
         if level is None or level <= self.verbose:
             print(msg)
+
+    def _share_attr(self, attr, root=0):
+        """Broadcasts ``attr`` from process of rank ``root``."""
+        setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None), root=root))
+
+    @property
+    def n_total_left(self):
+        """Number of truth evaluations before stopping."""
+        return self.max_total - self.gpr.n_total
+
+    @property
+    def n_finite_left(self):
+        """Number of truth evaluations with finite return value before stopping."""
+        return self.max_finite - self.gpr.n
+
+    def banner(self, text, max_line_length=79, prefix="| ", suffix=" |",
+               header="=", footer="=", level=3):
+        """Creates an iteration banner."""
+        default_header_footer = "="
+        if header:
+            if not isinstance(header, str):
+                header = default_header_footer
+            self.log(max_line_length * str(header), level=level)
+        text = text.strip("\n")
+        lines = text.split("\n")
+        for line in lines:
+            line = prefix + line
+            left_before_suffix = max_line_length - len(line) - len(suffix)
+            if left_before_suffix >= 0:
+                line += " " * left_before_suffix + suffix
+            self.log(line, level=level)
+        if footer:
+            if not isinstance(footer, str):
+                footer = default_header_footer
+            self.log(max_line_length * str(footer), level=level)
 
     def read_checkpoint(self):
         """
@@ -346,84 +393,99 @@ class Runner(object):
             return
         if not self.loaded_from_checkpoint:
             # Define initial training set
-            self.log("Starting by drawing initial samples.", level=3)
+            if is_main_process:
+                self.banner("Drawing initial samples.")
             self.do_initial_training()
             if is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
-                self.log("Initial samples drawn, starting with Bayesian "
-                         "optimization loop.", level=3)
-        if multiple_processes:
-            n_finite = mpi_comm.bcast(len(self.gpr.y_train) if is_main_process else None)
-        else:
-            n_finite = len(self.gpr.y_train)
         # Run bayesian optimization loop
-        n_iterations = int((self.max_points - n_finite) / self.n_points_per_acq)
         n_evals_per_acq_per_process = \
             split_number_for_parallel_processes(self.n_points_per_acq)
         n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
         i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
-        it = 0
-        n_left = self.max_accepted - n_finite
-        for it in range(n_iterations):
-            self.current_iteration = it
+        self.has_converged = False
+        if is_main_process:
+            maybe_stop_before_max_total = (
+                (self.max_finite < self.max_total) or
+                not isinstance(self.convergence, gpryconv.DontConverge))
+        at_most_str = "at most " if maybe_stop_before_max_total else ""
+        while (self.n_total_left > 0 and self.n_finite_left > 0 and
+               not self.has_converged):
+            self.current_iteration += 1
             self.progress.add_iteration()
-            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n)
             if is_main_process:
-                if self.max_accepted != self.max_points:
-                    self.log(f"+++ Iteration {it} "
-                             f"(Accepting at most {n_left} more points) +++++++++",
-                             level=3)
-                else:
-                    self.log(f"+++ Iteration {it} "
-                             f"(of at most {n_iterations} iterations) +++++++++",
-                             level=3)
-                # Save old gp for convergence criterion
-                old_gpr = deepcopy(self.gpr)
-            self.gpr = mpi_comm.bcast(self.gpr if is_main_process else None)
+                n_iter_left = int(np.ceil(self.n_total_left / self.n_points_per_acq))
+                self.banner(f"Iteration {self.current_iteration} "
+                            f"({at_most_str}{n_iter_left} left)\n"
+                            f"Total truth evals: {self.gpr.n_total} "
+                            f"({self.gpr.n} finite) of {self.max_total}" +
+                            (f" (or {self.max_finite} finite)"
+                             if self.max_finite < self.max_total else ""))
+            self.old_gpr = deepcopy(self.gpr)
+            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n)
             # Acquire new points in parallel
             with TimerCounter(self.gpr) as timer_acq:
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
                     self.gpr, n_points=self.n_points_per_acq, random_state=self.rng)
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if is_main_process:
-                self.log(f"New X {new_X} ; y_lie {y_pred} ; acq {acq_vals}", level=3)
+                self.log(f"[ACQUISITION] ({timer_acq.time:.2g} sec) Proposed {len(new_X)}"
+                         " point(s) for truth evaluation.", level=3)
+                self.log("New location(s) proposed, as [X, logp_gp(X), acq(X)]:", level=4)
+                for X, y, acq in zip(new_X, y_pred, acq_vals):
+                    self.log(f"   {X} {y} {acq}", level=4)
+            sync_processes()
             # Get logposterior value(s) for the acquired points (in parallel)
-            if multiple_processes:
-                new_X = mpi_comm.bcast(new_X if is_main_process else None)
             new_X_this_process = new_X[
                 i_evals_this_process: i_evals_this_process + n_evals_this_process]
             new_y_this_process = np.empty(0)
             with Timer() as timer_truth:
                 for x in new_X_this_process:
+                    self.log(f"[{mpi_rank}] Evaluating true posterior at {x}", level=4)
                     new_y_this_process = np.append(
                         new_y_this_process, self.model.logpost(x))
+                    self.log(f"[{mpi_rank}] Got true log-posterior {new_y_this_process} "
+                             f"at {x}", level=4)
             self.progress.add_truth(timer_truth.time, len(new_X))
             # Collect (if parallel) and append to the current model
             if multiple_processes:
-                # Send together X's and y's, in order to avoid race-cond changes in order
-                new_Xy_pairs = mpi_comm.gather((new_X_this_process, new_y_this_process))
+                # GATHER keeps rank order (MPI standard): we can do X and y separately
+                new_Xs = mpi_comm.gather(new_X_this_process)
+                new_ys = mpi_comm.gather(new_y_this_process)
                 if is_main_process:
-                    # Transpose+concatenate the pairs
-                    new_X, new_y = list(
-                        list(chain(*X_or_y)) for X_or_y in chain(zip(*new_Xy_pairs)))
-                new_X, new_y = mpi_comm.bcast((np.array(new_X), np.array(new_y))
-                                              if is_main_process else (None, None))
+                    new_X = np.concatenate(new_Xs)
+                    new_y = np.concatenate(new_ys)
+                new_X, new_y = mpi_comm.bcast(
+                    (new_X, new_y) if is_main_process else (None, None))
             else:
                 new_y = new_y_this_process
             if is_main_process:
-                do_simplified_fit = (it % self.fit_full_every != self.fit_full_every - 1)
+                self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) Evaluated the true "
+                         f"model at {len(new_X)} location(s)" +
+                         (f" (at most {len(new_X_this_process)} per MPI process)"
+                          if multiple_processes else "") +
+                         f", of which {sum(np.isfinite(new_y))} returned a finite value.",
+                         level=3)
+            sync_processes()
+            # Add the newly evaluated truths to the GPR, and maye refit hyperparameters
+            if is_main_process:
+                do_simplified_fit = (self.current_iteration % self.fit_full_every != \
+                                     self.fit_full_every - 1)
                 with TimerCounter(self.gpr) as timer_fit:
                     self.gpr.append_to_data(new_X, new_y,
                                             fit=True, simplified_fit=do_simplified_fit)
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
-            if multiple_processes:
-                self.gpr = mpi_comm.bcast(self.gpr)
-            n_left = self.max_accepted - self.gpr.n
-            if multiple_processes:
-                self.gpr, old_gpr, new_X, new_y, y_pred = mpi_comm.bcast(
-                    (self.gpr, old_gpr, new_X, new_y, y_pred)
-                    if is_main_process else None)
+            if is_main_process:
+                hyperparams_or_not = "*not* " if do_simplified_fit else ""
+                self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new "
+                         "acquired points, "
+                         f"{hyperparams_or_not}including GPR hyperparameters.", level=3)
+            self._share_attr("gpr")
+            sync_processes()
+            # We *could* check the max_total/finite condition and stop now, but it is
+            # good to run the convergence criterion anyway, in case it has converged
+            # Run the `callback` function
             # TODO: better failsafes for MPI_aware=False BUT actually using MPI
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
             if self.callback:
@@ -435,16 +497,16 @@ class Runner(object):
                     else:
                         args = [self.model, self.gpr, self.acquisition,
                                 self.convergence, self.options, self.progress,
-                                old_gpr, new_X, new_y, y_pred]
+                                self.old_gpr, new_X, new_y, y_pred]
                     self.callback(*args)
-                mpi_comm.barrier()
+                sync_processes()
             # Calculate convergence and break if the run has converged
             if not self.convergence_is_MPI_aware:
                 if is_main_process:
                     try:
-                        with TimerCounter(self.gpr, old_gpr) as timer_convergence:
-                            is_converged = self.convergence.is_converged(
-                                self.gpr, old_gpr, new_X, new_y, y_pred)
+                        with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
+                            self.has_converged = self.convergence.is_converged(
+                                self.gpr, self.old_gpr, new_X, new_y, y_pred)
                         self.progress.add_convergence(
                             timer_convergence.time, timer_convergence.evals,
                             self.convergence.last_value)
@@ -452,16 +514,13 @@ class Runner(object):
                         self.progress.add_convergence(
                             timer_convergence.time, timer_convergence.evals,
                             np.nan)
-                        is_converged = False
-                if multiple_processes:
-                    is_converged = mpi_comm.bcast(
-                        is_converged if is_main_process else None)
+                        self.has_converged = False
             else:  # run by all processes
                 # NB: this assumes that when the criterion fails,
                 #     ALL processes raise ConvergenceCheckerror, not just rank 0
                 try:
                     with TimerCounter(self.gpr, old_gpr) as timer_convergence:
-                        is_converged = self.convergence.is_converged(
+                        self.has_converged = self.convergence.is_converged(
                             self.gpr, old_gpr, new_X, new_y, y_pred)
                     self.progress.add_convergence(
                         timer_convergence.time, timer_convergence.evals,
@@ -470,46 +529,33 @@ class Runner(object):
                     self.progress.add_convergence(
                         timer_convergence.time, timer_convergence.evals,
                         np.nan)
-                    is_converged = False
+                    self.has_converged = False
+            self._share_attr("has_converged")
+            if is_main_process:
+                self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
+                         "Evaluated convergence criterion to "
+                         f"{self.convergence.last_value:.2g} (limit "
+                         f"{self.convergence.thres[-1]:.2g}).", level=3)
             sync_processes()
             self.progress.mpi_sync()
-            if is_main_process:
-                self.log(f"run - tot: {self.gpr.n_total}, "
-                         f"acc: {self.gpr.n}, "
-                         f"con: {self.convergence.values[-1]}, "
-                         f"lim: {self.convergence.thres[-1]}", level=3)
-            if is_converged:
-                self.has_converged = True
-                break
-            # If the loop reaches n_left <= 0, then all processes need to break,
-            # not just the main process
-            n_left = mpi_comm.bcast(n_left if is_main_process else None)
-            if n_left <= 0:
-                break
             self.save_checkpoint()
             if is_main_process and self.plots:
                 self.plot_progress()
-        # Save
-        self.save_checkpoint()
-        if is_main_process and self.plots:
-            self.plot_progress()
-        if n_left <= 0 and is_main_process \
-            and not isinstance(self.convergence, gpryconv.DontConverge) and self.verbose > 1:
-            warnings.warn("The maximum number of accepted points was reached before "
-                          "convergence. Either increase max_accepted or try to "
-                          "choose a smaller prior.")
-        if it == n_iterations and is_main_process and self.verbose > 1:
-            warnings.warn("Not enough points were accepted before "
-                          "reaching convergence/reaching the specified max_points.")
-        # Now that the run has converged we can return the gp and all other
-        # relevant quantities which can then be processed with an MCMC or other
-        # sampler
-        if multiple_processes:
-            self.gpr, self.acquisition, self.convergence, self.progress, self.options = \
-                mpi_comm.bcast(
-                    (self.gpr, self.acquisition, self.convergence, self.progress,
-                     self.options)
-                    if is_main_process else None)
+        else:  # check "while" ending condition
+            if is_main_process:
+                lines = "Finished!\n"
+                if self.has_converged:
+                    lines += "- The run has converged.\n"
+                if self.n_total_left <= 0:
+                    lines += ("- The maximum number of truth evaluations "
+                              f"({self.max_total}) has been reached.\n")
+                if self.max_finite < self.max_total and self.n_finite_left <= 0:
+                    lines += ("- The maximum number of finite truth evaluations "
+                              f"({self.max_finite}) has been reached.")
+                self.banner(lines)
+        # Sync rest of relevan attributes before returning (gpr and progress done already)
+        self._share_attr("convergence")
+        self._share_attr("acquisition")
         self.has_run = True
 
     def do_initial_training(self, max_init=None):
@@ -518,21 +564,20 @@ class Runner(object):
         `n_initial`, counting only finite-target points ("finite" here meaning over the
         threshold of the SVM classifier, if present).
 
+        This function is MPI-aware and broadcasts the initialized GPR to all processes.
+
         Parameters
         ----------
-        This function is MPI-aware.
-
         max_init : int, optional (default=None)
             Will fail is it needed to evaluate the target more than `max_init`
             times (defaults to 10 times the dimension of the problem times the
             number of initial samples requested).
         """
         max_init = max_init or 10 * self.d * self.n_initial
-        if self.progress:
-            self.progress.add_iteration()
-            self.progress.add_current_n_truth(0, 0)
-            self.progress.add_acquisition(0, 0)
-            self.progress.add_convergence(0, 0, np.nan)
+        self.progress.add_iteration()
+        self.progress.add_current_n_truth(0, 0)
+        self.progress.add_acquisition(0, 0)
+        self.progress.add_convergence(0, 0, np.nan)
         # Check if there's an SVM and if so read out it's threshold value
         # We will compare it against y - max(y)
         if isinstance(self.gpr.account_for_inf, SVM):
@@ -570,13 +615,14 @@ class Runner(object):
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
                     X = self.model.prior.reference(warn_if_no_ref=False)
-                    self.log(f"Evaluating true posterior at {X}", level=3)
+                    self.log(f"[{mpi_rank}] Evaluating true posterior at {X}", level=4)
                     y = self.model.logpost(X)
-                    self.log(f"Got {y}", level=3)
+                    self.log(f"[{mpi_rank}] Got true log-posterior {y} at {X}", level=4)
                     X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                     y_init_loop = np.append(y_init_loop, y)
                 # Gather points and decide whether to break.
                 if multiple_processes:
+                    # GATHER keeps rank order (MPI standard): we can do X and y separately
                     all_points = mpi_comm.gather(X_init_loop)
                     all_posts = mpi_comm.gather(y_init_loop)
                 else:
@@ -598,21 +644,30 @@ class Runner(object):
                     pass
         if self.progress and is_main_process:
             self.progress.add_truth(timer_truth.time, len(X_init))
-        self.log("Done getting initial training samples.", level=3)
         if is_main_process:
-            # Append the initial samples to the gpr
-            with TimerCounter(self.gpr) as timer_fit:
-                self.gpr.append_to_data(X_init, y_init)
-            if self.progress:
-                self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
+            self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) "
+                     f"Evaluated the true model at {len(X_init)} location(s)"
+                     f", of which {sum(is_finite(y_init - max(y_init)))} returned a "
+                     f"finite value." +
+                     (" Each MPI process evaluated at most "
+                      f"{max([len(p) for p in all_points])} locations."
+                      if multiple_processes else ""), level=3)
+        if is_main_process:
             # Raise error if the number of initial samples hasn't been reached
             if not finished:
                 raise RuntimeError("The desired number of finite initial "
                                    "samples hasn't been reached. Try "
                                    "increasing max_init or decreasing the "
                                    "volume of the prior")
-        if self.progress:
-            self.progress.mpi_sync()
+            # Append the initial samples to the gpr
+            with TimerCounter(self.gpr) as timer_fit:
+                self.gpr.append_to_data(X_init, y_init)
+            self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
+            self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
+                     " points, including GPR hyperparameters.", level=3)
+        # Broadcast results
+        self._share_attr("gpr")
+        self.progress.mpi_sync()
 
     def plot_progress(self):
         """
@@ -714,7 +769,7 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         load_checkpoint=None, verbose=3):
     r"""
     This function is just a wrapper which internally creates a runner instance and runs
-    the bayesian optimization loop. This function will probably be depreciated in a few
+    the bayesian optimization loop. This function will probably be deprecated in a few
     versions.
 
     Parameters
@@ -755,13 +810,14 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
-            * max_points : Maximum number of attempted sampling points before the run
+            * max_total : Maximum number of attempted sampling points before the run
               fails. This is useful if you e.g. want to restrict the maximum computation
               resources (default: 1000).
-            * max_accepted : Maximum number of accepted sampling points before the run
-              fails. This might be useful if you use the DontConverge convergence
-              criterion, specifying exactly how many points you want to have in your GP
-              (default: max_points)
+            * max_finite : Maximum number of sampling points accepted into the GP training
+              set before the run fails. This might be useful if you use the DontConverge
+              convergence criterion, specifying exactly how many points you want to have
+              in your GP. If you set this limit by hand and find that it is easily
+              saturated, try shrinking your prior boundaries (default: max_total).
             * max_init : Maximum number of points drawn at initialization
               before the run fails (default: 10 * number of dimensions * n_initial).
               If the run fails repeatadly at initialization try decreasing the volume
@@ -816,7 +872,7 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         The options dict used for the active sampling loop.
 
     progress : Progress
-        Object containing per-iteration progress information: number of accepted training
+        Object containing per-iteration progress information: number of finite training
         points, number of GP evaluations, timing of different parts of the algorithm, and
         value of the convergence criterion.
     """

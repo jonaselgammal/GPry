@@ -4,6 +4,7 @@ Example code for a simple GP Characterization of a likelihood.
 
 import os
 from gpry.mpi import is_main_process
+from gpry.io import create_path
 
 # Path for saving plots, make sure it exists!
 checkpoint = "output/simple"
@@ -44,6 +45,8 @@ if is_main_process:
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
     cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
+    if is_main_process:
+        create_path(os.path.join(checkpoint, "images/"), verbose=False)
     plt.savefig(os.path.join(checkpoint, "images/Ground_truth.png"), dpi=300)
     plt.close()
 

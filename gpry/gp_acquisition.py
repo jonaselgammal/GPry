@@ -186,6 +186,10 @@ class GP_Acquisition(object):
         self.mean_ = None
         self.cov = None
 
+    def __call__(self, X, gpr, eval_gradient=False):
+        """Returns the value of the acquision function at ``X`` given a ``gpr``."""
+        return self.acq_func(X, gpr, eval_gradient=eval_gradient)
+
     def optimize_acquisition_function(self, gpr, i, random_state=None):
         """Exposes the optimization method for the acquisition function. When
         called it proposes a single point where for where to evaluate the true
@@ -312,6 +316,8 @@ class GP_Acquisition(object):
         inversion lemma can be used to invert the K matrix. The optimization
         for a single point is done using the :meth:`optimize_acq_func` method.
 
+        When run in parallel (MPI), returns the same values for all processes.
+
         Parameters
         ----------
         gpr : GaussianProcessRegressor
@@ -408,8 +414,9 @@ class GP_Acquisition(object):
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
-        gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
-        return ((X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
+        gpr.n_eval += gpr_.n_eval  # gather #evals of the GP, for cost monitoring
+        return mpi_comm.bcast(
+            (X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 
