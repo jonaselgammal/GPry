@@ -217,8 +217,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_eval = 0
         self.n_eval_loglike = 0
 
-        self.y_max = -np.inf
-
         self.verbose = verbose
 
         self._fitted = False
@@ -286,6 +284,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             return self.bounds.shape[0]
 
     @property
+    def y_max(self):
+        """The max. posterior value in the training set."""
+        return np.max(getattr(self, "y_train", [-np.inf]))
+
+    @property
     def n(self):
         """
         Number of points in the training set.
@@ -337,7 +340,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         as (X, y).
         """
         if self.account_for_inf is None:
-            return self.last_appended
+            return self.last_appended_finite
         return self.account_for_inf.last_appended
 
     @property
@@ -422,7 +425,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                               "a model will be fit with X and y instead of just "
                               "updating with the same kernel hyperparameters")
             self.fit(X, y, noise_level=noise_level)
-            self.y_max = np.max(y)
             return self
 
         if self.account_for_inf is not None:
@@ -495,7 +497,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.X_train = np.append(self.X_train, X, axis=0)
         self.y_train = np.append(self.y_train, y)
-        self.y_max = max(self.y_max, np.max(y))
 
         # The number of newly added points. Used for the update_model method
         self.newly_appended = y.shape[0]
@@ -552,16 +553,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 raise ValueError("Position index is higher than length of "
                                  "training points")
 
-        self.X_train_ = np.delete(self._X_train_, position, axis=0)
-        self.y_train_ = np.delete(self._y_train_, position)
-        self.y_max = np.max(self._y_train_)
+        self.X_train_ = np.delete(self.X_train_, position, axis=0)
+        self.y_train_ = np.delete(self.y_train_, position)
+        self.X_train = np.delete(self.X_train, position, axis=0)
+        self.y_train = np.delete(self.y_train, position)
         if np.iterable(self.noise_level):
             self.noise_level = np.delete(self.noise_level, position)
             self.noise_level_ = np.delete(self.noise_level_, position)
             self.alpha = np.delete(self.alpha, position)
 
         if fit:
-            self.fit(self.X_train_, self.y_train_)
+            self.fit(self.X_train, self.y_train)
 
         else:
             # Precompute quantities required for predictions which are
@@ -583,7 +585,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.alpha_ = self.K_inv_ @ self.y_train_
             # Just here if stuff doesnt work, needs to be removed later...
             # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
-
         return self
 
     # Wrapper around log_marginal_likelihood to count the number of evaluations
@@ -1055,13 +1056,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Remember number of evaluations
         if hasattr(self, "n_eval"):
             c.n_eval = self.n_eval
+        if hasattr(self, "n_eval_loglike"):
+            c.n_eval_loglike = self.n_eval_loglike
         # Initialize the X_train and y_train part
         if hasattr(self, "X_train"):
             c.X_train = self.X_train
         if hasattr(self, "y_train"):
             c.y_train = self.y_train
-        if hasattr(self, "y_max"):
-            c.y_max = self.y_max
         if hasattr(self, "X_train_"):
             c.X_train_ = self.X_train_
         if hasattr(self, "y_train_"):
@@ -1082,8 +1083,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             c.K_inv_ = self.K_inv_
         if hasattr(self, "kernel_"):
             c.kernel_ = self.kernel_
+        # Copy the right SVM
         if hasattr(self, "account_for_inf"):
             c.account_for_inf = deepcopy(self.account_for_inf)
+        # Remember number of last appended points
+        if hasattr(self, "newly_appended"):
+            c.newly_appended = self.newly_appended
+        if hasattr(self, "newly_appended_for_inv"):
+            c.newly_appended_for_inv = self.newly_appended_for_inv
+        # Remember if it has been fit to data.
+        if hasattr(self, "_fitted"):
+            c._fitted = self._fitted
         return c
 
     def _constrained_optimization(self, obj_func, initial_theta, bounds):
