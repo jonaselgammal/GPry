@@ -9,8 +9,7 @@ import numpy as np
 def _test_io(load_checkpoint, gpr="RBF", gp_acquisition="LogExp",
                    convergence_criterion="CorrectCounter", callback=None,
                    callback_is_MPI_aware=False, convergence_options=None, options={},
-                   checkpoint="files", verbose=3,
-                   mc_sampler="mcmc", desired_kl=0.05):
+                   checkpoint="files", verbose=3):
     # Use 2d gaussian as test model
     generator = Random_gaussian(ndim=2)
     model = generator.get_model()
@@ -39,20 +38,6 @@ def _test_io(load_checkpoint, gpr="RBF", gp_acquisition="LogExp",
         y = runner.gpr.predict(np.atleast_2d(runner.gpr.X_train[0]))
         runner.run()
         assert runner.has_run, "The runner couldn't be run."
-
-    """
-    else:
-        runner = Runner(model, gpr=gpr, gp_acquisition=gp_acquisition,
-                        convergence_criterion=convergence_criterion, callback=callback,
-                        callback_is_MPI_aware=callback_is_MPI_aware,
-                        convergence_options=convergence_options, options=options,
-                        checkpoint=checkpoint, load_checkpoint=load_checkpoint,
-                        verbose=verbose)
-    if convergence_criterion == CorrectCounter:
-        assert runner.has_run is True,
-        assert runner.has_converged is True
-                self.has_converged = False
-    """
 
 
 @pytest.mark.parametrize("load_checkpoint", ["resume"])
