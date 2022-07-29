@@ -12,7 +12,7 @@ from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
 from gpry.tools import check_random_state
 
 
-class GP_Acquisition(object):
+class GPAcquisition(object):
     """Run Gaussian Process acquisition.
 
     Works similarly to a GPRegressor but instead of optimizing the kernel's

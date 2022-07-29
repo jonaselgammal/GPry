@@ -15,7 +15,7 @@ import numpy as np
 from copy import deepcopy
 from random import random
 
-from gpry.gp_acquisition import GP_Acquisition
+from gpry.gp_acquisition import GPAcquisition
 from gpry.proposal import PartialProposer, CentroidsProposer
 from gpry.preprocessing import Normalize_bounds
 from gpry.run import Runner
@@ -43,7 +43,7 @@ def generate_inputs(bounds):
                          "max_init": 10 * d,  # fail if sth funny: not useful for test
                          "n_points_per_acq": 1,  # 1 when not testing it in particular
                          "max_points": int(np.ceil(1.5 * n_approx_conv(d)))}}
-    default_input["gp_acquisition"] = GP_Acquisition(
+    default_input["gp_acquisition"] = GPAcquisition(
         bounds, acq_func="LogExp",
         proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
         acq_optimizer="fmin_l_bfgs_b", n_restarts_optimizer=5 * d,
@@ -61,7 +61,7 @@ def generate_inputs(bounds):
     for value in zetas:
         key = f"zeta_{value}"
         inputs[key] = deepcopy(default_input)
-        acq = GP_Acquisition(
+        acq = GPAcquisition(
             bounds, acq_func="LogExp",
             proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
             acq_optimizer="fmin_l_bfgs_b", n_restarts_optimizer=5 * d,

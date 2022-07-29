@@ -10,7 +10,7 @@ from cobaya.model import Model
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
     split_number_for_parallel_processes, multiple_processes, sync_processes
 from gpry.gpr import GaussianProcessRegressor
-from gpry.gp_acquisition import GP_Acquisition
+from gpry.gp_acquisition import GPAcquisition
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 import gpry.convergence as gpryconv
@@ -43,7 +43,7 @@ class Runner(object):
         be useful if the posterior is not very smooth.
         Otherwise a custom GP regressor can be created and passed.
 
-    gp_acquisition : GP_Acquisition, optional (default="LogExp")
+    gp_acquisition : GPAcquisition, optional (default="LogExp")
         The acquisition object. If None is given the LogExp acquisition
         function is used (with the :math:`\zeta` value chosen automatically
         depending on the dimensionality of the prior) and the GP's X-values are
@@ -118,7 +118,7 @@ class Runner(object):
         This can be used to call an MCMC sampler for getting marginalized
         properties. This is the most crucial component.
 
-    gp_acquisition : GP_Acquisition
+    gp_acquisition : GPAcquisition
         The acquisition object that was used for the active sampling procedure.
 
     convergence_criterion : Convergence_criterion
@@ -214,13 +214,13 @@ class Runner(object):
                 if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
                     raise ValueError("Supported acquisition function is 'LogExp', "
                                      f"'NonlinearLogExp', got {gp_acquisition}")
-                self.acquisition = GP_Acquisition(
+                self.acquisition = GPAcquisition(
                     prior_bounds, proposer=None, acq_func=gp_acquisition,
                     acq_optimizer="fmin_l_bfgs_b",
                     n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     zeta_scaling=options.get("zeta_scaling", 1.1), verbose=verbose)
-            elif isinstance(gp_acquisition, GP_Acquisition):
+            elif isinstance(gp_acquisition, GPAcquisition):
                 self.acquisition = gp_acquisition
             else:
                 raise TypeError(
@@ -824,7 +824,7 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         be useful if the posterior is not very smooth.
         Otherwise a custom GP regressor can be created and passed.
 
-    gp_acquisition : GP_Acquisition, optional (default="LogExp")
+    gp_acquisition : GPAcquisition, optional (default="LogExp")
         The acquisition object. If None is given the LogExp acquisition
         function is used (with the :math:`\zeta` value chosen automatically
         depending on the dimensionality of the prior) and the GP's X-values are

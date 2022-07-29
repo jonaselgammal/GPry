@@ -5,7 +5,7 @@ Running the Bayesian optimization loop
 The best way to run the Bayesian optimization loop is to use the :class:`run.Runner`
 class from which to create a ``Runner`` object. This has to be fed with at least the
 ``Cobaya`` model we want to run on and optionally takes instances of the GaussianProcessRegressor,
-GP_Acquisition and ConvergenceCriterion as well as an options dict for the run. You can
+GPAcquisition and ConvergenceCriterion as well as an options dict for the run. You can
 then run the model using the :meth:`run.Runner.run` method. After the model has run you
 can then extract marginalised quantities by calling :meth:`run.Runner.generate_mc_sample`.
 

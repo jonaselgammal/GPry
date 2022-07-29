@@ -42,8 +42,8 @@ from gpry.acquisition_functions import LogExp
 af = LogExp(zeta=0.1)
 
 # Construct Acquisition procedure
-from gpry.gp_acquisition import GP_Acquisition
-acq = GP_Acquisition(
+from gpry.gp_acquisition import GPAcquisition
+acq = GPAcquisition(
     prior_bounds,
     acq_func=af,
     n_restarts_optimizer=10,

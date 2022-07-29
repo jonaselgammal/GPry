@@ -175,7 +175,7 @@ the shape of the posterior distribution is not very gaussian)::
     af = Log_exp(zeta=0.1)
 
 Then it is time for the actual GP Acquisition. For this we need to
-build our instance of the :class:`gp_acquisition.GP_Acquisition` class which
+build our instance of the :class:`gp_acquisition.GPAcquisition` class which
 also takes the acquisition function. Furthermore it needs the prior bounds
 so it knows which volume to sample in. Furthermore like with the GP regressor
 it is usually a good idea to scale the prior bounds to a unit hypercube
@@ -183,8 +183,8 @@ it is usually a good idea to scale the prior bounds to a unit hypercube
 dimension) as the optimizer tends to struggle with very different scales across
 different dimensions::
 
-    from gpry.gp_acquisition import GP_Acquisition
-    acq = GP_Acquisition(
+    from gpry.gp_acquisition import GPAcquisition
+    acq = GPAcquisition(
         prior_bounds,
         acq_func=af,
         n_restarts_optimizer=10,
