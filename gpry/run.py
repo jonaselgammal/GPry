@@ -2,7 +2,6 @@ import os
 import warnings
 import numpy as np
 from copy import deepcopy
-from itertools import chain
 from inspect import getfullargspec
 
 from cobaya.model import Model
@@ -497,6 +496,7 @@ class Runner(object):
                          f"{hyperparams_or_not}including GPR hyperparameters. "
                          f"{self.gpr.n_last_appended_finite} finite points were added to "
                          "the GPR.", level=3)
+                self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
             share_attr(self, "gpr")
             sync_processes()
             # We *could* check the max_total/finite condition and stop now, but it is
@@ -545,9 +545,9 @@ class Runner(object):
                 # NB: this assumes that when the criterion fails,
                 #     ALL processes raise ConvergenceCheckerror, not just rank 0
                 try:
-                    with TimerCounter(self.gpr, old_gpr) as timer_convergence:
+                    with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                         self.has_converged = self.convergence.is_converged(
-                            self.gpr, old_gpr, new_X, new_y, y_pred)
+                            self.gpr, self.old_gpr, new_X, new_y, y_pred)
                     self.progress.add_convergence(
                         timer_convergence.time, timer_convergence.evals,
                         self.convergence.last_value)
@@ -630,7 +630,8 @@ class Runner(object):
                 y_init_loop = np.empty(0)
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
-                    X = self.model.prior.reference(warn_if_no_ref=False)
+                    X = self.model.prior.reference(
+                        warn_if_no_ref=False, random_state=self.rng)
                     self.log(f"[{mpi_rank}] Evaluating true posterior at {X}", level=4)
                     y = self.model.logpost(X)
                     self.log(f"[{mpi_rank}] Got true log-posterior {y} at {X}", level=4)
@@ -683,6 +684,7 @@ class Runner(object):
                      " points, including GPR hyperparameters. "
                      f"{self.gpr.n_last_appended_finite} finite points were added to the "
                      "GPR.", level=3)
+            self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
         # Broadcast results
         share_attr(self, "gpr")
         self.progress.mpi_sync()

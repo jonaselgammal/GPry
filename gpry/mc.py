@@ -273,7 +273,6 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         sampler_input = sampler
     sampler_name = list(sampler_input.keys())[0]
     sampler_input[sampler_name].update(add_options or {})
-    # TODO: what does restart do? it seems to be a bit conterintuitive
     out = None
     if output is not None:
         if not resume:

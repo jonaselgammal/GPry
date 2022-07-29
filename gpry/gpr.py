@@ -259,7 +259,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             normalize_y=False, copy_X_train=copy_X_train,
             random_state=random_state)
 
-        if self.verbose == 3:
+        if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
             print("Kernel:")
