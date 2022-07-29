@@ -318,8 +318,9 @@ class Runner(object):
                 share_attr(self, attr)
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware:
-                self.convergence = mpi_comm.bcast(
-                    convergence if is_main_process else None)
+                share_attr(self, "convergence")
+            elif not is_main_process:
+                self.convergence = None
             if self.callback_is_MPI_aware:
                 share_attr(self, "callback")
             else:  # for check of whether to call it

@@ -88,7 +88,7 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     return info
 
 
-def mcmc_info_from_run(model, gpr, cov=None):
+def mcmc_info_from_run(model, gpr, cov=None, cov_params=None):
     """
     Creates appropriate MCMC sampler inputs from the results of a run.
 
@@ -128,7 +128,7 @@ def mcmc_info_from_run(model, gpr, cov=None):
                       "sampler. This will make the convergence of the sampler slower.")
     else:
         sampler_info["mcmc"]["covmat"] = cov
-        sampler_info["mcmc"]["covmat_params"] = list(model.prior.params)
+        sampler_info["mcmc"]["covmat_params"] = cov_params or list(model.prior.params)
     return sampler_info
 
 
@@ -221,17 +221,23 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         gpr, bounds=bounds, paramnames=paramnames, true_model=true_model))
     # Check if convergence_criterion is given/loaded: it may contain a covariance matrix
     covariance_matrix = None
+    covariance_params = paramnames
     for conv in [convergence, loaded_convergence]:
         try:
             covariance_matrix = conv.cov
         except AttributeError:
             pass
+    # Otherwise, maybe passed in add_options (prefer this one)
+    if "covmat" in (add_options or {}):
+        covariance_matrix = add_options.pop("covmat")
+        covariance_params = add_options.pop("covmat_params", None)
     # TODO: deprecate!
     if options is not None:
         raise ValueError("`options` has been deprecated in favour of passing a dict via "
                          "`sampler` (sorry!)")
     if sampler.lower() == "mcmc":
-        sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix)
+        sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix,
+                                           cov_params=covariance_params)
     elif sampler.lower() == "polychord":
         sampler_input = polychord_info_from_run()
     elif isinstance(sampler, str):
