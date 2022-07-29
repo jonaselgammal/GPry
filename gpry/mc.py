@@ -1,4 +1,5 @@
 import warnings
+import logging
 import numpy as np
 from copy import deepcopy
 from gpry.gpr import GaussianProcessRegressor
@@ -7,6 +8,22 @@ from gpry.tools import generic_params_names, is_valid_covmat
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
+
+
+def get_cobaya_log_level(verbose):
+    """Given GPry's verbosity level, returns the corresponding Cobaya debug level."""
+    if verbose is None or verbose == 3:
+        return logging.INFO
+    elif verbose > 3:
+        return logging.DEBUG
+    elif verbose == 2:
+        return logging.WARNING
+    elif verbose == 1:
+        return logging.ERROR
+    elif verbose < 1 or verbose is False:
+        return logging.CRITICAL
+    else:
+        raise ValueError(f"Verbosity level {verbose} not understood.")
 
 
 def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model=None):
@@ -88,7 +105,7 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     return info
 
 
-def mcmc_info_from_run(model, gpr, cov=None, cov_params=None):
+def mcmc_info_from_run(model, gpr, cov=None, cov_params=None, verbose=3):
     """
     Creates appropriate MCMC sampler inputs from the results of a run.
 
@@ -123,7 +140,7 @@ def mcmc_info_from_run(model, gpr, cov=None, cov_params=None):
     model.prior.set_reference(dict(zip(model.prior.params, max_location)))
     # Create sampler info
     sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
-    if cov is None or not is_valid_covmat(cov):
+    if (cov is None or not is_valid_covmat(cov)) and verbose >= 2:
         warnings.warn("No covariance matrix or invalid one provided for the `mcmc` "
                       "sampler. This will make the convergence of the sampler slower.")
     else:
@@ -148,7 +165,7 @@ def polychord_info_from_run():
 
 def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
                       sampler="mcmc", options=None, add_options=None,
-                      output=None, run=True, resume=False, convergence=None):
+                      output=None, run=True, resume=False, convergence=None, verbose=3):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
     and runs it on the surrogate model.
@@ -195,6 +212,11 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         used to extract the covariance matrix if it is available from the
         ConvergenceCriterion class.
 
+    verbose: int (default 3)
+        Verbosity level, similarly valued to that of the Runner, e.g. 3 indicates cobaya's
+        'info' level, 4 the 'debug' level, and lower-than-three values print only warnings
+        and errors.
+
     Returns
     -------
     surr_info : dict
@@ -217,8 +239,10 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
     if not hasattr(gpr, "y_train"):
         warnings.warn("The provided GP hasn't been trained to data "
                       "before. This is likely unintentional...")
-    model_surrogate = get_model(cobaya_generate_gp_model_input(
-        gpr, bounds=bounds, paramnames=paramnames, true_model=true_model))
+    model_input = cobaya_generate_gp_model_input(
+        gpr, bounds=bounds, paramnames=paramnames, true_model=true_model)
+    model_input["debug"] = get_cobaya_log_level(verbose)
+    model_surrogate = get_model(model_input)
     # Check if convergence_criterion is given/loaded: it may contain a covariance matrix
     covariance_matrix = None
     covariance_params = paramnames
@@ -237,7 +261,7 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
                          "`sampler` (sorry!)")
     if sampler.lower() == "mcmc":
         sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix,
-                                           cov_params=covariance_params)
+                                           cov_params=covariance_params, verbose=verbose)
     elif sampler.lower() == "polychord":
         sampler_input = polychord_info_from_run()
     elif isinstance(sampler, str):

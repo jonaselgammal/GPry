@@ -741,7 +741,8 @@ class Runner(object):
             output = os.path.join(self.checkpoint, "chains/")
         return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,
                                  convergence=self.convergence, output=output,
-                                 add_options=add_options, resume=resume)
+                                 add_options=add_options, resume=resume,
+                                 verbose=self.verbose)
 
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
