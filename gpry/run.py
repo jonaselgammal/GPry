@@ -72,7 +72,7 @@ class Runner(object):
               number of parallel processes)
             * max_total : Maximum number of attempted sampling points before the run
               fails. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: 1000).
+              resources (default: 70 * (number of dimensions)**1.5)).
             * max_finite : Maximum number of sampling points accepted into the GP training
               set before the run fails. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
@@ -266,7 +266,7 @@ class Runner(object):
                               "in favour of `max_finite`.")
                 options["max_finite"] = options.pop("max_accepted")
             # END OF DEPRECATION BLOCK
-            self.max_total = options.get("max_total", 1000)
+            self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", mpi_size)
             self.fit_full_every = options.get(
@@ -842,7 +842,7 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
               number of parallel processes)
             * max_total : Maximum number of attempted sampling points before the run
               fails. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: 1000).
+              resources (default: 70 * (number of dimensions)**1.5)).
             * max_finite : Maximum number of sampling points accepted into the GP training
               set before the run fails. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
