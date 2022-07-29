@@ -8,7 +8,7 @@ from inspect import getfullargspec
 from cobaya.model import Model
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes, multiple_processes, sync_processes
+    split_number_for_parallel_processes, multiple_processes, sync_processes, share_attr
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GPAcquisition
 from gpry.svm import SVM
@@ -315,13 +315,13 @@ class Runner(object):
                          "n_points_per_acq", "options", "gpr", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "callback_is_single_arg", "loaded_from_checkpoint"):
-                self._share_attr(attr)
+                share_attr(self, attr)
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware:
                 self.convergence = mpi_comm.bcast(
                     convergence if is_main_process else None)
             if self.callback_is_MPI_aware:
-                self._share_attr("callback")
+                share_attr(self, "callback")
             else:  # for check of whether to call it
                 callback_func = callback
                 self.callback = mpi_comm.bcast(
@@ -347,10 +347,6 @@ class Runner(object):
         """
         if level is None or level <= self.verbose:
             print(msg)
-
-    def _share_attr(self, attr, root=0):
-        """Broadcasts ``attr`` from process of rank ``root``."""
-        setattr(self, attr, mpi_comm.bcast(getattr(self, attr, None), root=root))
 
     @property
     def n_total_left(self):
@@ -500,7 +496,7 @@ class Runner(object):
                          f"{hyperparams_or_not}including GPR hyperparameters. "
                          f"{self.gpr.n_last_appended_finite} finite points were added to "
                          "the GPR.", level=3)
-            self._share_attr("gpr")
+            share_attr(self, "gpr")
             sync_processes()
             # We *could* check the max_total/finite condition and stop now, but it is
             # good to run the convergence criterion anyway, in case it has converged
@@ -559,7 +555,7 @@ class Runner(object):
                         timer_convergence.time, timer_convergence.evals,
                         np.nan)
                     self.has_converged = False
-            self._share_attr("has_converged")
+            share_attr(self, "has_converged")
             if is_main_process:
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
                          "Evaluated convergence criterion to "
@@ -582,11 +578,6 @@ class Runner(object):
                     lines += ("- The maximum number of finite truth evaluations "
                               f"({self.max_finite}) has been reached.")
                 self.banner(lines)
-        # Sync rest of relevant attribs before returning (gpr and progress done already)
-        # TODO: not ideal: duplicates memory innecessarily
-        self._share_attr("acquisition")
-        if not self.convergence_is_MPI_aware:
-            self._share_attr("convergence")
         self.has_run = True
 
     def do_initial_training(self):
@@ -692,7 +683,7 @@ class Runner(object):
                      f"{self.gpr.n_last_appended_finite} finite points were added to the "
                      "GPR.", level=3)
         # Broadcast results
-        self._share_attr("gpr")
+        share_attr(self, "gpr")
         self.progress.mpi_sync()
 
     def plot_progress(self):

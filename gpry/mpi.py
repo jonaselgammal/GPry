@@ -94,3 +94,9 @@ def sync_processes():
     Makes all processes halt here until all have reached this point.
     """
     mpi_comm.barrier()
+
+
+def share_attr(instance, attr_name, root=0):
+    """Broadcasts ``attr`` of ``instance`` from process of rank ``root``."""
+    setattr(instance, attr_name,
+            mpi_comm.bcast(getattr(instance, attr_name, None), root=root))
