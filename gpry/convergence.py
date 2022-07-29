@@ -428,25 +428,30 @@ class CorrectCounter(ConvergenceCriterion):
     def __init__(self, prior, params):
         d = prior.d()
         self.ncorrect = params.get("n_correct", 5)
-        reltol = params.get("reltol", "0.01d")
+        reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:
-                assert reltol[-1] == "d"
-                reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
+                assert (reltol[-1] == "l" or reltol[-1] == "s")
+                if reltol[-1] == "l":
+                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
+                elif reltol[-1] == "s":
+                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)**2.
             except:
                 raise("The 'reltol' parameter can either be a number " + \
-                    f"or a string with a number followed by 'd'. Got {reltol}")
+                    f"or a string with a number followed by 'l' or 's'. Got {reltol}")
         self.reltol = reltol
-        abstol = params.get("abstol", "0.05d")
+        abstol = params.get("abstol", "0.01s")
         if isinstance(abstol, str):
             try:
-                assert abstol[-1] == "d"
-                abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
+                assert (abstol[-1] == "l" or abstol[-1] == "s")
+                if abstol[-1] == "l":
+                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
+                elif abstol[-1] == "s":
+                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)**2.
             except:
                 raise("The 'abstol' parameter can either be a number " + \
-                    f"or a string with a number followed by 'd'. Got {abstol}")
+                    f"or a string with a number followed by 'l' or 's'. Got {abstol}")
         self.abstol = abstol
-        print(self.abstol)
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
