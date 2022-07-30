@@ -98,6 +98,9 @@ class Runner(object):
         Whether to resume from the checkpoint files if existing ones are found
         at the location specified by `checkpoint`.
 
+    seed: int, optional
+        Seed for the random number generator. Allows for reproducible runs.
+
     plots : bool (default: True)
         If True, produces some progress plots.
 
@@ -138,7 +141,7 @@ class Runner(object):
     def __init__(self, model, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
-                 checkpoint=None, load_checkpoint=None, plots=True, verbose=3):
+                 checkpoint=None, load_checkpoint=None, seed=None, plots=True, verbose=3):
         self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
@@ -153,7 +156,7 @@ class Runner(object):
                 create_path(self.plots_path, verbose=verbose >= 3)
         self.plots = plots
         self.verbose = verbose
-        self.rng = get_random_state()
+        self.random_state = get_random_state(seed)
         if is_main_process:
             self.options = options
             # Check if a checkpoint exists already and if so resume from there
@@ -201,7 +204,8 @@ class Runner(object):
                     preprocessing_X=Normalize_bounds(prior_bounds),
                     preprocessing_y=Normalize_y(),
                     bounds=prior_bounds,
-                    verbose=verbose
+                    verbose=verbose,
+                    random_state=self.random_state
                 )
             elif not isinstance(gpr, GaussianProcessRegressor):
                 raise TypeError("gpr should be a GP regressor, 'RBF' or 'Matern'"
@@ -311,10 +315,11 @@ class Runner(object):
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
-                         "n_points_per_acq", "options", "gpr", "acquisition",
+                         "n_points_per_acq", "options", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "callback_is_single_arg", "loaded_from_checkpoint"):
                 share_attr(self, attr)
+            self._share_gpr_from_main()
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware:
                 share_attr(self, "convergence")
@@ -356,7 +361,7 @@ class Runner(object):
     @property
     def n_finite_left(self):
         """Number of truth evaluations with finite return value before stopping."""
-        return self.max_finite - self.gpr.n
+        return self.max_finite - self.gpr.n_finite
 
     def banner(self, text, max_line_length=79, prefix="| ", suffix=" |",
                header="=", footer="=", level=3):
@@ -396,6 +401,13 @@ class Runner(object):
             save_checkpoint(self.checkpoint, self.model, self.gpr, self.acquisition,
                             self.convergence, self.options, self.progress)
 
+    def _share_gpr_from_main(self):
+        """
+        Shares the GPR of the main process, restoring each process' RNG.
+        """
+        share_attr(self, "gpr")
+        self.gpr.set_random_state(self.random_state)
+
     def run(self):
         r"""
         Runs the acquisition-training-convergence loop until either convergence or
@@ -432,15 +444,15 @@ class Runner(object):
                 self.banner(f"Iteration {self.current_iteration} "
                             f"({at_most_str}{n_iter_left} left)\n"
                             f"Total truth evals: {self.gpr.n_total} "
-                            f"({self.gpr.n} finite) of {self.max_total}" +
+                            f"({self.gpr.n_finite} finite) of {self.max_total}" +
                             (f" (or {self.max_finite} finite)"
                              if self.max_finite < self.max_total else ""))
             self.old_gpr = deepcopy(self.gpr)
-            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n)
+            self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
             # Acquire new points in parallel
             with TimerCounter(self.gpr) as timer_acq:
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
-                    self.gpr, n_points=self.n_points_per_acq, random_state=self.rng)
+                    self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state)
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if is_main_process:
                 self.log(f"[ACQUISITION] ({timer_acq.time:.2g} sec) Proposed {len(new_X)}"
@@ -497,7 +509,7 @@ class Runner(object):
                          f"{self.gpr.n_last_appended_finite} finite points were added to "
                          "the GPR.", level=3)
                 self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
-            share_attr(self, "gpr")
+            self._share_gpr_from_main()
             sync_processes()
             # We *could* check the max_total/finite condition and stop now, but it is
             # good to run the convergence criterion anyway, in case it has converged
@@ -631,7 +643,7 @@ class Runner(object):
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
                     X = self.model.prior.reference(
-                        warn_if_no_ref=False, random_state=self.rng)
+                        warn_if_no_ref=False, random_state=self.random_state)
                     self.log(f"[{mpi_rank}] Evaluating true posterior at {X}", level=4)
                     y = self.model.logpost(X)
                     self.log(f"[{mpi_rank}] Got true log-posterior {y} at {X}", level=4)
@@ -686,7 +698,7 @@ class Runner(object):
                      "GPR.", level=3)
             self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
         # Broadcast results
-        share_attr(self, "gpr")
+        self._share_gpr_from_main()
         self.progress.mpi_sync()
 
     def plot_progress(self):
