@@ -405,6 +405,8 @@ class Runner(object):
         """
         Shares the GPR of the main process, restoring each process' RNG.
         """
+        if not multiple_processes:
+            return
         share_attr(self, "gpr")
         self.gpr.set_random_state(self.random_state)
 

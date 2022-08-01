@@ -98,5 +98,7 @@ def sync_processes():
 
 def share_attr(instance, attr_name, root=0):
     """Broadcasts ``attr`` of ``instance`` from process of rank ``root``."""
+    if not multiple_processes:
+        return
     setattr(instance, attr_name,
             mpi_comm.bcast(getattr(instance, attr_name, None), root=root))
