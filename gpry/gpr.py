@@ -372,7 +372,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         self.random_state = random_state
         if self.account_for_inf:
-            self.account_for_inf.random_state = random_state
+            # In the SVM case, since we have not wrapper the calls to the RNG,
+            # (as we have for the GPR), we need to repackage the new numpy Generator
+            # as a RandomState, which is achieved by gpry.tools.check_random_state
+            self.account_for_inf.random_state = check_random_state(
+                random_state, convert_to_random_state=True)
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.

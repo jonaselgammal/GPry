@@ -125,8 +125,6 @@ class GPAcquisition(object):
         self.proposer = proposer
         self.obj_func = None
 
-        self.rng = check_random_state(random_state)
-
         # If nothing is provided for the proposal, we use a centroids proposer with
         # a fraction of uniform samples.
         if self.proposer is None:

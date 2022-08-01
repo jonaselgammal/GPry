@@ -186,6 +186,12 @@ class SVM(SVC):
         self.all_finite = False
         self.newly_appended = 0
 
+        # In the SVM, since we have not wrapper the calls to the RNG,
+        # (as we have for the GPR), we need to repackage the new numpy Generator
+        # as a RandomState, which is achieved by gpry.tools.check_random_state
+        from gpry.tools import check_random_state
+        random_state = check_random_state(random_state, convert_to_random_state=True)
+
         super().__init__(C=C, kernel=kernel, degree=degree, gamma=gamma,
                          coef0=coef0, shrinking=shrinking, probability=probability,
                          tol=tol, cache_size=cache_size, class_weight=class_weight,
