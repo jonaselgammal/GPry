@@ -81,8 +81,8 @@ class Runner(object):
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
-        the computation of the convergence criterion. This function should take arguments
-        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options, progress, previous_gpr, new_X, new_y, pred_y)``, or simply ``callback(runner_instance)``.
+        the computation of the convergence criterion. This function should take the
+        runner as argument: ``callback(runner_instance)``.
         When running in parallel, the function is run by the main process only, unless
         ``callback_is_MPI_aware=True``.
 
@@ -751,7 +751,8 @@ class Runner(object):
                                  convergence=self.convergence, output=output,
                                  add_options=add_options, resume=resume)
 
-    def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None):
+    def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
+        output=None):
         """
         Creates some progress plots and saves them at path (assumes path exists).
 
@@ -770,6 +771,11 @@ class Runner(object):
 
         add_samples : dict(label, getdist.MCSamples), optional (default=None)
             Whether the training locations are plotted on top of the contours.
+
+        output : str or os.path, optional (default=None)
+            The location to save the generated plot in. If ``None`` it will be saved in
+            ``checkpoint_path/images/Surrogate_triangle.pdf`` or
+            ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
         if is_main_process:
             from getdist.mcsamples import MCSamplesFromCobaya
@@ -785,7 +791,12 @@ class Runner(object):
                 to_plot, self.model.parameterization.sampled_params(), filled=True)
             if add_training and self.d > 1:
                 getdist_add_training(gdplot, self.model, self.gpr)
-            plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"), dpi=300)
+            if output is None:
+                plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
+                            dpi=300)
+            else:
+                plt.savefig(output)
+
 
 
 def run(model, gpr="RBF", gp_acquisition="LogExp",
