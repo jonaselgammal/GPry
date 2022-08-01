@@ -44,6 +44,7 @@ directory as where the checkpoint is saved::
                 output=os.path.join(checkpoint_location, n_total))
             runner.plot_mc(surr_info, sampler,
                            output=os.path.join(checkpoint_location, f"{n_total}.pdf"))
+            i += 1
 
 Of couse you could save the chains and plots anywhere you wish or where it would be
 more convenient.
