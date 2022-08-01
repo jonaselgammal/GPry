@@ -25,6 +25,7 @@ Contents:
   intro_example
   adv_example
   running
+  callback
   modules
 
 Indices and tables
