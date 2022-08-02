@@ -83,9 +83,15 @@ def volume_sphere(r, dim=3):
     return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim
 
 
-def check_random_state(seed):
-    """Extension to sklearn.utils for numpy *Generators* to pass through."""
+def check_random_state(seed, convert_to_random_state=False):
+    """
+    Extension to sklearn.utils for numpy *Generators* to pass through.
+
+    Includes workaround from https://github.com/scikit-learn/scikit-learn/issues/16988
+    """
     if isinstance(seed, np.random.Generator):
+        if convert_to_random_state:
+            seed = np.random.RandomState(seed.bit_generator)
         return seed
     from sklearn.utils import check_random_state
     return check_random_state(seed)

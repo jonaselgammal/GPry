@@ -110,7 +110,7 @@ def save_checkpoint(path, model, gpr, acquisition, convergence, options, progres
 
     gpr : GaussianProcessRegressor
 
-    acquisition : GP_Acquisition
+    acquisition : GPAcquisition
 
     convergence : Convergence_criterion
 

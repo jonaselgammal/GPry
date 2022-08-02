@@ -222,7 +222,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self._fitted = False
         # Initialize SVM if given
         if account_for_inf == "SVM":
-            self.account_for_inf = SVM()
+            self.account_for_inf = SVM(random_state=random_state)
         else:
             self.account_for_inf = account_for_inf
 
@@ -259,7 +259,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             normalize_y=False, copy_X_train=copy_X_train,
             random_state=random_state)
 
-        if self.verbose == 3:
+        if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
             print("Kernel:")
@@ -299,6 +299,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         use the property ``GaussianProcessRegressor.n_total``.
         """
         return len(getattr(self, "y_train", []))
+
+    @property
+    def n_finite(self):
+        """
+        Number of points in the training set. Alias of ``GaussianProcessRegressor.n``.
+        """
+        return self.n
 
     @property
     def n_total(self):
@@ -358,6 +365,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     def n_last_appended_finite(self):
         """Returns the number last-appended GPR (finite) training points."""
         return self.last_appended_finite[1].shape[0]
+
+    def set_random_state(self, random_state):
+        """
+        (Re)sets the random state, including the SVM, if present.
+        """
+        self.random_state = random_state
+        if self.account_for_inf:
+            # In the SVM case, since we have not wrapper the calls to the RNG,
+            # (as we have for the GPR), we need to repackage the new numpy Generator
+            # as a RandomState, which is achieved by gpry.tools.check_random_state
+            self.account_for_inf.random_state = check_random_state(
+                random_state, convert_to_random_state=True)
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.

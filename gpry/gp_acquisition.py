@@ -12,7 +12,7 @@ from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
 from gpry.tools import check_random_state
 
 
-class GP_Acquisition(object):
+class GPAcquisition(object):
     """Run Gaussian Process acquisition.
 
     Works similarly to a GPRegressor but instead of optimizing the kernel's
@@ -124,8 +124,6 @@ class GP_Acquisition(object):
         self.n_d = np.shape(bounds)[0]
         self.proposer = proposer
         self.obj_func = None
-
-        self.rng = check_random_state(random_state)
 
         # If nothing is provided for the proposal, we use a centroids proposer with
         # a fraction of uniform samples.
