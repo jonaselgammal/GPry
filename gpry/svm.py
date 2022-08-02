@@ -64,9 +64,11 @@ class SVM(SVC):
         Ignored by all other kernels.
     gamma : {'scale', 'auto'} or float, default='scale'
         Kernel coefficient for 'rbf', 'poly' and 'sigmoid'.
-        - if ``gamma='scale'`` (default) is passed then it uses
+
+        * if ``gamma='scale'`` (default) is passed then it uses
           1 / (n_features * X.var()) as value of gamma,
-        - if 'auto', uses 1 / n_features.
+        * if 'auto', uses 1 / n_features.
+
     preprocessing_X : X-preprocessor or pipeline, optional (default=None)
         The transformation in X-direction (parameter space of the posterior)
         that shall be used to preprocess the data before fitting to the SVM.
@@ -215,10 +217,11 @@ class SVM(SVC):
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """
-        This method works similarly to the :meth:`gpr.append_to_data` method
-        of the GP regressor. This means that it adds samples to the SVM and
-        internally calls the fit method of the SVM. It furthermore provides the
-        option to fit the preprocessor(s) (if they need fitting).
+        This method works similarly to the GP regressor's
+        :meth:`append_to_data <gpr.GaussianProcessRegressor.append_to_data>` method.
+        This means that it adds samples and internally calls the fit method of the SVM.
+        It furthermore provides the option to fit the preprocessor(s) (if they need
+        fitting).
 
         Parameters
         ----------
@@ -392,7 +395,7 @@ class SVM(SVC):
     def compute_threshold_given_sigma(n_sigma, n_dimensions):
         r"""
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
-        assuming a math:`\chi^2` distribution.
+        assuming a :math:`\chi^2` distribution.
         """
         return -2 * chi2.isf(
             erfc(n_sigma / np.sqrt(2)), n_dimensions)

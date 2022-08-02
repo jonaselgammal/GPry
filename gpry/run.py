@@ -843,28 +843,27 @@ def run(model, gpr="RBF", gp_acquisition="LogExp",
         The available options are:
 
             * n_initial : Number of finite initial truth evaluations before starting the
-              BO loop (default: 3*number of dimensions)
+              BO loop (default: ``3*number of dimensions``)
             * max_initial : Maximum number of truth evaluations at initialization. If it
               is reached before `n_initial` finite points have been found, the run will
               fail. To avoid that, try decreasing the volume of your prior
-              (default: 10 * number of dimensions * n_initial).
+              (default: ``10 * number of dimensions * n_initial``).
             * n_points_per_acq : Number of points which are aquired with
               Kriging believer for every acquisition step (default: equals the
               number of parallel processes)
             * max_total : Maximum number of attempted sampling points before the run
               fails. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: 70 * (number of dimensions)**1.5)).
+              resources (default: ``70 * (number of dimensions)**1.5``).
             * max_finite : Maximum number of sampling points accepted into the GP training
               set before the run fails. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
-              saturated, try shrinking your prior boundaries (default: max_total).
+              saturated, try shrinking your prior boundaries (default: ``max_total``).
 
     callback: callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take arguments
-        ``callback(model, current_gpr, gp_acquistion, convergence_criterion, options,
-                   progress, previous_gpr, new_X, new_y, pred_y)``.
+        ``callback(runner_instance)``.
         When running in parallel, the function is run by the main process only.
 
     callback_is_MPI_aware: bool (default: False)

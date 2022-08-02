@@ -126,7 +126,7 @@ class Whitening:
     transformation which is given by
 
     .. math::
-        X_k^i \\to \\frac{\mathbf{R}^{ij} (X_k^j - m^j)}{\sigma^i}\ .
+        X_k^i \to \frac{\mathbf{R}^{ij} (X_k^j - m^j)}{\sigma^i}\ .
 
     :math:`\mathbf{R}` is the matrix which solves :math:`\mathbf{C} =
     \mathbf{R}\mathbf{\Lambda}\mathbf{R}` where :math:`\mathbf{C}` is
@@ -245,14 +245,6 @@ class Normalize_bounds:
 
     bounds_max : array-like, shape = (n_dims,)
         Upper bounds along every dimension.
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        transform
-        inverse_transform
     """
 
     def __init__(self, bounds):

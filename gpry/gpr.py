@@ -183,7 +183,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
             ``L_`` is not recomputed when using the append_to_data method
             without refitting the hyperparameters. As only ``K_inv_`` and
-            alpha_ are used at prediction this is not neccessary.
+            ``alpha_`` are used at prediction this is not neccessary.
 
     log_marginal_likelihood_value_ : float
         The log-marginal-likelihood of ``self.kernel_.theta``
