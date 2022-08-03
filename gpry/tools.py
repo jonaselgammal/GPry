@@ -33,6 +33,28 @@ def is_valid_covmat(covmat):
         return False
 
 
+def gaussian_distance(points, mean, covmat):
+    """
+    Computes radial Gaussian distance in units of standar deviations (Mahalanobis distance).
+    """
+    dim = np.atleast_2d(points).shape[1]
+    mean = np.atleast_1d(mean)
+    covmat = np.atleast_2d(covmat)
+    assert (mean.shape == (dim,) and covmat.shape == (dim, dim)), \
+        (f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
+         f"mean.shape={mean.shape} and covmat.shape={covmat.shape}.")
+    assert is_valid_covmat(covmat), "Covmat passed is not a valid covariance matrix."
+    # Transform to normalised gaussian
+    std_diag = np.diag(np.sqrt(np.diag(covmat)))
+    invstd_diag = np.linalg.inv(std_diag)
+    corrmat = invstd_diag.dot(covmat).dot(invstd_diag)
+    Lscalefree = np.linalg.cholesky(corrmat)
+    L = np.linalg.inv(std_diag).dot(Lscalefree)
+    points_transf = L.dot((points - mean).T).T
+    # Compute distance
+    return np.sqrt(np.sum(points_transf**2, axis=1))
+
+
 def cl_of_nstd(d, n):
     """
     Confidence level of hypervolume corresponding to n std's distance
