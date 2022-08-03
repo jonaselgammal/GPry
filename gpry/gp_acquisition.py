@@ -455,3 +455,15 @@ class GPAcquisition(object):
                                   "Excluding this.")
                 return True
         return False
+
+
+# DEPRECATED ON 2022-08-01
+class GP_Acquisition(GPAcquisition):
+    """Wrapper for GPAcquisition compatible with old name. Raises a warning but works."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn("This class has been renamed to 'GPAcquisition'. The old name has "
+                      "been deprecated and this class initialization will cause an error "
+                      "in the future.")
+        super().__init__(*args, **kwargs)
+# END OF DEPRECATION BLOCK
