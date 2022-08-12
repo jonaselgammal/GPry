@@ -222,7 +222,7 @@ class Runner(object):
                     acq_optimizer="fmin_l_bfgs_b",
                     n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
                     preprocessing_X=Normalize_bounds(prior_bounds),
-                    zeta_scaling=options.get("zeta_scaling", 1.1), verbose=verbose)
+                    zeta_scaling=options.get("zeta_scaling", 0.85), verbose=verbose)
             elif isinstance(gp_acquisition, GPAcquisition):
                 self.acquisition = gp_acquisition
             else:
