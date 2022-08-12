@@ -32,7 +32,8 @@ class Runner(object):
     model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         Contains all information about the parameters in the likelihood and
         their priors as well as the likelihood itself. Cobaya is only used here
-        as a wrapper to get the logposterior etc.
+        as a wrapper to get the logposterior etc. It must not be specified if 'resuming'
+        from a checkpoint (see `load_checkpoint` below).
 
     gpr : GaussianProcessRegressor, "RBF" or "Matern", optional (default="RBF")
         The GP used for interpolating the posterior. If None or "RBF" is given
@@ -138,11 +139,16 @@ class Runner(object):
         value of the convergence criterion.
     """
 
-    def __init__(self, model, gpr="RBF", gp_acquisition="LogExp",
+    def __init__(self, model=None, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
                  checkpoint=None, load_checkpoint=None, seed=None, plots=True, verbose=3):
-        self.model = model
+        if model is None:
+            if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
+                raise ValueError(
+                    "'model' must be specified unless resuming from a checkpoint.")
+        else:
+            self.model = model
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
@@ -187,7 +193,11 @@ class Runner(object):
                                      "incomplete. Ignoring them...", level=2)
             # Check model
             if not isinstance(model, Model):
-                raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+                if load_checkpoint == "resume":
+                    raise ValueError(f"Resuming from checkpoint {checkpoint} failed. "
+                                     "In this case, a 'model' needs to be specified.")
+                else:
+                    raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
             try:
                 prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
             except Exception as excpt:
