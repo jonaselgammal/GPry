@@ -12,7 +12,7 @@ from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
 from gpry.tools import check_random_state
 
 
-class GP_Acquisition(object):
+class GPAcquisition(object):
     """Run Gaussian Process acquisition.
 
     Works similarly to a GPRegressor but instead of optimizing the kernel's
@@ -93,6 +93,9 @@ class GP_Acquisition(object):
         The scaling of the acquisition function's zeta parameter with dimensionality
         (Only if "LogExp" is passed as acquisition_function)
 
+    zeta: float, optional (default: None, uses zeta_scaling)
+        Specifies the value of the zeta parameter directly.
+
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -113,9 +116,9 @@ class GP_Acquisition(object):
                  n_repeats_propose=0,
                  preprocessing_X=None,
                  random_state=None,
-                 verbose=1,
-                 random_proposal_fraction=None,
-                 zeta_scaling = None):
+                 zeta_scaling=1.1,
+                 zeta=None,
+                 verbose=1):
 
         self.bounds = bounds
         self.n_d = np.shape(bounds)[0]
@@ -123,9 +126,8 @@ class GP_Acquisition(object):
         self.proposer = proposer
         self.obj_func = None
 
-        self.rng = check_random_state(random_state)
-
-        # If nothing is provided for the proposal, we use a uniform sampling
+        # If nothing is provided for the proposal, we use a centroids proposer with
+        # a fraction of uniform samples.
         if self.proposer is None:
             self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
         else:
@@ -138,12 +140,12 @@ class GP_Acquisition(object):
             # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
             self.acq_func = LogExp(
-                dimension=self.n_d, zeta_scaling=zeta_scaling)
+                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
         elif acq_func == "NonlinearLogExp":
             # If the LogExp acquisition function is chosen it's zeta is set
             # automatically using the dimensionality of the prior.
             self.acq_func = NonlinearLogExp(
-                dimension=self.n_d, zeta_scaling=zeta_scaling)
+                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
         else:
             raise TypeError("acq_func needs to be an Acquisition_Function or "
                             f"'LogExp' or 'NonlinearLogExp', instead got {acq_func}")
@@ -185,10 +187,14 @@ class GP_Acquisition(object):
         self.mean_ = None
         self.cov = None
 
-    def propose(self, gpr, i, random_state=None):
+    def __call__(self, X, gpr, eval_gradient=False):
+        """Returns the value of the acquision function at ``X`` given a ``gpr``."""
+        return self.acq_func(X, gpr, eval_gradient=eval_gradient)
+
+    def optimize_acquisition_function(self, gpr, i, random_state=None):
         """Exposes the optimization method for the acquisition function. When
-        called it proposes a single point where for where to sample next. Is
-        internally called in the :meth:`multi_add` method.
+        called it proposes a single point where for where to evaluate the true
+        model next. It is internally called in the :meth:`multi_add` method.
 
         Parameters
         ----------
@@ -231,10 +237,6 @@ class GP_Acquisition(object):
                     "contains data when trying to optimize an acquisition "
                     "function on it as optimizing priors is not supported yet.")
 
-            # Make the surrogate instance so it can be used in the objective
-            # function
-            self.gpr_ = gpr
-
             def obj_func(X, eval_gradient=False):
 
                 # TODO: optionally suppress this checks if called by optimiser
@@ -248,12 +250,10 @@ class GP_Acquisition(object):
                     X = self.preprocessing_X.inverse_transform(X)
 
                 if eval_gradient:
-                    acq, grad = self.acq_func(X, self.gpr_,
-                                              eval_gradient=True)
+                    acq, grad = self.acq_func(X, gpr, eval_gradient=True)
                     return -1 * acq, -1 * grad
                 else:
-                    return -1 * self.acq_func(X, self.gpr_,
-                                              eval_gradient=False)
+                    return -1 * self.acq_func(X, gpr, eval_gradient=False)
 
             self.obj_func = obj_func
 
@@ -266,7 +266,7 @@ class GP_Acquisition(object):
 
         if i == 0:
             # Perform first run from last training point
-            x0 = self.gpr_.X_train[-1]
+            x0 = gpr.X_train[-1]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
             return self._constrained_optimization(self.obj_func, x0,
@@ -278,7 +278,7 @@ class GP_Acquisition(object):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(random_state=random_state)
-                value = self.acq_func(x0, self.gpr_)
+                value = self.acq_func(x0, gpr)
                 if not np.isfinite(value):
                     continue
                 x0s[ifull] = x0
@@ -317,6 +317,8 @@ class GP_Acquisition(object):
         This is done to increase speed since then the blockwise matrix
         inversion lemma can be used to invert the K matrix. The optimization
         for a single point is done using the :meth:`optimize_acq_func` method.
+
+        When run in parallel (MPI), returns the same values for all processes.
 
         Parameters
         ----------
@@ -372,7 +374,7 @@ class GP_Acquisition(object):
             # Optimize the acquisition function to get a few possible next proposal points
             # (done in parallel)
             for i in range(n_acq_this_process):
-                proposal_X[i], acq_X[i] = self.propose(
+                proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
                     gpr_, i + i_acq_this_process, random_state=random_state)
             proposal_X_main, acq_X_main = multi_gather_array(
                 [proposal_X, acq_X])
@@ -420,8 +422,9 @@ class GP_Acquisition(object):
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
-        gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
-        return ((X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
+        gpr.n_eval += gpr_.n_eval  # gather #evals of the GP, for cost monitoring
+        return mpi_comm.bcast(
+            (X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
 
@@ -464,3 +467,15 @@ class GP_Acquisition(object):
                                   "Excluding this.")
                 return True
         return False
+
+
+# DEPRECATED ON 2022-08-01
+class GP_Acquisition(GPAcquisition):
+    """Wrapper for GPAcquisition compatible with old name. Raises a warning but works."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn("This class has been renamed to 'GPAcquisition'. The old name has "
+                      "been deprecated and this class initialization will cause an error "
+                      "in the future.")
+        super().__init__(*args, **kwargs)
+# END OF DEPRECATION BLOCK

@@ -26,3 +26,17 @@ A few solutions have been proposed:
 - cut the prior boundaries so that they are closer to the mode.
 - run with full priors, but distribute together with the resulting GP a definition of a "region of interest"
 
+## Initial point generation in high dimensions
+
+As the mode/prior volume shrinks exponentially as function of the number of dimensions the finite log-posterior area becomes extremely small. In such a case drawing initial samples from the prior is typically unfeasable. While there is currently the option to pass a reference distribution which acts as a rough guess of where the mode lies it would be good to give the option to just pass a single finite point and run a very short (burn-in) MCMC chain from there to have some initial samples from where to start the BO loop.
+
+## I/O
+
+We could add a *light* checkpointing option to only save the training points and the kernel hyperparameters and then recalculate K^-1 when loading. That would make for super small file sizes (could maybe be useful when we run with many samples).
+
+## Additional ways to save time
+
+- Reduce precision of optimisers as much as possible
+- Optimize number or restarts of optimizer
+- Acquire in parallel by ranking
+- Prune the model once in a while

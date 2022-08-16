@@ -64,9 +64,11 @@ class SVM(SVC):
         Ignored by all other kernels.
     gamma : {'scale', 'auto'} or float, default='scale'
         Kernel coefficient for 'rbf', 'poly' and 'sigmoid'.
-        - if ``gamma='scale'`` (default) is passed then it uses
+
+        * if ``gamma='scale'`` (default) is passed then it uses
           1 / (n_features * X.var()) as value of gamma,
-        - if 'auto', uses 1 / n_features.
+        * if 'auto', uses 1 / n_features.
+
     preprocessing_X : X-preprocessor or pipeline, optional (default=None)
         The transformation in X-direction (parameter space of the posterior)
         that shall be used to preprocess the data before fitting to the SVM.
@@ -184,6 +186,13 @@ class SVM(SVC):
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
         self.all_finite = False
+        self.newly_appended = 0
+
+        # In the SVM, since we have not wrapper the calls to the RNG,
+        # (as we have for the GPR), we need to repackage the new numpy Generator
+        # as a RandomState, which is achieved by gpry.tools.check_random_state
+        from gpry.tools import check_random_state
+        random_state = check_random_state(random_state, convert_to_random_state=True)
 
         super().__init__(C=C, kernel=kernel, degree=degree, gamma=gamma,
                          coef0=coef0, shrinking=shrinking, probability=probability,
@@ -204,17 +213,21 @@ class SVM(SVC):
     @property
     def n(self):
         """Number of training points."""
-        try:
-            return self.X_train.shape[0]
-        except AttributeError:
-            return 0
+        return len(getattr(self, "y_train", []))
+
+    @property
+    def last_appended(self):
+        """Returns a copy of the last appended training points, as (X, y in [0, 1])."""
+        return (np.copy(self.X_train[-self.newly_appended:]),
+                np.copy(self.y_train[-self.newly_appended:]))
 
     def append_to_data(self, X, y, fit_preprocessors=True):
         """
-        This method works similarly to the :meth:`gpr.append_to_data` method
-        of the GP regressor. This means that it adds samples to the SVM and
-        internally calls the fit method of the SVM. It furthermore provides the
-        option to fit the preprocessor(s) (if they need fitting).
+        This method works similarly to the GP regressor's
+        :meth:`append_to_data <gpr.GaussianProcessRegressor.append_to_data>` method.
+        This means that it adds samples and internally calls the fit method of the SVM.
+        It furthermore provides the option to fit the preprocessor(s) (if they need
+        fitting).
 
         Parameters
         ----------
@@ -236,7 +249,7 @@ class SVM(SVC):
         # Copy stuff
         X = np.copy(X)
         y = np.copy(y)
-        newly_appended = len(y)
+        self.newly_appended = len(y)
 
         # Check if X_train and y_train exist to see if a model
         # has previously been fit to the data
@@ -249,7 +262,7 @@ class SVM(SVC):
         # Fit SVM
         self.fit(X_train, y_train, fit_preprocessors=fit_preprocessors)
 
-        return self.finite[-newly_appended:]
+        return self.finite[-self.newly_appended:]
 
     def fit(self, X, y, fit_preprocessors=True):
         r"""
@@ -388,7 +401,7 @@ class SVM(SVC):
     def compute_threshold_given_sigma(n_sigma, n_dimensions):
         r"""
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
-        assuming a math:`\chi^2` distribution.
+        assuming a :math:`\chi^2` distribution.
         """
         return -2 * chi2.isf(
             erfc(n_sigma / np.sqrt(2)), n_dimensions)

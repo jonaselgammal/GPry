@@ -1,14 +1,11 @@
-"""
-This module provides some plotting routines for plotting the marginalized
-posterior distribution and performance of the algorithm.
-"""
 import warnings
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
 
-from gpry.tools import cl_of_nstd, nstd_of_cl, volume_sphere
+from gpry.gpr import GaussianProcessRegressor
+from gpry.tools import cl_of_nstd, nstd_of_cl, volume_sphere, gaussian_distance
 
 
 def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker="."):
@@ -63,7 +60,7 @@ def getdist_add_training(getdist_plot, parnames, gpr, colormap="viridis", marker
     # Add points
     for (i, j), ax in ax_dict.items():
         points = Xs[:, [i, j]]
-        ax.scatter(*points.T, marker=marker, c=norm(ys))
+        ax.scatter(*points.T, marker=marker, c=norm(ys), alpha=0.3)
 
     # TODO: actually add colorbar (see GetDist add_colorbar method)
     return getdist_plot
@@ -107,7 +104,8 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     return fig, ax
 
 
-def plot_distance_distribution(points, mean, covmat, density=False):
+def _plot_distance_distribution(points, mean, covmat, density=False, ax=None,
+                                show_added=True):
     """
     Plots a histogram of the distribution of points with respect to the number of standard
     deviations. Bluer stacks represent newer points.
@@ -117,48 +115,43 @@ def plot_distance_distribution(points, mean, covmat, density=False):
     If ``density=True`` (default: ``False``), bin height is normalised to the
     (hyper)volume of the (hyper)spherical shell corresponding to each standard deviation.
     """
+    if isinstance(points, GaussianProcessRegressor):
+        points = points.X_train
     dim = np.atleast_2d(points).shape[1]
-    mean = np.atleast_1d(mean)
-    covmat = np.atleast_2d(covmat)
-    assert (mean.shape == (dim,) and covmat.shape == (dim, dim)), \
-        (f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
-         f"mean.shape={mean.shape} and covmat.shape={covmat.shape}.")
-    # Transform to normalised gaussian
-    std_diag = np.diag(np.sqrt(np.diag(covmat)))
-    invstd_diag = np.linalg.inv(std_diag)
-    corrmat = invstd_diag.dot(covmat).dot(invstd_diag)
-    Lscalefree = np.linalg.cholesky(corrmat)
-    L = np.linalg.inv(std_diag).dot(Lscalefree)
-    points_transf = L.dot((points - mean).T).T
-    radial_distances = np.sqrt(np.sum(points_transf**2, axis=1))
+    radial_distances = gaussian_distance(points, mean, covmat)
     bins = list(range(0, int(np.ceil(np.max(radial_distances))) + 1))
+    num_or_dens = "Density" if density else "Number"
     if density:
         volumes = [volume_sphere(bins[i], dim) - volume_sphere(bins[i - 1], dim)
                    for i in range(1, len(bins))]
         weights = [1 / volumes[int(np.floor(r))] for r in radial_distances]
     else:
         weights = np.ones(len(radial_distances))
-    fig, ax = plt.subplots()
-    cmap = cm.get_cmap('Spectral')
-    colors = [cmap(i / len(points)) for i in range(len(points))]
-    plt.hist(np.atleast_2d(radial_distances), bins=bins, weights=np.atleast_2d(weights),
-             color=colors, stacked=True)
+    if ax is None:
+        fig, ax = plt.subplots()
+        ax.set_title(f"{num_or_dens} of points per standard deviation (bluer=newer)")
+    if show_added:
+        cmap = cm.get_cmap('Spectral')
+        colors = [cmap(i / len(points)) for i in range(len(points))]
+        ax.hist(np.atleast_2d(radial_distances), bins=bins,
+                weights=np.atleast_2d(weights), color=colors, stacked=True)
+    else:
+        ax.hist(radial_distances, bins=bins,
+                weights=weights)
     cls = [cl_of_nstd(1, s) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
     linestyles = ["-", "--", "-.", ":"]
     for cl, ls in zip(cls, linestyles):
         std_of_cl = nstd_of_cl(dim, cl)
         if std_of_cl < max(radial_distances):
-            plt.axvline(std_of_cl, c="0.75", ls=ls, zorder=-99,
-                        label=f"{cl:.4f}% prob mass")
-    num_or_dens = "Density" if density else "Number"
-    plt.title(f"{num_or_dens} of points per standard deviation (bluer=newer)")
-    plt.ylabel(f"{num_or_dens} of points")
-    plt.xlabel("Number of standard deviations")
-    plt.legend()
-    return fig, ax
+            ax.axvline(std_of_cl, c="0.75", ls=ls, zorder=-99,
+                       label=f"{cl:.4f}% prob mass")
+    ax.set_ylabel(f"{num_or_dens} of points")
+    ax.set_xlabel("Number of standard deviations")
+    ax.legend()
+    return ax
 
 
-def plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
+def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
 

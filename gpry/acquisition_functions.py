@@ -15,9 +15,15 @@ Inbuilt Acquisition Functions
 All inbuilt Acquisition Functions can evaluate the gradient in addition
 to the value of the acquisition function at point X.
 
-The inbuilt acquisition functions should offer a great deal of flexibility.
-If you want to define your own acquisition function please refer to
-:class:`AcquisitionFunction`.
+The recommended acquisition that we derived in order to efficiently sample the parameter
+space is called ``LogExp``:
+
+.. autosummary::
+     LogExp
+
+Furthermore there are more inbuilt acquisition functions (building blocks) which should
+offer a great deal of flexibility. If you want to define your own acquisition function
+it needs to inherit from the parent class :class:`AcquisitionFunction`.
 
 .. autosummary::
 
@@ -27,7 +33,6 @@ If you want to define your own acquisition function please refer to
      ExponentialMu
      ExponentialStd
      ExpectedImprovement
-     LogExp
 
 Additional things
 =================
@@ -59,7 +64,7 @@ from sklearn.base import clone
 
 
 # UNUSED
-def safe_log_expm1(x):
+def _safe_log_expm1(x):
     """
     Numerically safer ``log(exp(x) - 1)``.
     """
@@ -1001,8 +1006,11 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
 
 
 class LogExp(BaseLogExp):
-    r"""
-    This gives the acquisition function
+    r"""Acquisition function which is designed to efficiently sample
+    log-probability distributions.
+    This is achieved by transforming
+    :math:`\tilde{\mu}\cdot\tilde{\sigma}` (of the true, non-logarithmic
+    probability distribution) to logarithmic space which yields
 
     .. math::
 
@@ -1017,6 +1025,37 @@ class LogExp(BaseLogExp):
     .. note::
         :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
         GP regressor which follows the **log**-probability distribution.
+
+    Parameters
+    ----------
+    zeta : float, default=1
+        Controls the exploration-exploitation tradeoff parameter. The value
+        of :math:`\zeta` should not exceed 1 under normal circumstances as a
+        value <1 accounts for the fact that the GP's estimate for
+        :math:`\mu` is not correct at the beginning. A good suggestion
+        for setting zeta which is inspired by simulated annealing is
+
+        .. math::
+
+            \zeta = \exp(-N_0/N)
+
+        where :math:`N_0\geq 0` is a "decay constant" and :math:`N`
+        the number of training points
+        in the GP.
+
+    sigma_n : float, default=None
+        The (constant) noise level of the data. If set to ``None`` the
+        square-root of alpha of the training data (or the square root of the
+        mean of alpha if alpha is an array) will be used.
+
+    fixed: bool, default=False,
+        whether zeta and sigma_n shall be fixed or not.
+
+    dimension: double, default=None
+        the dimension of the parameter space used for auto-scaling the zeta
+
+    zeta_scaling: double, default=1.1
+        the scaling power of the zeta with dimension, if auto-scaled
     """
 
     @staticmethod
@@ -1028,11 +1067,55 @@ class LogExp(BaseLogExp):
 # UNUSED
 # TODO: gradient assumed by parent class is not correct for this acquisition function
 class NonlinearLogExp(BaseLogExp):
+    r"""
+    .. warning::
+        The gradients for this acquisition function are not yet implemented correctly.
+        Use with caution!
+
+    An alternative approach which keeps both scales exponentiated:
+
+    .. math::
+
+        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot \exp(\sigma(X)-\sigma_n)
+
+    Again we take the log of this.
+
+    Parameters
+    ----------
+    zeta : float, default=1
+        Controls the exploration-exploitation tradeoff parameter. The value
+        of :math:`\zeta` should not exceed 1 under normal circumstances as a
+        value <1 accounts for the fact that the GP's estimate for
+        :math:`\mu` is not correct at the beginning. A good suggestion
+        for setting zeta which is inspired by simulated annealing is
+
+        .. math::
+
+            \zeta = \exp(-N_0/N)
+
+        where :math:`N_0\geq 0` is a "decay constant" and :math:`N`
+        the number of training points
+        in the GP.
+
+    sigma_n : float, default=None
+        The (constant) noise level of the data. If set to ``None`` the
+        square-root of alpha of the training data (or the square root of the
+        mean of alpha if alpha is an array) will be used.
+
+    fixed: bool, default=False,
+        whether zeta and sigma_n shall be fixed or not.
+
+    dimension: double, default=None
+        the dimension of the parameter space used for auto-scaling the zeta
+
+    zeta_scaling: double, default=1.1
+        the scaling power of the zeta with dimension, if auto-scaled
+    """
 
     @staticmethod
     def f(mu, std, zeta):
         """Exponentiated log-error bar"""
-        return 2 * zeta * mu + safe_log_expm1(std)
+        return 2 * zeta * mu + _safe_log_expm1(std)
 
 
 # Function for determining whether an object is an acquisition function

@@ -183,7 +183,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
             ``L_`` is not recomputed when using the append_to_data method
             without refitting the hyperparameters. As only ``K_inv_`` and
-            alpha_ are used at prediction this is not neccessary.
+            ``alpha_`` are used at prediction this is not neccessary.
 
     log_marginal_likelihood_value_ : float
         The log-marginal-likelihood of ``self.kernel_.theta``
@@ -207,6 +207,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  copy_X_train=True, random_state=None,
                  verbose=1):
         self.newly_appended = 0
+        self.newly_appended_for_inv = 0
 
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
@@ -216,13 +217,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_eval = 0
         self.n_eval_loglike = 0
 
-        self.y_max = -np.inf
-
         self.verbose = verbose
 
+        self._fitted = False
         # Initialize SVM if given
         if account_for_inf == "SVM":
-            self.account_for_inf = SVM()
+            self.account_for_inf = SVM(random_state=random_state)
         else:
             self.account_for_inf = account_for_inf
 
@@ -259,7 +259,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             normalize_y=False, copy_X_train=copy_X_train,
             random_state=random_state)
 
-        if self.verbose == 3:
+        if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
             print("Kernel:")
@@ -276,50 +276,107 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                   % (account_for_inf is not None))
 
     @property
-    def n(self):
-        """Number of points in the training set."""
-        return self.X_train.shape[0]
-
-    @property
     def d(self):
         """Dimension of the feature space."""
         if self.bounds is None:
             return self.X_train.shape[1]
         else:
             return self.bounds.shape[0]
-# maybe rename
 
     @property
-    def n_total_evals(self):
+    def y_max(self):
+        """The max. posterior value in the training set."""
+        return np.max(getattr(self, "y_train", [-np.inf]))
+
+    @property
+    def n(self):
         """
-        Extracts the total number of posterior evaluations (finite AND infinite)
-        from the gp.
+        Number of points in the training set.
+
+        This excludes infinite points if the GPR was initialized to account for them.
+
+        To get the total number of points added to the model, both finite and infinite,
+        use the property ``GaussianProcessRegressor.n_total``.
         """
-        if self.account_for_inf is None:
-            if hasattr(self, "y_train"):
-                n_evals = len(self.y_train)
-            else:
-                n_evals = 0
+        return len(getattr(self, "y_train", []))
+
+    @property
+    def n_finite(self):
+        """
+        Number of points in the training set. Alias of ``GaussianProcessRegressor.n``.
+        """
+        return self.n
+
+    @property
+    def n_total(self):
+        """
+        Returns the total number of points added to the model, both finite and infinite.
+
+        Infinite points, if accounted for, are not part of the training set of the GPR.
+        """
+        if self.account_for_inf:
+            # The SVM usually contains all points, but maybe it hasn't been trained yet.
+            # In that case, return the GPR's
+            return self.account_for_inf.n or self.n
         else:
-            if hasattr(self.account_for_inf, "y_train"):
-                n_evals = len(self.account_for_inf.y_train)
-            elif hasattr(self, "y_train"):
-                n_evals = len(self.y_train)
-            else:
-                n_evals = 0
-        return n_evals
+            return self.n
+
+    # DEPRECATED ON 2022-09-70
+    @property
+    def n_total_evals(self):
+        warnings.warn("This property will soon be deprecated in favour of ``n_total``. "
+                      "Please, change your code accordingly.")
+        return self.n_total
 
     @property
     def n_accepted_evals(self):
+        warnings.warn("This property will soon be deprecated in favour of ``n``. "
+                      "Please, change your code accordingly.")
+        return self.n
+    # END OF DEPRECATION BLOCK
+
+    @property
+    def fitted(self):
+        """Whether the GPR has been fitted at least once."""
+        return self._fitted
+
+    @property
+    def last_appended(self):
         """
-        Extracts the number of accepted posterior evaluations (accepted means being
-        classified as *finite* by the GP).
+        Returns a copy of the last appended training points (finite/accepted or not),
+        as (X, y).
         """
-        if hasattr(self, "y_train"):
-            n_evals = len(self.y_train)
-        else:
-            n_evals = 0
-        return n_evals
+        if self.account_for_inf is None:
+            return self.last_appended_finite
+        return self.account_for_inf.last_appended
+
+    @property
+    def n_last_appended(self):
+        """Returns the number last-appended training points (finite/accepted or not)."""
+        return self.last_appended[1].shape[0]
+
+    @property
+    def last_appended_finite(self):
+        """Returns a copy of the last appended GPR (finite) training points, as (X, y)."""
+        return (np.copy(self.X_train[-self.newly_appended:]),
+                np.copy(self.y_train[-self.newly_appended:]))
+
+    @property
+    def n_last_appended_finite(self):
+        """Returns the number last-appended GPR (finite) training points."""
+        return self.last_appended_finite[1].shape[0]
+
+    def set_random_state(self, random_state):
+        """
+        (Re)sets the random state, including the SVM, if present.
+        """
+        self.random_state = random_state
+        if self.account_for_inf:
+            # In the SVM case, since we have not wrapper the calls to the RNG,
+            # (as we have for the GPR), we need to repackage the new numpy Generator
+            # as a RandomState, which is achieved by gpry.tools.check_random_state
+            self.account_for_inf.random_state = check_random_state(
+                random_state, convert_to_random_state=True)
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False):
         r"""Append newly acquired data to the GP Model and updates it.
@@ -331,11 +388,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         offers two different methods of updating the GPR after the training data
         (``X_train, y_train``) has been updated:
 
-           * Refit :math:`\\theta` using the
+           * Refit :math:`\theta` using the
              internal ``fit`` method.
-           * Keep :math:`\\theta` fixed and update
-             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using the blockwise matrix
-             inversion lemma.
+           * Keep :math:`\theta` fixed and update
+             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using a single matrix inversion.
 
         While the first method can always be applied it is considerably slower
         than the second one. Therefore it can be useful to use the second
@@ -363,7 +419,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             is advisable to refit the hyperparameters of the kernel.
 
         fit : Bool, optional (default: True)
-            Whether the model is refit to new :math:`\\theta`-parameters
+            Whether the model is refit to new :math:`\theta`-parameters
             or just updated using the blockwise matrix-inversion lemma.
 
         simplified_fit : Bool, optional (default: False)
@@ -388,7 +444,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                               "a model will be fit with X and y instead of just "
                               "updating with the same kernel hyperparameters")
             self.fit(X, y, noise_level=noise_level)
-            self.y_max = np.max(y)
             return self
 
         if self.account_for_inf is not None:
@@ -462,10 +517,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         self.X_train = np.append(self.X_train, X, axis=0)
         self.y_train = np.append(self.y_train, y)
-        self.y_max = max(self.y_max, np.max(y))
 
         # The number of newly added points. Used for the update_model method
         self.newly_appended = y.shape[0]
+        self.newly_appended_for_inv = y.shape[0]
 
         if fit:
             self.fit(simplified=simplified_fit)
@@ -518,16 +573,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 raise ValueError("Position index is higher than length of "
                                  "training points")
 
-        self.X_train_ = np.delete(self._X_train_, position, axis=0)
-        self.y_train_ = np.delete(self._y_train_, position)
-        self.y_max = np.max(self._y_train_)
+        self.X_train_ = np.delete(self.X_train_, position, axis=0)
+        self.y_train_ = np.delete(self.y_train_, position)
+        self.X_train = np.delete(self.X_train, position, axis=0)
+        self.y_train = np.delete(self.y_train, position)
         if np.iterable(self.noise_level):
             self.noise_level = np.delete(self.noise_level, position)
             self.noise_level_ = np.delete(self.noise_level_, position)
             self.alpha = np.delete(self.alpha, position)
 
         if fit:
-            self.fit(self.X_train_, self.y_train_)
+            self.fit(self.X_train, self.y_train)
 
         else:
             # Precompute quantities required for predictions which are
@@ -549,7 +605,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.alpha_ = self.K_inv_ @ self.y_train_
             # Just here if stuff doesnt work, needs to be removed later...
             # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
-
         return self
 
     # Wrapper around log_marginal_likelihood to count the number of evaluations
@@ -558,7 +613,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return super().log_marginal_likelihood(*args, **kwargs)
 
     def fit(self, X=None, y=None, noise_level=None, simplified=False):
-        r"""Optimizes the hyperparameters :math:`\\theta` for the training data
+        r"""Optimizes the hyperparameters :math:`\theta` for the training data
         given. The algorithm used to perform the optimization is very similar
         to the one provided by Scikit-learn. The only major difference is, that
         gradient information is used in addition to the values of the
@@ -729,24 +784,22 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # leave this here if stuff doesnt work...
         # self.alpha_ = cho_solve((self.L_, True), self.y_train_)  # Line 3
 
-        # Reset newly_appended to 0
-        self.newly_appended = 0
+        # Reset newly_appended_for_inv to 0
+        self.newly_appended_for_inv = 0
 
+        self._fitted = True
         return self
 
     def _update_model(self):
-        r"""Updates a preexisting model using the matrix inversion lemma.
+        r"""Updates a preexisting model using a single matrix inversion.
 
-        This method is used when a refitting of the :math:`\\theta`-parameters
+        This method is used when a refitting of the :math:`\theta`-parameters
         is not needed. In this case only the Inverse of the Covariance matrix
         is updated. This method does not take X or y as inputs and should only
         be called from the append_to_data method.
 
         The X and y values used for training are taken internally from the
-        instance. The method used to update the covariance matrix relies on
-        updating it by using the blockwise matrix inversion lemma in order to
-        reduce the computational complexity from :math:`n^3` to
-        :math:`n^2\\cdot m`.
+        instance.
 
         Returns
         -------
@@ -754,9 +807,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         # Check if a model has previously been fit to the data, i.e. that a
         # K_inv_matrix, X_train_ and y_train_ exist. Furthermore check, that
-        # newly_appended > 0.
+        # newly_appended_for_inv > 0.
 
-        if self.newly_appended < 1:
+        if self.newly_appended_for_inv < 1:
             raise ValueError("No new points have been appended to the model. "
                              "Please append points with the 'append_to_data'-method "
                              "before trying to update.")
@@ -773,57 +826,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             raise ValueError("K_inv_ is missing. Most probably the model "
                              "hasn't been fit to the data previously.")
 
-        if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended:
+        if self.K_inv_.shape[0] != self.y_train_.size - self.newly_appended_for_inv:
             raise ValueError("The number of added points doesn't match the "
                              "dimensions of the K_inv matrix. %s != %s"
                              % (self.K_inv_.shape[0],
-                                self.y_train_.size - self.newly_appended))
+                                self.y_train_.size - self.newly_appended_for_inv))
 
-        # Define all neccessary variables
-        # CURRENTLY THE APPROACH OF THE BLOCKWISE INVERSION IS COMMENTED OUT!
-        # TODO :: investigate closer
-        """
-        K_inv = self.K_inv_
-        X_1 = self.X_train_[:-self.newly_appended]
-        X_2 = self.X_train_[-self.newly_appended:]
-
-        # Get the B, C and D matrices
-        K_XY = self.kernel_(X_1, X_2)
-        K_YY = self.kernel_(X_2)
-
-        # Add the alpha value to the diagonal part of the matrix
-        if np.iterable(self.alpha):
-            K_YY[np.diag_indices_from(K_YY)] += \
-                self.alpha[-self.newly_appended:]
-        else:
-            K_YY[np.diag_indices_from(K_YY)] += self.alpha
-
-        # Inserting the new piece which uses the blockwise inversion lemma
-        # C * A^{-1}
-        gamma = K_XY.T @ K_inv
-        # (D - C*A^{-1}*B)^{-1} in 1D
-        alpha = np.linalg.inv(K_YY - gamma @ K_XY)
-        # Off-Diag. Term
-        beta = alpha @ gamma
-        # Put all together
-        self.K_inv_ = np.block([[(K_inv + K_inv @ K_XY @ beta), -1*beta.T],
-                                [-1*beta                      , alpha]])
-        """
-        #kernel = self.kernel_(self.X_train_)
-        #kernel[np.diag_indices_from(kernel)] += self.alpha
-        #self.K_inv_ = np.linalg.inv(kernel)
-
-        # OVERWRITING THE ABOVE CODE , JUST FOR DEBUGGINGGGG!!!!!!!!
-        k = self.kernel_(self.X_train_)
-        k[np.diag_indices_from(k)] += self.alpha
-        self.K_inv_ = np.linalg.inv(k)
-        #self.K_inv_ = np.linalg.inv(self.kernel_(self.X_train_))
+        kernel = self.kernel_(self.X_train_)
+        kernel[np.diag_indices_from(kernel)] += self.alpha
+        self.K_inv_ = np.linalg.inv(kernel)
 
         # Also update alpha_ matrix
         self.alpha_ = self.K_inv_ @ self.y_train_
 
-        # Reset newly_appended to 0
-        self.newly_appended = 0
+        # Reset newly_appended_for_inv to 0
+        self.newly_appended_for_inv = 0
         return self
 
     def predict(self, X, return_std=False, return_cov=False,
@@ -1071,13 +1088,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Remember number of evaluations
         if hasattr(self, "n_eval"):
             c.n_eval = self.n_eval
+        if hasattr(self, "n_eval_loglike"):
+            c.n_eval_loglike = self.n_eval_loglike
         # Initialize the X_train and y_train part
         if hasattr(self, "X_train"):
             c.X_train = self.X_train
         if hasattr(self, "y_train"):
             c.y_train = self.y_train
-        if hasattr(self, "y_max"):
-            c.y_max = self.y_max
         if hasattr(self, "X_train_"):
             c.X_train_ = self.X_train_
         if hasattr(self, "y_train_"):
@@ -1098,8 +1115,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             c.K_inv_ = self.K_inv_
         if hasattr(self, "kernel_"):
             c.kernel_ = self.kernel_
+        # Copy the right SVM
         if hasattr(self, "account_for_inf"):
             c.account_for_inf = deepcopy(self.account_for_inf)
+        # Remember number of last appended points
+        if hasattr(self, "newly_appended"):
+            c.newly_appended = self.newly_appended
+        if hasattr(self, "newly_appended_for_inv"):
+            c.newly_appended_for_inv = self.newly_appended_for_inv
+        # Remember if it has been fit to data.
+        if hasattr(self, "_fitted"):
+            c._fitted = self._fitted
         return c
 
     def _constrained_optimization(self, obj_func, initial_theta, bounds):

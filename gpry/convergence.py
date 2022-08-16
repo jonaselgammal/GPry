@@ -9,7 +9,8 @@ import numpy as np
 import sys
 import inspect
 from copy import deepcopy
-from gpry.tools import kl_norm, is_valid_covmat
+from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
+from gpry.tools import kl_norm, is_valid_covmat, nstd_of_cl
 from gpry.mpi import mpi_comm, is_main_process, multiple_processes
 
 
@@ -139,9 +140,9 @@ class DontConverge(ConvergenceCriterion):
 
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
-        self.n_posterior_evals.append(gp.n_total_evals)
-        self.n_accepted_evals.append(gp.n_accepted_evals)
         self.thres.append(np.nan)
+        self.n_posterior_evals.append(gp.n_total)
+        self.n_accepted_evals.append(gp.n)
         return np.nan
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -187,8 +188,6 @@ class GaussianKL(ConvergenceCriterion):
         return True
 
     def __init__(self, prior, params):
-        self.values = []
-        self.n_posterior_evals = []
         self.prior = prior
         self.mean = None
         self.cov = None
@@ -212,16 +211,20 @@ class GaussianKL(ConvergenceCriterion):
         # MCMC temperature
         # self.temperature = params.get("temperature", 2)
         # Prepare Cobaya's input
-        self.cobaya_input = cobaya_input_prior(prior)
+        self.bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
+        self.paramnames = self.prior.params
+        self.cobaya_input = None
+
         # Save last sample
         self._last_info = {}
         self._last_collection = None
 
     @property
     def cobaya_param_names(self):
-        return list(self.cobaya_input["params"])
+        return self.paramnames
 
     def _get_new_mean_and_cov(self, gp):
+        self.thres.append(self.limit)
         cov_mcmc = None
         if is_main_process:
             reused = False
@@ -292,21 +295,22 @@ class GaussianKL(ConvergenceCriterion):
                 (mean_new, cov_new) if is_main_process else None)
         return mean_new, cov_new
 
-    def _sample_mcmc(self, gp, covmat=None):
+    def _sample_mcmc(self, gpr, covmat=None):
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
         from cobaya.log import LoggedError
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
-        self.cobaya_input.update(cobaya_input_likelihood(gp, self.cobaya_param_names))
+        self.cobaya_input = cobaya_generate_gp_model_input(gpr, self.bounds, self.paramnames)
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
         # Create model and sampler
         model = get_model(self.cobaya_input)
-        sampler_info = mcmc_info_from_run(model, gp, convergence=self)
         if covmat is not None and is_valid_covmat(covmat):
-            # Prefer the one explicitly passed
-            sampler_info["mcmc"]["covmat"] = covmat
+            cov = covmat
+        else:
+            cov = self.cov
+        sampler_info = mcmc_info_from_run(model, gpr, cov=cov)
         # TODO: restore temperature
         # sampler_info["mcmc"]["temperature"] = self.temperature
         high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
@@ -334,8 +338,8 @@ class GaussianKL(ConvergenceCriterion):
             mean_new, cov_new = self._get_new_mean_and_cov(gp)
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}")
         if gp_2 is not None:
             # TODO: Nothing yet to do with gp2
@@ -344,8 +348,8 @@ class GaussianKL(ConvergenceCriterion):
             # Nothing to compare to! But save mean, cov for next call
             self.mean, self.cov = mean_new, cov_new
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
             raise ConvergenceCheckError("No previous call: cannot compute criterion.")
         else:
             mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
@@ -359,8 +363,8 @@ class GaussianKL(ConvergenceCriterion):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total_evals)
-            self.n_accepted_evals.append(gp.n_accepted_evals)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
         return kl
 
     def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
@@ -423,9 +427,32 @@ class CorrectCounter(ConvergenceCriterion):
     """
 
     def __init__(self, prior, params):
+        d = prior.d()
         self.ncorrect = params.get("n_correct", 5)
-        self.reltol = params.get("reltol", 0.01)
-        self.abstol = params.get("abstol", 1e-3)
+        reltol = params.get("reltol", 0.01)
+        if isinstance(reltol, str):
+            try:
+                assert (reltol[-1] == "l" or reltol[-1] == "s")
+                if reltol[-1] == "l":
+                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
+                elif reltol[-1] == "s":
+                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+            except:
+                raise("The 'reltol' parameter can either be a number " + \
+                    f"or a string with a number followed by 'l' or 's'. Got {reltol}")
+        self.reltol = reltol
+        abstol = params.get("abstol", "0.01s")
+        if isinstance(abstol, str):
+            try:
+                assert (abstol[-1] == "l" or abstol[-1] == "s")
+                if abstol[-1] == "l":
+                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
+                elif abstol[-1] == "s":
+                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+            except:
+                raise("The 'abstol' parameter can either be a number " + \
+                    f"or a string with a number followed by 'l' or 's'. Got {abstol}")
+        self.abstol = abstol
         self.verbose = params.get("verbose", 0)
         self.values = []
         self.n_posterior_evals = []
@@ -461,6 +488,6 @@ class CorrectCounter(ConvergenceCriterion):
                     print("Mispredict...")
         self.values.append(max_diff if n_new > 0 else self.values[-1])
         self.thres.append(max_thres if n_new > 0 else self.thres[-1])
-        self.n_accepted_evals.append(gp.n_accepted_evals)
-        self.n_posterior_evals.append(gp.n_total_evals)
+        self.n_posterior_evals.append(gp.n_total)
+        self.n_accepted_evals.append(gp.n)
         return max_val if n_new > 0 else self.values[-1]

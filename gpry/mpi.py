@@ -1,6 +1,4 @@
-"""
-Defining some helpers for parallelisation.
-"""
+# Defining some helpers for parallelisation.
 import dill
 from mpi4py import MPI
 import numpy as np
@@ -20,6 +18,12 @@ multiple_processes = mpi_size > 1
 def get_random_state(seed=None):
     """
     Generates seed sequences for processes running in parallel.
+
+    Parameters
+    ----------
+
+    seed : int or numpy seed, optional (default=None)
+        A random seed to use. If none is provided a random one will be drawn.
     """
     if is_main_process:
         ss = SeedSequence(seed)
@@ -35,7 +39,18 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
     If `n` is not divisible by the number of processes, processes with lower rank are
     preferred, e.g. 5 tasks for 3 processes are assigned as [2, 2, 1].
 
-    Returns an array with the number of tasks corresponding each process.
+    Parameters
+    ----------
+
+    n : int
+        The number of atomic tasks
+    n_proc : int, optional (default=number of MPI comm's)
+        The number of processes to divide the tasks between
+
+    Returns
+    -------
+
+    An array with the number of tasks corresponding each process.
     """
     n_rounded_to_nproc = int(np.ceil(n / n_proc)) * n_proc
     slots = np.zeros(n_rounded_to_nproc, dtype=int)
@@ -47,6 +62,17 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
 def multi_gather_array(arrs):
     """
     Gathers (possibly a list of) arrays from all processes into the main process
+
+    Parameters
+    ----------
+
+    arrs : array-like
+        The arrays to gather
+
+    Returns
+    -------
+
+    The gathered array(s) from all processes
     """
     if not isinstance(arrs, (list, tuple)):
         arrs = [arrs]
@@ -65,6 +91,14 @@ def multi_gather_array(arrs):
 
 def sync_processes():
     """
-    Makes all processes stop here until all have reached this point.
+    Makes all processes halt here until all have reached this point.
     """
     mpi_comm.barrier()
+
+
+def share_attr(instance, attr_name, root=0):
+    """Broadcasts ``attr`` of ``instance`` from process of rank ``root``."""
+    if not multiple_processes:
+        return
+    setattr(instance, attr_name,
+            mpi_comm.bcast(getattr(instance, attr_name, None), root=root))

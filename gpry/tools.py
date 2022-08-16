@@ -32,6 +32,28 @@ def is_valid_covmat(covmat):
         return False
 
 
+def gaussian_distance(points, mean, covmat):
+    """
+    Computes radial Gaussian distance in units of standar deviations (Mahalanobis distance).
+    """
+    dim = np.atleast_2d(points).shape[1]
+    mean = np.atleast_1d(mean)
+    covmat = np.atleast_2d(covmat)
+    assert (mean.shape == (dim,) and covmat.shape == (dim, dim)), \
+        (f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
+         f"mean.shape={mean.shape} and covmat.shape={covmat.shape}.")
+    assert is_valid_covmat(covmat), "Covmat passed is not a valid covariance matrix."
+    # Transform to normalised gaussian
+    std_diag = np.diag(np.sqrt(np.diag(covmat)))
+    invstd_diag = np.linalg.inv(std_diag)
+    corrmat = invstd_diag.dot(covmat).dot(invstd_diag)
+    Lscalefree = np.linalg.cholesky(corrmat)
+    L = np.linalg.inv(std_diag).dot(Lscalefree)
+    points_transf = L.dot((points - mean).T).T
+    # Compute distance
+    return np.sqrt(np.sum(points_transf**2, axis=1))
+
+
 def cl_of_nstd(d, n):
     """
     Confidence level of hypervolume corresponding to n std's distance
@@ -82,9 +104,15 @@ def volume_sphere(r, dim=3):
     return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim
 
 
-def check_random_state(seed):
-    """Extension to sklearn.utils for numpy *Generators* to pass through."""
+def check_random_state(seed, convert_to_random_state=False):
+    """
+    Extension to sklearn.utils for numpy *Generators* to pass through.
+
+    Includes workaround from https://github.com/scikit-learn/scikit-learn/issues/16988
+    """
     if isinstance(seed, np.random.Generator):
+        if convert_to_random_state:
+            seed = np.random.RandomState(seed.bit_generator)
         return seed
     from sklearn.utils import check_random_state
     return check_random_state(seed)

@@ -3,7 +3,7 @@ Advanced example showing off the deeper functionality and modules of the
 algorithm.
 """
 
-# Building the likelihood
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -42,8 +42,8 @@ from gpry.acquisition_functions import LogExp
 af = LogExp(zeta=0.1)
 
 # Construct Acquisition procedure
-from gpry.gp_acquisition import GP_Acquisition
-acq = GP_Acquisition(
+from gpry.gp_acquisition import GPAcquisition
+acq = GPAcquisition(
     prior_bounds,
     acq_func=af,
     n_restarts_optimizer=10,
@@ -51,23 +51,24 @@ acq = GP_Acquisition(
     )
 
 # Construct convergence criterion
-from gpry.convergence import KL_from_draw_approx
-conv = KL_from_draw_approx(model.prior, {"limit": 1e-2})
+from gpry.convergence import GaussianKL
+conv = GaussianKL(model.prior, {"limit": 1e-2})
 
 # Construct options dictionary
 options = {"max_init": 100, "max_points": 200,
            "n_initial": 8, "n_points_per_acq": 2}
 
 # Run the GP
-from gpry.run import run
-model, gpr, acquisition, convergence, options, progress = run(
-    model, gp=gpr, gp_acquisition=acq,
-    convergence_criterion=conv, options=options)
+from gpry.run import Runner
+checkpoint = "output/advanced"
+runner = Runner(
+    model, gpr=gpr, gp_acquisition=acq, convergence_criterion=conv, options=options,
+    checkpoint=checkpoint, load_checkpoint="resume")
+runner.run()
 
 # Run the MCMC
-from gpry.run import mcmc
-options = {"mcmc": {"Rminus1_stop": 0.01, "max_tries": 1000}}
-updated_info_gp, sampler_gp = mcmc(model, gpr, convergence, options=options)
+options = {"Rminus1_stop": 0.01, "max_tries": 1000}
+updated_info_gp, sampler_gp = runner.generate_mc_sample(add_options=options)
 
 # Validate with cobaya
 from cobaya.run import run as cobaya_run
@@ -87,8 +88,10 @@ gdplot = gdplt.get_subplot_plotter(width_inch=5)
 gdplot.triangle_plot([gdsamples_mcmc, gdsamples_gp],
                      ["x_1", "x_2"], filled=[False, True],
                      legend_labels=['MCMC', 'GPry'])
-getdist_add_training(gdplot, model, gpr)
+getdist_add_training(gdplot, model, runner.gpr)
+plt.savefig(os.path.join(checkpoint, "images/Comparison_triangle.png"), dpi=300)
 
 # Plot convergence
 from gpry.plots import plot_convergence
-plot_convergence(convergence, evaluations="accepted")
+plot_convergence(runner.convergence, evaluations="accepted")
+plt.savefig(os.path.join(checkpoint, "images/convergence.png"), dpi=300)

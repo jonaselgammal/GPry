@@ -1,9 +1,4 @@
-"""
-Provides different methods for getting random samples from the allowed sampling
-region for either drawing an initial set of samples to start the bayesian
-optimization from or get locations from where to start the acquisition
-function's optimizer.
-"""
+# Random proposals from which to optimize the acquisition function
 
 from abc import ABCMeta, abstractmethod
 from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
@@ -17,6 +12,10 @@ from gpry.tools import check_random_state
 
 
 class Proposer(metaclass=ABCMeta):
+    """
+    Base proposer class. All other proposers inherit from it. If you want to define your
+    own custom proposer it should also inherit from it.
+    """
 
     @abstractmethod
     def get(random_state=None):
@@ -310,5 +309,4 @@ class CentroidsProposer(Proposer):
 
     def update(self, gpr):
         # Get training locations from gpr and save them
-        self.training = gpr.X_train
-        return
+        self.training = np.copy(gpr.X_train)
