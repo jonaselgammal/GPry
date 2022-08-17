@@ -78,6 +78,15 @@ class Runner(object):
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try decreasing the volume of your prior (default: max_total).
+            * zeta_scaling : scaling of the :math:`\zeta` parameter in the exponential
+              acquisition function with the number of dimensions :math:`\zeta=1/d^x`
+              where :math:`x` is the scaling parameter. The standard value is 0.85.
+
+              .. note::
+
+                  This value is overwritten if a
+                  :class:`GPAcquisition <gp_acquisition.GPAcquisition>` object is passed
+                  instead of a string for ``gp_acquisition``.
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
@@ -523,6 +532,9 @@ class Runner(object):
                 self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
             self._share_gpr_from_main()
             sync_processes()
+            # share new_X, new_y and y_pred to the runner instance
+            self.new_X, self.new_y, self.y_pred = mpi_comm.bcast(
+                (new_X, new_y, y_pred) if is_main_process else (None, None, None))
             # We *could* check the max_total/finite condition and stop now, but it is
             # good to run the convergence criterion anyway, in case it has converged
             # Run the `callback` function
@@ -542,7 +554,7 @@ class Runner(object):
                                 self.convergence if is_main_process else None)
                         args = [self.model, self.gpr, acquisition, convergence,
                                 self.options, self.progress,
-                                self.old_gpr, new_X, new_y, y_pred]
+                                self.old_gpr, self.new_X, self.new_y, self.y_pred]
                     # END OF DEPRECATION BLOCK
                     with Timer() as timer_callback:
                         self.callback(*args)
@@ -815,6 +827,7 @@ class Runner(object):
                             dpi=300)
             else:
                 plt.savefig(output)
+            return gdplot
 
 
 
