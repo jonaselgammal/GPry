@@ -116,7 +116,7 @@ class GPAcquisition(object):
                  n_repeats_propose=0,
                  preprocessing_X=None,
                  random_state=None,
-                 zeta_scaling=1.1,
+                 zeta_scaling=0.85,
                  zeta=None,
                  verbose=1):
 
