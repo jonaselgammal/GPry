@@ -894,7 +894,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
     """
 
     def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None,
-                 zeta_scaling=1.1, linear=True):
+                 zeta_scaling=0.85, linear=True):
         if zeta is None:
             if dimension is None:
                 raise ValueError("We need the dimensionality of the problem to "
