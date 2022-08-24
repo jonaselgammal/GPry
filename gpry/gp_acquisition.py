@@ -412,7 +412,7 @@ class GPAcquisition(object):
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
             gpr_ = mpi_comm.bcast(gpr_ if is_main_process else None)
-        gpr.n_eval += gpr_.n_eval  # gather #evals of the GP, for cost monitoring
+        gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
         return mpi_comm.bcast(
             (X_opts, y_lies, acq_vals) if is_main_process else (None, None, None))
 
