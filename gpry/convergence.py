@@ -418,10 +418,18 @@ class CorrectCounter(ConvergenceCriterion):
         Dict with the following keys:
 
         * ``"n_correct"``: Number of consecutive samples which need to be under the
-                           threshold
-        * ``"reltol"``: Relative tolerance parameter
-        * ``"abstol"``: Absolute tolerance parameter
+                           threshold (default ``5``)
+        * ``"reltol"``: Relative tolerance parameter (default ``0.01``)
+        * ``"abstol"``: Absolute tolerance parameter (default ``"0.01s"``)
         * ``"verbose"``: Verbosity
+
+        .. note::
+
+            The ``"reltol"`` and ``"abstol"`` parameters can be passed as a string ending
+            with either ``"l"`` or ``"s"``. In this case the value of this parameter is
+            scaled with the number of dimensions as either linear (``"l"``) or square
+            (``"s"``) of the depth of the :math:`\chi^2` of the :math:`1-\sigma`-contour
+            assuming a gaussian distribution.
 
     """
 
@@ -437,7 +445,7 @@ class CorrectCounter(ConvergenceCriterion):
                 elif reltol[-1] == "s":
                     reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)**2.
             except:
-                raise("The 'reltol' parameter can either be a number " + \
+                raise ValueError("The 'reltol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {reltol}")
         self.reltol = reltol
         abstol = params.get("abstol", "0.01s")
@@ -449,7 +457,7 @@ class CorrectCounter(ConvergenceCriterion):
                 elif abstol[-1] == "s":
                     abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)**2.
             except:
-                raise("The 'abstol' parameter can either be a number " + \
+                raise ValueError("The 'abstol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {abstol}")
         self.abstol = abstol
         self.verbose = params.get("verbose", 0)
