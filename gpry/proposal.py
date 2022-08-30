@@ -9,6 +9,7 @@ import numpy as np
 from gpry.mc import mc_sample_from_gp
 from cobaya.model import LogPosterior
 from gpry.tools import check_random_state
+from math import inf
 
 
 class Proposer(metaclass=ABCMeta):
@@ -21,7 +22,7 @@ class Proposer(metaclass=ABCMeta):
     def get(random_state=None):
         """
         Returns a random sample (given a certain random state) in the parameter space for
-        the acquisition function to be optimized from.
+        getting initial training samples or the acquisition function to be optimized from.
 
         Parameters
         ----------
@@ -43,8 +44,55 @@ class Proposer(metaclass=ABCMeta):
         """
         return
 
+class InitialPointProposer(metaclass=ABCMeta):
+    """
+    Base proposer class for all proposers which work for initial point generation.
+    """
 
-class UniformProposer(Proposer):
+class ReferenceProposer(Proposer, InitialPointProposer):
+    """
+    Generates proposals from the "reference" distribution defined in the model. If no
+    reference distribution is defined it defaults to the prior.
+
+    Parameters:
+    -----------
+    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        The model from which to draw the samples.
+    """
+
+    def __init__(self, model, max_tries=inf, warn_if_tries='10d', ignore_fixed=False):
+        self.prior = model.prior
+        self.warn=True
+        self.max_tries = max_tries
+        self.warn_if_tries = warn_if_tries
+        self.ignore_fixed = ignore_fixed
+
+    def get(self, random_state=None):
+        ref = self.prior.reference(
+            max_tries=self.max_tries, warn_if_tries=self.warn_if_tries,
+            ignore_fixed=self.ignore_fixed, warn_if_no_ref=self.warn,
+            random_state=random_state)
+        self.warn = False
+        return ref
+
+class PriorProposer(Proposer, InitialPointProposer):
+    """
+    Generates proposals from the prior of the model.
+
+    Parameters:
+    -----------
+    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        The model from which to draw the samples.
+        max_tries=inf, warn_if_tries='10d', ignore_fixed=False
+    """
+
+    def __init__(self, model):
+        self.prior = model.prior
+
+    def get(self, random_state=None):
+        return self.prior.sample()
+
+class UniformProposer(Proposer, InitialPointProposer):
     """
     Generates proposals uniformly in a hypercube determined by the bounds
 
@@ -68,10 +116,15 @@ class UniformProposer(Proposer):
         return
 
 
-class PartialProposer(Proposer):
+class PartialProposer(Proposer, InitialPointProposer):
     """
     Combines any of the other proposers with a :class:`UniformProposer` with
     a fraction drawn from the uniform proposer to encourage exploration.
+
+    .. warning::
+
+        If you want to use this proposer for initial point generation make sure that your
+        true_proposer is compatible.
 
     Parameters
     ----------
@@ -112,7 +165,7 @@ class PartialProposer(Proposer):
         self.true_proposer.update(gpr)
 
 
-class MeanCovProposer(Proposer):
+class MeanCovProposer(Proposer, InitialPointProposer):
     """
     Generates proposals from a multivariate normal distribution given a mean
     vector and covariance matrix.
@@ -143,7 +196,7 @@ class MeanCovProposer(Proposer):
         return
 
 # UNUSED (not really, but should not be here, being specific to one problem)
-class MeanAutoCovProposer(Proposer):
+class MeanAutoCovProposer(Proposer, InitialPointProposer):
     """
     Does the same as :class:`MeanCovProposer` but tries to get an automatically
     generated covariance matrix from Cobaya's `Cosmo Input Generator`.

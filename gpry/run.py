@@ -8,6 +8,8 @@ from cobaya.model import Model
 
 from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
     split_number_for_parallel_processes, multiple_processes, sync_processes, share_attr
+from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
+    UniformProposer
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GPAcquisition
 from gpry.svm import SVM
@@ -50,12 +52,20 @@ class Runner(object):
         preprocessed to be in the uniform hypercube before optimizing the
         acquistion function.
 
+    initial_proposer : str or InitialPointProposer (default="reference")
+        Proposer used for drawing the initial training samples before running the
+        Bayesian optimisation loop. As standard the samples are drawn from the model
+        reference (prior if no reference is specified). Alternative options which can be
+        passed as strings are ``"prior", "uniform"``. The ``"reference"`` proposer
+        defaults to the prior if no reference distribution is provided.
+
     convergence_criterion : Convergence_criterion, optional (default="CorrectCounter")
         The convergence criterion. If None is given the Correct counter convergence
         criterion is used with a relative threshold of 0.01 and an absolute threshold of
         0.05.
 
-    convergence_options : optional parameters passed to the convergence criterion.
+    convergence_options : dict, optional (default=None)
+        optional parameters passed to the convergence criterion.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -151,6 +161,7 @@ class Runner(object):
     def __init__(self, model=None, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
+                 initial_proposer="reference",
                  checkpoint=None, load_checkpoint=None, seed=None, plots=True, verbose=3):
         if model is None:
             if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
@@ -212,6 +223,24 @@ class Runner(object):
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
                                    f"the model instance: {excpt}")
+            # Construct initial_proposer if not already constructed
+            if isinstance(initial_proposer, str):
+                if initial_proposer not in ["reference", "prior", "uniform"]:
+                    raise ValueError("Supported standard initial point proposers are"
+                                     "'reference', 'prior', 'uniform', got"
+                                     f" {initial_proposer}")
+                elif initial_proposer == "reference":
+                    self.initial_proposer = ReferenceProposer(self.model)
+                elif initial_proposer == "prior":
+                    self.initial_proposer = PriorProposer(self.model)
+                elif initial_proposer == "uniform":
+                    self.initial_proposer = UniformProposer(prior_bounds)
+            else:
+                if not isinstance(initial_proposer, InitialPointProposer):
+                    raise TypeError("initial_proposer should be an InitialPointProposer"
+                                    " object, 'reference', 'prior' or 'uniform', got "
+                                    f"{initial_proposer}.")
+
             # Construct GP if it's not already constructed
             if isinstance(gpr, str):
                 if gpr not in ["RBF", "Matern"]:
@@ -683,8 +712,7 @@ class Runner(object):
                 y_init_loop = np.empty(0)
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
-                    X = self.model.prior.reference(
-                        warn_if_no_ref=False, random_state=self.random_state)
+                    X = self.initial_proposer.get(random_state=self.random_state)
                     self.log(f"[{mpi_rank}] Evaluating true posterior at {X}", level=4)
                     y = self.model.logpost(X)
                     self.log(f"[{mpi_rank}] Got true log-posterior {y} at {X}", level=4)
