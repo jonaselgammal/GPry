@@ -86,10 +86,10 @@ class PriorProposer(Proposer, InitialPointProposer):
     """
 
     def __init__(self, model):
-        self.prior = model.prior
+        self.model = model
 
     def get(self, random_state=None):
-        return self.prior.sample()
+        return self.model.prior.sample(random_state=random_state)[0]
 
 class UniformProposer(Proposer, InitialPointProposer):
     """
