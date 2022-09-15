@@ -98,7 +98,11 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
 
     def lkl(**kwargs):
         values = [kwargs[name] for name in paramnames]
-        return gpr.predict(np.atleast_2d(values), do_check_array=False)[0]
+        # we need to add the log-volume of the prior we define here as the GP
+        # interpolates the posterior, not the likelihood.
+        log_prior_volume = np.sum(np.log(bounds[:,1] - bounds[:,0]))
+        return gpr.predict(np.atleast_2d(values), do_check_array=False)[0] + \
+            log_prior_volume
 
     info.update({"likelihood": {"gp": {
         "external": lkl, "input_params": paramnames}}})
