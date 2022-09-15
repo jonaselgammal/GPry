@@ -439,11 +439,13 @@ class CorrectCounter(ConvergenceCriterion):
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:
-                assert (reltol[-1] == "l" or reltol[-1] == "s")
+                assert (reltol[-1] == "l" or reltol[-1] == "s" or reltol[-1] == "r")
                 if reltol[-1] == "l":
                     reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
                 elif reltol[-1] == "s":
                     reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+                elif reltol[-1] == "r":
+                    reltol = float(reltol[:-1]) * np.sqrt(nstd_of_cl(d, 0.6827))
             except:
                 raise ValueError("The 'reltol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {reltol}")
@@ -451,11 +453,13 @@ class CorrectCounter(ConvergenceCriterion):
         abstol = params.get("abstol", "0.01s")
         if isinstance(abstol, str):
             try:
-                assert (abstol[-1] == "l" or abstol[-1] == "s")
+                assert (abstol[-1] == "l" or abstol[-1] == "s" or reltol[-1] == "r")
                 if abstol[-1] == "l":
                     abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
                 elif abstol[-1] == "s":
                     abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+                elif abstol[-1] == "r":
+                    abstol = float(abstol[:-1]) * np.sqrt(nstd_of_cl(d, 0.6827))
             except:
                 raise ValueError("The 'abstol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {abstol}")
