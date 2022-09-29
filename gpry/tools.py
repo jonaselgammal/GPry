@@ -6,8 +6,8 @@ import numpy as np
 from numpy import trace as tr
 from numpy.linalg import det
 from scipy.linalg import eigh
-from scipy.special import erf, gamma
-from scipy.optimize import newton
+from scipy.special import gamma, erfc
+from scipy.stats import chi2
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -35,7 +35,8 @@ def is_valid_covmat(covmat):
 
 def gaussian_distance(points, mean, covmat):
     """
-    Computes radial Gaussian distance in units of standar deviations (Mahalanobis distance).
+    Computes radial Gaussian distance in units of standar deviations
+    (Mahalanobis distance).
     """
     dim = np.atleast_2d(points).shape[1]
     mean = np.atleast_1d(mean)
@@ -55,49 +56,21 @@ def gaussian_distance(points, mean, covmat):
     return np.sqrt(np.sum(points_transf**2, axis=1))
 
 
-def cl_of_nstd(d, n):
+def nstd_of_1d_nstd(n1, d):
     """
-    Confidence level of hypervolume corresponding to n std's distance
-    on a normalised multivariate Gaussian of dimension d.
-
-    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
+    Radius of (hyper)volume in units of std's of a multivariate Gaussian of dimension
+    ``d`` for a credible (hyper)volume defined by the equivalent 1-dimensional
+    ``n1``-sigma interval.
     """
-    if d == 1:
-        return erf(n / np.sqrt(2))
-    if d == 2:
-        return 1 - np.exp(-n**2 / 2)
-    # d > 2
-    return cl_of_nstd(d - 2, n) - \
-        (n / np.sqrt(2))**(d - 2) * np.exp(-n**2 / 2) / gamma(d / 2)
+    return np.sqrt(chi2.isf(erfc(n1 / np.sqrt(2)), d))
 
 
-def partial_n_cl_of_nstd(d, n):
+def credibility_of_nstd(n, d):
     """
-    Derivative w.r.t. n of `cl_of_std`.
-
-    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
+    Posterior mass inside of the (hyper)volume of radius ``n`` (in units of std's) of a
+    multivariate Gaussian of dimension ``d``.
     """
-    if d == 1:
-        return np.sqrt(2 / np.pi) * np.exp(-n**2 / 2)
-    if d == 2:
-        return n * np.exp(-n**2 / 2)
-    # d > 2
-    return partial_n_cl_of_nstd(d - 2, n) + \
-        (n ** (d - 3) * (n**2 - d + 2) * 2**(1 - d / 2) *
-         np.exp(-n**2 / 2) / gamma(d / 2))
-
-
-def nstd_of_cl(d, p):
-    """
-    Radius of hypervolume for a given confidence level in units of std's of a
-    normalised multivariate Gaussian of dimension d.
-
-    From https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0118537
-    """
-    if d == 2:  # analytic!
-        return np.sqrt(-2 * np.log(1 - p))
-    return newton(lambda n: cl_of_nstd(d, n) - p, np.sqrt(d - 1),
-                  fprime=lambda n: partial_n_cl_of_nstd(d, n))
+    return chi2.cdf(n**2, d)
 
 
 def volume_sphere(r, dim=3):
