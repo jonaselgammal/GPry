@@ -267,6 +267,9 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix,
                                            cov_params=covariance_params, verbose=verbose)
     elif sampler.lower() == "polychord":
+        if output is False:
+            warnings.warn("Polychord cannot run without output. Mind that it defaults "
+                          "to /tmp/polychord_raw")
         sampler_input = polychord_info_from_run()
     elif isinstance(sampler, str):
         raise ValueError("`sampler` must be `mcmc|polychord`")
