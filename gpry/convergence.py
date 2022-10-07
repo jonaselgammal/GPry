@@ -10,7 +10,7 @@ import sys
 import inspect
 from copy import deepcopy
 from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
-from gpry.tools import kl_norm, is_valid_covmat, nstd_of_cl
+from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd
 from gpry.mpi import mpi_comm, is_main_process, multiple_processes
 
 
@@ -441,11 +441,11 @@ class CorrectCounter(ConvergenceCriterion):
             try:
                 assert (reltol[-1] == "l" or reltol[-1] == "s" or reltol[-1] == "r")
                 if reltol[-1] == "l":
-                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)
+                    reltol = float(reltol[:-1]) * nstd_of_1d_nstd(1, d)
                 elif reltol[-1] == "s":
-                    reltol = float(reltol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+                    reltol = float(reltol[:-1]) * nstd_of_1d_nstd(1, d)**2.
                 elif reltol[-1] == "r":
-                    reltol = float(reltol[:-1]) * np.sqrt(nstd_of_cl(d, 0.6827))
+                    reltol = float(reltol[:-1]) * np.sqrt(nstd_of_1d_nstd(1, d))
             except:
                 raise ValueError("The 'reltol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {reltol}")
@@ -455,11 +455,11 @@ class CorrectCounter(ConvergenceCriterion):
             try:
                 assert (abstol[-1] == "l" or abstol[-1] == "s" or reltol[-1] == "r")
                 if abstol[-1] == "l":
-                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)
+                    abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d)
                 elif abstol[-1] == "s":
-                    abstol = float(abstol[:-1]) * nstd_of_cl(d, 0.6827)**2.
+                    abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d)**2.
                 elif abstol[-1] == "r":
-                    abstol = float(abstol[:-1]) * np.sqrt(nstd_of_cl(d, 0.6827))
+                    abstol = float(abstol[:-1]) * np.sqrt(nstd_of_1d_nstd(1, d))
             except:
                 raise ValueError("The 'abstol' parameter can either be a number " + \
                     f"or a string with a number followed by 'l' or 's'. Got {abstol}")

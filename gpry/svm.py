@@ -12,9 +12,8 @@ log-posterior distribution are finite.
 """
 
 import numpy as np
-from scipy.stats import chi2
-from scipy.special import erfc
 from sklearn.svm import SVC
+from gpry.tools import nstd_of_1d_nstd
 
 
 class SVM(SVC):
@@ -403,5 +402,4 @@ class SVM(SVC):
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
         assuming a :math:`\chi^2` distribution.
         """
-        return -2 * chi2.isf(
-            erfc(n_sigma / np.sqrt(2)), n_dimensions)
+        return 4 * (-0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions)**2)
