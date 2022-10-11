@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 from gpry.gpr import GaussianProcessRegressor
-from gpry.tools import credibility_of_nstd, nstd_of_cl, volume_sphere, gaussian_distance
+from gpry.tools import credibility_of_nstd, nstd_of_1d_nstd, volume_sphere, gaussian_distance
 
 
 def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker="."):
