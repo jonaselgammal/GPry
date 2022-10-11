@@ -614,7 +614,7 @@ class WhiteKernel(Kernel, sk_WhiteKernel):
     @property
     def hyperparameter_noise_level(self):
         return Hyperparameter(
-            "noise_level", "numeric", self.noise_level_bounds)
+            "noise_level", "numeric", self.noise_level_bounds, None)
 
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
@@ -672,7 +672,7 @@ class Sum(KernelOperator, Kernel, sk_Sum):
 
     @property
     def hyperparameters(self):
-        return super(KernelOperator, self).hyperparameters
+        return super().hyperparameters
 
     def gradient_x(self, x, X_train):
         return self.k1.gradient_x(x, X_train) + self.k2.gradient_x(x, X_train)
