@@ -144,7 +144,7 @@ def _plot_distance_distribution(points, mean, covmat, density=False, ax=None,
     cls = [cl_of_nstd(1, s) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
     linestyles = ["-", "--", "-.", ":"]
     for cl, ls in zip(cls, linestyles):
-        std_of_cl = nstd_of_cl(dim, cl)
+        std_of_cl = nstd_of_1d_nstd(dim, cl)
         if std_of_cl < max(radial_distances):
             ax.axvline(std_of_cl, c="0.75", ls=ls, zorder=-99,
                        label=f"{cl:.4f}% prob mass")
