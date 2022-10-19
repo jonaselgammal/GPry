@@ -319,19 +319,19 @@ class Runner(object):
             # END OF DEPRECATION BLOCK
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
-            self.n_points_per_acq = options.get("n_points_per_acq", mpi_size)
+            self.n_points_per_acq = options.get("n_points_per_acq", min(mpi_size, self.d))
             self.fit_full_every = options.get(
                 "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
-            if self.n_points_per_acq < mpi_size:
-                self.log("Warning: parallellisation not fully utilised! It is advised to "
-                         "make ``n_points_per_acq`` equal to the number of MPI processes "
-                         "(default when not specified).", level=2)
-            if self.n_points_per_acq > 2 * self.d:
+            if self.n_points_per_acq > self.d:
                 self.log("Warning: The number kriging believer samples per "
-                         "acquisition step is larger than 2x number of dimensions of "
+                         "acquisition step is larger than the number of dimensions of "
                          "the feature space. This may lead to slow convergence."
                          "Consider running it with less cores or decreasing "
                          "n_points_per_acq manually.", level=2)
+            elif self.n_points_per_acq < mpi_size:
+                self.log("Warning: parallellisation not fully utilised! It is advised to "
+                         "make ``n_points_per_acq`` equal to the number of MPI processes "
+                         "(default when not specified).", level=2)
             # Sanity checks
             if self.n_initial <= 0:
                 raise ValueError("The number of initial samples needs to be bigger "
