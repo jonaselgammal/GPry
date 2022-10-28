@@ -170,7 +170,7 @@ class SVM(SVC):
 
     """
 
-    def __init__(self, threshold_sigma=10, threshold=None, C=1e7, kernel='rbf',
+    def __init__(self, threshold_sigma=20, threshold=None, C=1e7, kernel='rbf',
                  degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
                  coef0=0.0, shrinking=True, probability=False, tol=0.001,
                  cache_size=200, class_weight=None, verbose=False, max_iter=-1,
@@ -402,4 +402,4 @@ class SVM(SVC):
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
         assuming a :math:`\chi^2` distribution.
         """
-        return 4 * (-0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions)**2)
+        return -0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions)**2
