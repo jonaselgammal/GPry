@@ -418,7 +418,7 @@ class CorrectCounter(ConvergenceCriterion):
         Dict with the following keys:
 
         * ``"n_correct"``: Number of consecutive samples which need to be under the
-                           threshold (default ``5``)
+                           threshold (default ``max(4, 0.5*N_d)``)
         * ``"reltol"``: Relative tolerance parameter (default ``0.01``)
         * ``"abstol"``: Absolute tolerance parameter (default ``"0.01s"``)
         * ``"verbose"``: Verbosity
@@ -435,7 +435,7 @@ class CorrectCounter(ConvergenceCriterion):
 
     def __init__(self, prior, params):
         d = prior.d()
-        self.ncorrect = params.get("n_correct", 5)
+        self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5*d)))
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:
