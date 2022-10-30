@@ -19,9 +19,12 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp
 from gpry.plots import plot_convergence
+from gpry.tools import create_cobaya_model
 
 
 _plots_path = "images"
+
+
 class Runner(object):
     r"""
     Class that takes care of constructing the Bayesian quadrature/likelihood
@@ -31,11 +34,19 @@ class Runner(object):
 
     Parameters
     ----------
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        Contains all information about the parameters in the likelihood and
-        their priors as well as the likelihood itself. Cobaya is only used here
-        as a wrapper to get the logposterior etc. It must not be specified if 'resuming'
-        from a checkpoint (see `load_checkpoint` below).
+    model : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Likelihood function (returning log-likelihood; requires additional argument
+        ``bounds``) or Cobaya Model instance (which contains all information about the
+        parameters in the likelihood and their priors as well as the likelihood itself).
+        It must not be specified if 'resuming' from a checkpoint (see ``load_checkpoint``
+        below).
+
+    bounds: List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
+        correspond to the argument names of the ``likelihood`` function, and the values
+        can be either bounds specified as ``[min, max]``, or bounds and labels, as
+        ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
+        be ignored) if a Cobaya ``Model`` instance is passed as ``model``.
 
     gpr : GaussianProcessRegressor, "RBF" or "Matern", optional (default="RBF")
         The GP used for interpolating the posterior. If None or "RBF" is given
@@ -158,7 +169,7 @@ class Runner(object):
         value of the convergence criterion.
     """
 
-    def __init__(self, model=None, gpr="RBF", gp_acquisition="LogExp",
+    def __init__(self, model=None, bounds=None, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
                  initial_proposer="reference",
@@ -167,8 +178,13 @@ class Runner(object):
             if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
                 raise ValueError(
                     "'model' must be specified unless resuming from a checkpoint.")
-        else:
+        elif isinstance(model, Model):
             self.model = model
+        elif callable(model):
+            if bounds is None:
+                raise ValueError("'bounds' need to be defined if a likelihood "
+                                 "function is passed.")
+            self.model = create_cobaya_model(model, bounds)
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
@@ -212,14 +228,15 @@ class Runner(object):
                             self.log("warning: Found checkpoint files but they were "
                                      "incomplete. Ignoring them...", level=2)
             # Check model
-            if not isinstance(model, Model):
+            if not isinstance(model, Model) and not callable(model):
                 if load_checkpoint == "resume":
                     raise ValueError(f"Resuming from checkpoint {checkpoint} failed. "
                                      "In this case, a 'model' needs to be specified.")
                 else:
-                    raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+                    raise TypeError("'model' needs to be a likelihood function or a "
+                                    f"Cobaya model. got {model!r}")
             try:
-                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
                                    f"the model instance: {excpt}")
@@ -285,7 +302,7 @@ class Runner(object):
                     raise ValueError(
                         f"Unknown convergence criterion {convergence_criterion}. "
                         f"Available convergence criteria: {gpryconv.builtin_names()}")
-                self.convergence = conv_class(model.prior, convergence_options or {})
+                self.convergence = conv_class(self.model.prior, convergence_options or {})
             elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
                 self.convergence = convergence_criterion
             else:

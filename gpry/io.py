@@ -144,5 +144,5 @@ def save_checkpoint(path, model, gpr, acquisition, convergence, options, progres
         with open(os.path.join(path, _checkpoint_filenames["progress"]), 'wb') as f:
             pickle.dump(progress, f, pickle.HIGHEST_PROTOCOL)
     except Exception as excpt:
-        raise RuntimeError("Couldn't save the checkpoint. Check if the path "
+        raise RuntimeError("Could not save the checkpoint. Check if the path "
                            "is correct and exists. Error message: " + str(excpt))
