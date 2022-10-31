@@ -18,7 +18,7 @@ import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp
-from gpry.plots import plot_convergence
+from gpry.plots import plot_convergence, plot_distance_distribution
 from gpry.tools import create_cobaya_model
 
 
@@ -775,12 +775,14 @@ class Runner(object):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
+        if not is_main_process:
+            return
+        import matplotlib.pyplot as plt
         self.progress.plot_timing(
             truth=False, save=os.path.join(self.plots_path, "timing.svg"))
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
         fig, ax = plot_convergence(self.convergence)
         fig.savefig(os.path.join(self.plots_path, "convergence.svg"))
-        import matplotlib.pyplot as plt
         plt.close(fig)
 
     def generate_mc_sample(self, sampler="mcmc", output=None, add_options=None,
@@ -831,7 +833,8 @@ class Runner(object):
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
         """
-        Creates some progress plots and saves them at path (assumes path exists).
+        Creates a triangle plot of an MC sample of the surrogate model, and optionally
+        shows some evaluation locations.
 
         .. warning::
             This method requires GetDist to be installed. It is neither a requirement
@@ -854,27 +857,67 @@ class Runner(object):
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
-        if is_main_process:
-            from getdist.mcsamples import MCSamplesFromCobaya
-            import getdist.plots as gdplt
-            from gpry.plots import getdist_add_training
-            import matplotlib.pyplot as plt
-            gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
-            gdplot = gdplt.get_subplot_plotter(width_inch=5)
-            to_plot = [gdsamples_gp]
-            if add_samples:
-                to_plot += list(add_samples.values())
-            gdplot.triangle_plot(
-                to_plot, self.model.parameterization.sampled_params(), filled=True)
-            if add_training and self.d > 1:
-                getdist_add_training(gdplot, self.model, self.gpr)
-            if output is None:
-                plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
-                            dpi=300)
-            else:
-                plt.savefig(output)
-            return gdplot
+        if not is_main_process:
+            return
+        from getdist.mcsamples import MCSamplesFromCobaya
+        import getdist.plots as gdplt
+        from gpry.plots import getdist_add_training
+        import matplotlib.pyplot as plt
+        gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
+        gdplot = gdplt.get_subplot_plotter(width_inch=5)
+        to_plot = [gdsamples_gp]
+        if add_samples:
+            to_plot += list(add_samples.values())
+        gdplot.triangle_plot(
+            to_plot, self.model.parameterization.sampled_params(), filled=True)
+        if add_training and self.d > 1:
+            getdist_add_training(gdplot, self.model, self.gpr)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        return gdplot
 
+    def plot_distance_distribution(
+            self, surr_info, sampler, show_added=True, output=None):
+        """
+        Creates a triangle plot of an MC sample of the surrogate model, and optionally
+        shows some evaluation locations.
+
+        Parameters
+        ----------
+        surr_info, sampler : dict, Cobaya.sampler
+            Return values of method :func:`generate_mc_sample`
+        show_added: bool (default True)
+            Colours the stacks depending on how early or late the corresponding points
+            were added (bluer stacks represent newer points).
+        output : str or os.path, optional (default=None)
+            The location to save the generated plot in. If ``None`` it will be saved in
+            ``.png`` format at ``checkpoint_path/images/``, or ``./images/`` if
+            ``checkpoint_path`` was ``None``.
+        """
+        if not is_main_process:
+            return
+        import matplotlib.pyplot as plt
+        mean = sampler.products()["sample"].mean()
+        covmat = sampler.products()["sample"].cov()
+        fig, ax = plot_distance_distribution(
+            self.gpr, mean, covmat, density=False, show_added=show_added)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path, "Distance_distribution.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        fig, ax = plot_distance_distribution(
+            self.gpr, mean, covmat, density=True, show_added=show_added)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path,
+                                     "Distance_distribution_density.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        plt.close(fig)
 
 
 def run(model, gpr="RBF", gp_acquisition="LogExp",

@@ -75,6 +75,7 @@ updated_info, sampler = runner.generate_mc_sample()
 
 # Plotting
 runner.plot_mc(updated_info, sampler)
+runner.plot_distance_distribution(updated_info, sampler)
 
 # Validation
 if is_main_process:
