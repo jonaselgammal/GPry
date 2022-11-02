@@ -40,3 +40,7 @@ We could add a *light* checkpointing option to only save the training points and
 - Optimize number or restarts of optimizer
 - Acquire in parallel by ranking
 - Prune the model once in a while
+
+## Choice of zeta
+
+As seen in the paper, for Gaussians it is easy to see which zeta would lead to faster convergence. But we could also pick zeta in terms of robustness: the best one is the one that would lead to the lowest KL_truth at convergence, even if it takes longer to converge. The optimal choice may be one that balances convergence speed vs robustness. For now, we stay with the fastest zeta, since it has been proven to be robust enough within the range of applications assumed in the paper. It may be interesting to study it in the future, adding non-gaussian posteriors to the tests.

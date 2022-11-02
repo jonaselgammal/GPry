@@ -46,7 +46,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
     logq2 = logq[mask]
     weights2 = weights[mask]
     kl = np.abs(np.sum(weights2 * (logp2 - logq2)) / np.sum(weights2))
-    assert kl <= desired_kl, f"The desired KL value of {desired_kl} wasn't reached"
+    assert kl <= desired_kl, f"The desired KL value wasn't reached: {kl} < {desired_kl}"
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])

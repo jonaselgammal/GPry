@@ -5,7 +5,12 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 from gpry.gpr import GaussianProcessRegressor
-from gpry.tools import credibility_of_nstd, nstd_of_1d_nstd, volume_sphere, gaussian_distance
+from gpry.tools import (
+    credibility_of_nstd,
+    nstd_of_1d_nstd,
+    volume_sphere,
+    gaussian_distance,
+)
 
 
 def getdist_add_training(getdist_plot, model, gpr, colormap="viridis", marker="."):
@@ -107,16 +112,34 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     return fig, ax
 
 
-def _plot_distance_distribution(points, mean, covmat, density=False, ax=None,
-                                show_added=True):
+def plot_distance_distribution(
+    points, mean, covmat, density=False, show_added=True, ax=None
+):
     """
     Plots a histogram of the distribution of points with respect to the number of standard
-    deviations. Bluer stacks represent newer points.
+    deviations. Confidence level boundaries (Gaussian approximantion, dimension-dependent)
+    are shown too.
 
-    Confidence level boundaries (dimension-dependent) are shown too.
+    Parameters
+    ----------
+    points: array-like, with shape ``(N_points, N_dimensions)``, or GPR instance
+        Points to be used for the histogram.
+    mean: array-like, ``(N_dimensions)``.
+        Mean of the distribution.
+    covmat: array-like, ``(N_dimensions, N_dimensions)``.
+        Covariance matrix of the distribution.
+    density: bool (default: False)
+        If ``True``, bin height is normalised to the (hyper)volume of the (hyper)spherical
+        shell corresponding to each standard deviation.
+    show_added: bool (default True)
+        Colours the stacks depending on how early or late the corresponding points were
+        added (bluer stacks represent newer points).
+    ax: matplotlib axes
+        If provided, they will be used for the plot.
 
-    If ``density=True`` (default: ``False``), bin height is normalised to the
-    (hyper)volume of the (hyper)spherical shell corresponding to each standard deviation.
+    Returns
+    -------
+    Tuple of current figure and axes ``(fig, ax)``.
     """
     if isinstance(points, GaussianProcessRegressor):
         points = points.X_train
@@ -125,33 +148,46 @@ def _plot_distance_distribution(points, mean, covmat, density=False, ax=None,
     bins = list(range(0, int(np.ceil(np.max(radial_distances))) + 1))
     num_or_dens = "Density" if density else "Number"
     if density:
-        volumes = [volume_sphere(bins[i], dim) - volume_sphere(bins[i - 1], dim)
-                   for i in range(1, len(bins))]
+        volumes = [
+            volume_sphere(bins[i], dim) - volume_sphere(bins[i - 1], dim)
+            for i in range(1, len(bins))
+        ]
         weights = [1 / volumes[int(np.floor(r))] for r in radial_distances]
     else:
         weights = np.ones(len(radial_distances))
     if ax is None:
         fig, ax = plt.subplots()
-        ax.set_title(f"{num_or_dens} of points per standard deviation (bluer=newer)")
-    if show_added:
-        cmap = cm.get_cmap('Spectral')
-        colors = [cmap(i / len(points)) for i in range(len(points))]
-        ax.hist(np.atleast_2d(radial_distances), bins=bins,
-                weights=np.atleast_2d(weights), color=colors, stacked=True)
     else:
-        ax.hist(radial_distances, bins=bins,
-                weights=weights)
-    cls = [cl_of_nstd(1, s) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
+        fig = ax.get_figure()
+    title_str = f"{num_or_dens} of points per standard deviation"
+    if show_added:
+        title_str += " (bluer=newer)"
+        cmap = cm.get_cmap("Spectral")
+        colors = [cmap(i / len(points)) for i in range(len(points))]
+        ax.hist(
+            np.atleast_2d(radial_distances),
+            bins=bins,
+            weights=np.atleast_2d(weights),
+            color=colors,
+            stacked=True,
+        )
+    else:
+        ax.hist(radial_distances, bins=bins, weights=weights)
+    ax.set_title(title_str)
+    cls = [credibility_of_nstd(s, 1) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
+    nstds = [1, 2, 3, 4]
     linestyles = ["-", "--", "-.", ":"]
-    for cl, ls in zip(cls, linestyles):
-        std_of_cl = nstd_of_1d_nstd(dim, cl)
+    for nstd, ls in zip(nstds, linestyles):
+        std_of_cl = nstd_of_1d_nstd(nstd, dim)
         if std_of_cl < max(radial_distances):
-            ax.axvline(std_of_cl, c="0.75", ls=ls, zorder=-99,
-                       label=f"{cl:.4f}% prob mass")
+            ax.axvline(
+                std_of_cl, c="0.75", ls=ls, zorder=-99,
+                label=f"${100 * credibility_of_nstd(std_of_cl, dim):.2f}\%$ prob mass"
+            )
     ax.set_ylabel(f"{num_or_dens} of points")
     ax.set_xlabel("Number of standard deviations")
     ax.legend()
-    return ax
+    return (fig, ax)
 
 
 def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):

@@ -18,10 +18,13 @@ import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp
-from gpry.plots import plot_convergence
+from gpry.plots import plot_convergence, plot_distance_distribution
+from gpry.tools import create_cobaya_model
 
 
 _plots_path = "images"
+
+
 class Runner(object):
     r"""
     Class that takes care of constructing the Bayesian quadrature/likelihood
@@ -31,11 +34,19 @@ class Runner(object):
 
     Parameters
     ----------
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        Contains all information about the parameters in the likelihood and
-        their priors as well as the likelihood itself. Cobaya is only used here
-        as a wrapper to get the logposterior etc. It must not be specified if 'resuming'
-        from a checkpoint (see `load_checkpoint` below).
+    model : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Likelihood function (returning log-likelihood; requires additional argument
+        ``bounds``) or Cobaya Model instance (which contains all information about the
+        parameters in the likelihood and their priors as well as the likelihood itself).
+        It must not be specified if 'resuming' from a checkpoint (see ``load_checkpoint``
+        below).
+
+    bounds: List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
+        correspond to the argument names of the ``likelihood`` function, and the values
+        can be either bounds specified as ``[min, max]``, or bounds and labels, as
+        ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
+        be ignored) if a Cobaya ``Model`` instance is passed as ``model``.
 
     gpr : GaussianProcessRegressor, "RBF" or "Matern", optional (default="RBF")
         The GP used for interpolating the posterior. If None or "RBF" is given
@@ -158,7 +169,7 @@ class Runner(object):
         value of the convergence criterion.
     """
 
-    def __init__(self, model=None, gpr="RBF", gp_acquisition="LogExp",
+    def __init__(self, model=None, bounds=None, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
                  callback_is_MPI_aware=False, convergence_options=None, options={},
                  initial_proposer="reference",
@@ -167,8 +178,13 @@ class Runner(object):
             if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
                 raise ValueError(
                     "'model' must be specified unless resuming from a checkpoint.")
-        else:
+        elif isinstance(model, Model):
             self.model = model
+        elif callable(model):
+            if bounds is None:
+                raise ValueError("'bounds' need to be defined if a likelihood "
+                                 "function is passed.")
+            self.model = create_cobaya_model(model, bounds)
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
@@ -212,14 +228,15 @@ class Runner(object):
                             self.log("warning: Found checkpoint files but they were "
                                      "incomplete. Ignoring them...", level=2)
             # Check model
-            if not isinstance(model, Model):
+            if not isinstance(model, Model) and not callable(model):
                 if load_checkpoint == "resume":
                     raise ValueError(f"Resuming from checkpoint {checkpoint} failed. "
                                      "In this case, a 'model' needs to be specified.")
                 else:
-                    raise TypeError(f"'model' needs to be a Cobaya model. got {model}")
+                    raise TypeError("'model' needs to be a likelihood function or a "
+                                    f"Cobaya model. got {model!r}")
             try:
-                prior_bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+                prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
                                    f"the model instance: {excpt}")
@@ -285,7 +302,7 @@ class Runner(object):
                     raise ValueError(
                         f"Unknown convergence criterion {convergence_criterion}. "
                         f"Available convergence criteria: {gpryconv.builtin_names()}")
-                self.convergence = conv_class(model.prior, convergence_options or {})
+                self.convergence = conv_class(self.model.prior, convergence_options or {})
             elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
                 self.convergence = convergence_criterion
             else:
@@ -758,12 +775,14 @@ class Runner(object):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
+        if not is_main_process:
+            return
+        import matplotlib.pyplot as plt
         self.progress.plot_timing(
             truth=False, save=os.path.join(self.plots_path, "timing.svg"))
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
         fig, ax = plot_convergence(self.convergence)
         fig.savefig(os.path.join(self.plots_path, "convergence.svg"))
-        import matplotlib.pyplot as plt
         plt.close(fig)
 
     def generate_mc_sample(self, sampler="mcmc", output=None, add_options=None,
@@ -814,7 +833,8 @@ class Runner(object):
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
         """
-        Creates some progress plots and saves them at path (assumes path exists).
+        Creates a triangle plot of an MC sample of the surrogate model, and optionally
+        shows some evaluation locations.
 
         .. warning::
             This method requires GetDist to be installed. It is neither a requirement
@@ -837,27 +857,67 @@ class Runner(object):
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
-        if is_main_process:
-            from getdist.mcsamples import MCSamplesFromCobaya
-            import getdist.plots as gdplt
-            from gpry.plots import getdist_add_training
-            import matplotlib.pyplot as plt
-            gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
-            gdplot = gdplt.get_subplot_plotter(width_inch=5)
-            to_plot = [gdsamples_gp]
-            if add_samples:
-                to_plot += list(add_samples.values())
-            gdplot.triangle_plot(
-                to_plot, self.model.parameterization.sampled_params(), filled=True)
-            if add_training and self.d > 1:
-                getdist_add_training(gdplot, self.model, self.gpr)
-            if output is None:
-                plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
-                            dpi=300)
-            else:
-                plt.savefig(output)
-            return gdplot
+        if not is_main_process:
+            return
+        from getdist.mcsamples import MCSamplesFromCobaya
+        import getdist.plots as gdplt
+        from gpry.plots import getdist_add_training
+        import matplotlib.pyplot as plt
+        gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
+        gdplot = gdplt.get_subplot_plotter(width_inch=5)
+        to_plot = [gdsamples_gp]
+        if add_samples:
+            to_plot += list(add_samples.values())
+        gdplot.triangle_plot(
+            to_plot, self.model.parameterization.sampled_params(), filled=True)
+        if add_training and self.d > 1:
+            getdist_add_training(gdplot, self.model, self.gpr)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        return gdplot
 
+    def plot_distance_distribution(
+            self, surr_info, sampler, show_added=True, output=None):
+        """
+        Creates a triangle plot of an MC sample of the surrogate model, and optionally
+        shows some evaluation locations.
+
+        Parameters
+        ----------
+        surr_info, sampler : dict, Cobaya.sampler
+            Return values of method :func:`generate_mc_sample`
+        show_added: bool (default True)
+            Colours the stacks depending on how early or late the corresponding points
+            were added (bluer stacks represent newer points).
+        output : str or os.path, optional (default=None)
+            The location to save the generated plot in. If ``None`` it will be saved in
+            ``.png`` format at ``checkpoint_path/images/``, or ``./images/`` if
+            ``checkpoint_path`` was ``None``.
+        """
+        if not is_main_process:
+            return
+        import matplotlib.pyplot as plt
+        mean = sampler.products()["sample"].mean()
+        covmat = sampler.products()["sample"].cov()
+        fig, ax = plot_distance_distribution(
+            self.gpr, mean, covmat, density=False, show_added=show_added)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path, "Distance_distribution.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        fig, ax = plot_distance_distribution(
+            self.gpr, mean, covmat, density=True, show_added=show_added)
+        if output is None:
+            plt.savefig(os.path.join(self.plots_path,
+                                     "Distance_distribution_density.png"),
+                        dpi=300)
+        else:
+            plt.savefig(output)
+        plt.close(fig)
 
 
 def run(model, gpr="RBF", gp_acquisition="LogExp",
