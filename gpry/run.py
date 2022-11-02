@@ -805,7 +805,7 @@ class Runner(object):
             raise Exception("You have to have added points to the GPR "
                             "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
-            output = os.path.join(self.checkpoint, "chains/")
+            output = os.path.join(self.checkpoint, "chains/mc_samples")
         return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,
                                  convergence=self.convergence, output=output,
                                  add_options=add_options, resume=resume,
