@@ -39,5 +39,5 @@ setup(
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9'
     ],
-    install_requires=['cobaya', 'scikit-learn', 'dill']
+    install_requires=['cobaya>=3.2.2', 'scikit-learn', 'dill', 'mpi4py']
 )
