@@ -11,6 +11,7 @@ import scipy.optimize
 # gpry kernels and SVM
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
+from gpry.preprocessing import Normalize_bounds
 from gpry.tools import check_random_state
 
 # sklearn GP and kernel utilities
@@ -55,7 +56,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         :math:`\nu=3/2`. Note that the kernel's hyperparameters are optimized
         during fitting.
 
-    noise_level : float or array-like, optional (default: 1e-5)
+    noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
         during fitting. Larger values correspond to increased noise level in the
         observations and reduce potential numerical issue during fitting.
@@ -222,7 +223,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self._fitted = False
         # Initialize SVM if given
         if account_for_inf == "SVM":
-            self.account_for_inf = SVM(random_state=random_state)
+            self.account_for_inf = SVM(
+                preprocessing_X=Normalize_bounds(bounds) if (bounds is not None) else None,
+                random_state=random_state
+                )
         else:
             self.account_for_inf = account_for_inf
 
