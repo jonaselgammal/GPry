@@ -5,8 +5,8 @@ Pre-requisites
 --------------
 
 GPry requires **python** (version ≥ 3.8), the python package manager **pip**
-(version ≥ 21.3.1). The required packages (cobaya, scikit-learn, numpy, scipy, dill) will
-be automatically installed by pip.
+(version ≥ 21.3.1). The required packages (cobaya, scikit-learn, numpy, scipy, dill,
+mpi4py) will automatically be installed by pip.
 
 To check if you have Python installed, type ``python --version`` in the shell, and you
 should get ``Python 3.[whatever]``. Then, type ``python -m pip --version`` in the shell,

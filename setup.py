@@ -14,7 +14,7 @@ def get_long_description():
 
 setup(
     name='gpry',
-    version='1.0.0',
+    version='1.1.0',
     description='A package for fast bayesian inference of expensive Likelihoods',
     long_description=get_long_description(),
     long_description_content_type='text/markdown',
