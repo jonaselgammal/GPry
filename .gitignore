@@ -84,6 +84,9 @@ ipython_config.py
 # pyenv
 .python-version
 
+# MAC stuff
+.DS_Store
+
 # pipenv
 #   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
 #   However, in case of collaboration, if having platform-specific dependencies or dependencies
@@ -135,6 +138,9 @@ examples/new/*
 examples/output/*
 examples/*.pkl
 examples/*.png
+
+output/*
+tests/files/*
 
 # emacs backups
 *~
