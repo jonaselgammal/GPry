@@ -2,6 +2,7 @@
 This module contains general tools used in different parts of the code.
 """
 
+from copy import deepcopy
 from inspect import signature
 from typing import Mapping, Iterable
 
@@ -162,3 +163,23 @@ def create_cobaya_model(likelihood, bounds, prefix="x_"):
         )
     likelihood_input = {"likelihood_function": {"external": likelihood}}
     return get_model({"params": params_input, "likelihood": likelihood_input})
+
+
+class NumpyErrorHandling():
+    """
+    Context for manual handling of numpy errors (e.g. ignoring, just printing...).
+
+    NB: the call to ``deepcopy`` at init can become expensive if this ``with`` context
+        is used repeatedly. One may want to put it at an upper level then.
+    """
+    def __init__(self, all):
+        self.all = all
+        self.error_handler = deepcopy(np.geterr())
+
+    def __enter__(self):
+        np.seterr(all=self.all)
+
+    def __exit__(self, error_type, error_value, error_traceback):
+        np.seterr(**self.error_handler)
+        if error_type is not None:
+            raise
