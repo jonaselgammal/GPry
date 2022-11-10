@@ -257,6 +257,7 @@ class Runner(object):
                     raise TypeError("initial_proposer should be an InitialPointProposer"
                                     " object, 'reference', 'prior' or 'uniform', got "
                                     f"{initial_proposer}.")
+                self.initial_proposer = initial_proposer
 
             # Construct GP if it's not already constructed
             if isinstance(gpr, str):
