@@ -11,9 +11,9 @@ the keys are their labels.
 """
 import os
 import sys
-import numpy as np
 from copy import deepcopy
-from random import random
+from random import random, shuffle
+import numpy as np
 
 from gpry.gp_acquisition import GPAcquisition
 from gpry.proposal import PartialProposer, CentroidsProposer
@@ -28,6 +28,9 @@ _kl_truth_col = "kl_truth"
 
 # Diagnosis mode: progress printing and plotting at every iteration.
 diag = False
+
+mean_fname = "mean.txt"
+cov_fname = "cov.txt"
 
 
 def generate_inputs(bounds):
@@ -56,7 +59,6 @@ def generate_inputs(bounds):
         zetas = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5]
     else:
         zetas = [0.05, 0.1, 0.2, 0.5, 1]
-        from random import shuffle
         shuffle(zetas)
     for value in zetas:
         key = f"zeta_{value}"
@@ -90,6 +92,7 @@ def callback(runner):
     # Do tests only 5 times before expected convergence, and a few times after
     n_train = runner.gpr.n_total
     n_step = int(np.round(n_approx_conv(dim) / 5))
+    # TODO: this will not work for n_acq != 1
     if max(n_train, 1) % n_step:
         return
     true_mean = likelihood_generator.mean
@@ -99,7 +102,7 @@ def callback(runner):
         sampler="mcmc", add_options={"covmat": true_cov, "covmat_params": paramnames},
         output=False)
     mc_mean = sampler.products()["sample"].mean()
-    mc_cov = sampler.products()["sample"].cov()    
+    mc_cov = sampler.products()["sample"].cov()
     # Compute KL_truth and save it to progress table (hacky!)
     kl = max(kl_norm(true_mean, true_cov, mc_mean, mc_cov),
              kl_norm(mc_mean, mc_cov, true_mean, true_cov))
@@ -128,6 +131,10 @@ def generate(nruns, likelihood_generator, path=None):
         inputs = generate_inputs(bounds)
         for this_label, this_input in inputs.items():
             this_path = os.path.join(path, this_label, random_hex_name())
+            # Write mean and covmat
+            np.savetxt(os.path.join(this_path, mean_fname), likelihood_generator.mean)
+            np.savetxt(os.path.join(this_path, cov_fname), likelihood_generator.cov)
+            # Do the run
             this_input["checkpoint"] = this_path
             this_input["load_checkpoint"] = "overwrite"
             this_input["callback"] = callback
@@ -148,7 +155,7 @@ if __name__ == "__main__":
         nruns = int(sys.argv[2])
         path = str(sys.argv[3])
     except ValueError as excpt:
-        raise ValueError(arg_err_msg + " Error: " + str(excpt))
+        raise ValueError(arg_err_msg + " Error: " + str(excpt)) from excpt
     path = os.path.join(path, f"d{dim}")
     global likelihood_generator  # so that the callback function can read mean and covmat
     likelihood_generator = Random_gaussian(ndim=dim, prior_size_in_std=5)

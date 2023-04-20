@@ -45,9 +45,9 @@ if is_main_process:
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.85, 0.1, 0.05, 0.8])
     cbar = fig.colorbar(im, cax=cbar_ax, orientation='vertical')
-    if is_main_process:
+    if is_main_process and checkpoint:
         create_path(os.path.join(checkpoint, "images/"), verbose=False)
-    plt.savefig(os.path.join(checkpoint, "images/Ground_truth.png"), dpi=300)
+        plt.savefig(os.path.join(checkpoint, "images/Ground_truth.png"), dpi=300)
     plt.close()
 
 #############################################################
