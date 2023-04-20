@@ -19,7 +19,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp
 from gpry.plots import plot_convergence, plot_distance_distribution
-from gpry.tools import create_cobaya_model
+from gpry.tools import create_cobaya_model, nstd_of_1d_nstd
 
 
 _plots_path = "images"
@@ -651,6 +651,9 @@ class Runner(object):
             self.save_checkpoint()
             if is_main_process and self.plots:
                 self.plot_progress()
+            # Overshoot test
+            if self.has_converged:
+                self.mc_and_diagnosis()
         else:  # check "while" ending condition
             if is_main_process:
                 lines = "Finished!\n"
@@ -830,6 +833,24 @@ class Runner(object):
                                  convergence=self.convergence, output=output,
                                  add_options=add_options, resume=resume,
                                  verbose=self.verbose)
+
+    def mc_and_diagnosis(self):
+        """
+        Runs an MC sampler on the GP surrogate model, and performs an overshoot diagnosis.
+        """
+        surr_info, mc_sampler = self.generate_mc_sample()
+        sample = mc_sampler.products()["sample"]
+        best_mc_sample = sample.data.iloc[np.argmin(sample["minuslogpost"])]
+        i_best_train = np.argmax(self.gpr.y_train)
+        X_best_train = self.gpr.X_train[i_best_train]
+        y_best_train = self.gpr.y_train[i_best_train]
+        # Compare y-value against 1-sigma difference
+        if -best_mc_sample["minuslogpost"] - y_best_train > \
+               nstd_of_1d_nstd(1, self.d)**2 / 2:
+            print("OVERSHOT FOUND! log-posterior value at max of MC "
+                  f"({self.model.parameterization.sampled_params()}) is "
+                  f"{-best_mc_sample['minuslogpost']}, whereas at the best training "
+                  f"point ({X_best_train}) is {y_best_train}.")
 
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
