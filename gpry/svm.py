@@ -381,20 +381,20 @@ class SVM(SVC):
         Sets the threshold value threshold for un-transformed y's.
         """
         dimension = dimension or self.d
-        if self._threshold is None:
-            if self.init_threshold is None:
-                if self.threshold_sigma is None:
-                    raise ValueError(
-                        "You either need to specify threshold or threshold_sigma.")
-                self._threshold = \
-                    self.compute_threshold_given_sigma(self.threshold_sigma, dimension)
-            else:
-                self._threshold = self.init_threshold
+        # if self._threshold is None:
+        if self.init_threshold is None:
+            if self.threshold_sigma is None:
+                raise ValueError(
+                    "You either need to specify threshold or threshold_sigma.")
+            self._threshold = \
+                self.compute_threshold_given_sigma(self.threshold_sigma, dimension)
+        else:
+            self._threshold = self.init_threshold
         # Update threshold for preprocessed data
         if self.preprocessing_y is not None:
-            self._threshold_ = self.preprocessing_y.transform(self.threshold)
+            self._threshold_ = self.preprocessing_y.transform(self._threshold)
         else:
-            self._threshold_ = self.threshold
+            self._threshold_ = self._threshold
 
     @staticmethod
     def compute_threshold_given_sigma(n_sigma, n_dimensions):
