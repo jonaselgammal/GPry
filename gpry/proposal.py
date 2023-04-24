@@ -82,14 +82,13 @@ class PriorProposer(Proposer, InitialPointProposer):
     -----------
     model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         The model from which to draw the samples.
-        max_tries=inf, warn_if_tries='10d', ignore_fixed=False
     """
 
     def __init__(self, model):
-        self.model = model
+        self.prior = model.prior
 
     def get(self, random_state=None):
-        return self.model.prior.sample(random_state=random_state)[0]
+        return self.prior.sample(random_state=random_state)[0]
 
 class UniformProposer(Proposer, InitialPointProposer):
     """
