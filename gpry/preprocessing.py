@@ -522,3 +522,101 @@ class Normalize_y:
             raise TypeError("mean_ and std_ have not been fit before")
         y = np.copy(y_transformed) if copy else y_transformed
         return (y * self.std_) + self.mean_
+    
+class Reduce_y:
+    """
+    Transforms y-values (target values) such that they are centered around
+    the lowest value (baseline at the lowest value)
+    with a standard deviation of 1. This is done so that the constant
+    pre-factor in the kernel (constant kernel) stays within a numerically
+    convenient range while pushing down all non-sampled values to the
+    lowest value sampled.
+
+    Attributes
+    ----------
+    lower_ : float
+        lowest value in the training set
+
+    std_ : float
+        Standard deviation of the y-values
+
+    **Methods:**
+
+    .. autosummary::
+        :toctree: stubs
+
+        transform
+        inverse_transform
+    """
+
+    def __init__(self):
+        self.lower_ = None
+        self.std_ = None
+
+    def fit(self, X, y):
+        """
+        Calculates the mean and standard deviation of y
+        and saves them.
+
+        Parameters
+        ----------
+        y : array-like, shape = (n_samples,)
+            y-values (target values) that are used to
+            determine the mean and std.
+        """
+        self.lower_ = np.min(y)
+        self.std_ = np.std(y)
+
+    def transform_noise_level(self, noise_level, copy=True):
+        if self.lower_ is None or self.std_ is None:
+            raise TypeError("mean_ and std_ have not been fit before")
+        noise_level = np.copy(noise_level) if copy else noise_level
+        return noise_level / self.std_  # Divide by the standard deviation
+
+    def inverse_transform_noise_level(self, noise_level, copy=True):
+        if self.lower_ is None or self.std_ is None:
+            raise TypeError("mean_ and std_ have not been fit before")
+        noise_level = np.copy(noise_level) if copy else noise_level
+        return noise_level * self.std_  # Multiply by the standard deviation
+
+    def transform(self, y, copy=True):
+        """Transforms y.
+
+        Parameters
+        ----------
+        y : array-like, shape = (n_samples,)
+            y-values that one wants to transform.
+
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
+
+        Returns
+        -------
+        y_transformed : array-like, shape = (n_samples,)
+            Transformed y-values
+        """
+        if self.lower_ is None or self.std_ is None:
+            raise TypeError("mean_ and std_ have not been fit before")
+        y = np.copy(y) if copy else y
+        return (y - self.lower_) / self.std_
+
+    def inverse_transform(self, y_transformed, copy=True):
+        """Applies inverse transformation to y.
+
+        Parameters
+        ----------
+        y_transformed : array-like, shape = (n_samples,)
+            Transformed y-values.
+
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
+
+        Returns
+        -------
+        y : array-like, shape = (n_samples,)
+            Original y-values.
+        """
+        if self.lower_ is None or self.std_ is None:
+            raise TypeError("mean_ and std_ have not been fit before")
+        y = np.copy(y_transformed) if copy else y_transformed
+        return (y * self.std_) + self.lower_
