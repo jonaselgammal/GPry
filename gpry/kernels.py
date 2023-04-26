@@ -176,13 +176,13 @@ class Kernel(sk_Kernel):
                             else:
                                 bounds.append(
                                     [hyperparameter.max_length[t] * 1e-2,
-                                     hyperparameter.max_length[t] * 1.])
+                                     hyperparameter.max_length[t] * 1e2])
                     else:
                         if hyperparameter.max_length[0] is None:
                             bounds.append([thetas * 1e-2, thetas * 1.])
                         else:
                             bounds.append([hyperparameter.max_length[0] * 1e-2,
-                                           hyperparameter.max_length[0] * 1.])
+                                           hyperparameter.max_length[0] * 1e2])
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
