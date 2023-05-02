@@ -338,6 +338,9 @@ class Runner(object):
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", min(mpi_size, self.d))
+            self.do_mc_diag_every = options.get("do_mc_diag_every", None)
+            self.next_mc_diag = self.do_mc_diag_every
+            self.initial_optimization = options.get("initial_optimization", False)
             self.fit_full_every = options.get(
                 "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
             if self.n_points_per_acq > self.d:
@@ -489,7 +492,11 @@ class Runner(object):
             # Define initial training set
             if is_main_process:
                 self.banner("Drawing initial samples.")
-            self.do_initial_training()
+            if self.initial_optimization:
+                if is_main_process:
+                    self.do_initial_optimization()
+            else:
+                self.do_initial_training()
             if is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
@@ -651,6 +658,10 @@ class Runner(object):
             self.save_checkpoint()
             if is_main_process and self.plots:
                 self.plot_progress()
+            if self.do_mc_diag_every is not None:
+                if self.gpr.n >= self.next_mc_diag:
+                    self.mc_diagnosis_and_add()
+                    self.next_mc_diag += self.do_mc_diag_every
             # Overshoot test
             if self.has_converged:
                 self.mc_and_diagnosis()
@@ -834,12 +845,18 @@ class Runner(object):
                                  add_options=add_options, resume=resume,
                                  verbose=self.verbose)
 
-    def mc_and_diagnosis(self):
+    def mc_and_diagnosis(self, sampler="polychord", save_plot=None):
         """
         Runs an MC sampler on the GP surrogate model, and performs an overshoot diagnosis.
         """
-        surr_info, mc_sampler = self.generate_mc_sample()
+        surr_info, mc_sampler = mc_sample_from_gp(self.gpr, true_model=self.model,
+                                    sampler=sampler, convergence=self.convergence,
+                                    output=None, add_options=None, resume=False,
+                                    verbose=0)
+        if save_plot:
+            self.plot_mc(surr_info, mc_sampler, add_training=True, output=save_plot)
         sample = mc_sampler.products()["sample"]
+        bestfit = sample.bestfit()
         best_mc_sample = sample.data.iloc[np.argmin(sample["minuslogpost"])]
         i_best_train = np.argmax(self.gpr.y_train)
         X_best_train = self.gpr.X_train[i_best_train]
@@ -851,6 +868,35 @@ class Runner(object):
                   f"({self.model.parameterization.sampled_params()}) is "
                   f"{-best_mc_sample['minuslogpost']}, whereas at the best training "
                   f"point ({X_best_train}) is {y_best_train}.")
+            overshoot = True
+        else:
+            overshoot = False
+        
+        return overshoot, sample, bestfit
+
+    def mc_diagnosis_and_add(self, sampler="polychord"):
+        """
+        Runs an MC sampler on the GP surrogate model, and performs an overshoot diagnosis.
+        """
+        surr_info, mc_sampler = self.generate_mc_sample(sampler=sampler)
+        sample = mc_sampler.products()["sample"]
+        bestfit = sample.bestfit()
+        best_mc_sample = sample.data.iloc[np.argmin(sample["minuslogpost"])]
+        i_best_train = np.argmax(self.gpr.y_train)
+        X_best_train = self.gpr.X_train[i_best_train]
+        y_best_train = self.gpr.y_train[i_best_train]
+        # Compare y-value against 1-sigma difference
+        if -best_mc_sample["minuslogpost"] - y_best_train > \
+               nstd_of_1d_nstd(1, self.d)**2 / 2:
+            print("OVERSHOT FOUND! log-posterior value at max of MC "
+                  f"({self.model.parameterization.sampled_params()}) is "
+                  f"{-best_mc_sample['minuslogpost']}, whereas at the best training "
+                  f"point ({X_best_train}) is {y_best_train}.")
+            overshoot = True
+        else:
+            overshoot = False
+        
+        return overshoot, sample, bestfit
 
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
