@@ -1105,7 +1105,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if hasattr(self, "K_inv_"):
             c.K_inv_ = self.K_inv_
         if hasattr(self, "kernel_"):
-            c.kernel_ = self.kernel_
+            c.kernel_ = deepcopy(self.kernel_)
         # Copy the right SVM
         if hasattr(self, "account_for_inf"):
             c.account_for_inf = deepcopy(self.account_for_inf)
