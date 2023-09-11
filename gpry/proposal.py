@@ -59,7 +59,7 @@ class ReferenceProposer(Proposer, InitialPointProposer):
         The model from which to draw the samples.
     """
 
-    def __init__(self, model, max_tries=inf, warn_if_tries='10d', ignore_fixed=False):
+    def __init__(self, model, max_tries=inf, warn_if_tries='10d', ignore_fixed=True):
         self.prior = model.prior
         self.warn=True
         self.max_tries = max_tries
