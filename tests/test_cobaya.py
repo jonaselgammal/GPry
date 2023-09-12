@@ -37,6 +37,7 @@ info["sampler"] = {"gpry.cobaya.gprysampler": {}}
 
 info["output"] = "chains/coba"
 info["force"] = True
+info["debug"] = False
 
 from cobaya.run import run
 updated_info, sampler = run(info)
