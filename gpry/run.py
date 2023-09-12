@@ -212,7 +212,7 @@ class Runner(object):
                     checkpoint_files = check_checkpoint(checkpoint)
                     self.loaded_from_checkpoint = np.all(checkpoint_files)
                     if self.loaded_from_checkpoint:
-                        self.read_checkpoint()
+                        self.read_checkpoint(model=model)
                         # Overwrite internal parameters by those loaded from checkpoint.
                         model, gpr, gp_acquisition, convergence_criterion, options = \
                             self.model, self.gpr, self.acquisition, self.convergence, \
@@ -451,13 +451,18 @@ class Runner(object):
                 footer = default_header_footer
             self.log(max_line_length * str(footer), level=level)
 
-    def read_checkpoint(self):
+    def read_checkpoint(self, model=True):
         """
         Loads checkpoint files to be able to resume a run or save the results for
         further processing.
+
+        Parameters
+        ----------
+        model : cobaya.model.Model, optional
+            If passed, it will be used instead of the loaded one.
         """
         self.model, self.gpr, self.acquisition, self.convergence, self.options, \
-            self.progress = read_checkpoint(self.checkpoint)
+            self.progress = read_checkpoint(self.checkpoint, model=model)
 
     def save_checkpoint(self):
         """

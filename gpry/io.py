@@ -1,5 +1,5 @@
 import os
-from cobaya.model import get_model
+from cobaya.model import get_model, Model
 
 
 def _get_dill():
@@ -52,7 +52,7 @@ def check_checkpoint(path=None):
     return [os.path.exists(os.path.join(path, f)) for f in _checkpoint_filenames.values()]
 
 
-def read_checkpoint(path):
+def read_checkpoint(path, model=None):
     """
     Loads checkpoint files to be able to resume a run or save the results for
     further processing.
@@ -61,6 +61,9 @@ def read_checkpoint(path):
     ----------
     path : string
         The path where the files are located.
+
+    model : cobaya.model.Model, optional
+        If passed, it will be used instead of the loaded one.
 
     Returns
     -------
@@ -72,10 +75,15 @@ def read_checkpoint(path):
     # Check if a file exists in the checkpoint and if so resume from there.
     checkpoint_files = check_checkpoint(path)
     # Read in checkpoint
-    with open(os.path.join(path, _checkpoint_filenames["model"]), 'rb') as i:
-        model = pickle.load(i) if checkpoint_files[0] else None
-        # Convert model from dict to model object
-        model = get_model(model)
+    if model is not None and not isinstance(model, Model):
+        raise ValueError(
+            "If 'model' is not None, it must be a cobaya.model.Model instance."
+        )
+    if model is None:
+        with open(os.path.join(path, _checkpoint_filenames["model"]), 'rb') as i:
+            model = pickle.load(i) if checkpoint_files[0] else None
+            # Convert model from dict to model object
+            model = get_model(model)
     with open(os.path.join(path, _checkpoint_filenames["gpr"]), 'rb') as i:
         gpr = pickle.load(i) if checkpoint_files[1] else None
     with open(os.path.join(path, _checkpoint_filenames["acquisition"]), 'rb') as i:
