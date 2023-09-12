@@ -2,7 +2,7 @@
 import dill
 from mpi4py import MPI
 import numpy as np
-from numpy.random import SeedSequence, default_rng
+from numpy.random import SeedSequence, default_rng, Generator
 
 # Use dill pickler (can seriealize more stuff, e.g. lambdas)
 MPI.pickle.__init__(dill.dumps, dill.loads)
@@ -22,9 +22,12 @@ def get_random_state(seed=None):
     Parameters
     ----------
 
-    seed : int or numpy seed, optional (default=None)
-        A random seed to use. If none is provided a random one will be drawn.
+    seed : int or numpy seed, or numpy.random.Generator, optional (default=None)
+        A random seed to initialise a Generator, or a Generator to be used directly.
+        If none is provided a random one will be drawn.
     """
+    if isinstance(seed, Generator):
+        return seed
     if is_main_process:
         ss = SeedSequence(seed)
         child_seeds = ss.spawn(mpi_size)
