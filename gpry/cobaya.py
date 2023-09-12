@@ -103,8 +103,7 @@ class GPrySampler(Sampler):
             checkpoint=self.path_checkpoint,
             # TODO: handle resuming/overwriting properly
             load_checkpoint="overwrite",
-            # TODO: handle this, use self._rng (gpry.runner must take generator)
-            seed=None,
+            seed=self._rng,
             plots=self.plots,
             verbose=self.verbose,
         )
