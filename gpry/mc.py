@@ -168,7 +168,7 @@ def polychord_info_from_run():
 
 
 def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
-                      sampler="mcmc", options=None, add_options=None,
+                      sampler="mcmc", add_options=None,
                       output=None, run=True, resume=False, convergence=None, verbose=3):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
@@ -259,10 +259,6 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
     if "covmat" in (add_options or {}):
         covariance_matrix = add_options.pop("covmat")
         covariance_params = add_options.pop("covmat_params", None)
-    # TODO: deprecate!
-    if options is not None:
-        raise ValueError("`options` has been deprecated in favour of passing a dict via "
-                         "`sampler` (sorry!)")
     if sampler.lower() == "mcmc":
         sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix,
                                            cov_params=covariance_params, verbose=verbose)

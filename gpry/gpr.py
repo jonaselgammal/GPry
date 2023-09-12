@@ -325,20 +325,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         else:
             return self.n
 
-    # DEPRECATED ON 2022-09-70
-    @property
-    def n_total_evals(self):
-        warnings.warn("This property will soon be deprecated in favour of ``n_total``. "
-                      "Please, change your code accordingly.")
-        return self.n_total
-
-    @property
-    def n_accepted_evals(self):
-        warnings.warn("This property will soon be deprecated in favour of ``n``. "
-                      "Please, change your code accordingly.")
-        return self.n
-    # END OF DEPRECATION BLOCK
-
     @property
     def fitted(self):
         """Whether the GPR has been fitted at least once."""

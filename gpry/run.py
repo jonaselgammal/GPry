@@ -318,23 +318,7 @@ class Runner(object):
                     "No options dict found. Defaulting to standard parameters.", level=3)
                 options = {}
             self.n_initial = options.get("n_initial", 3 * self.d)
-            # DEPRECATED ON 2022-07-28
-            if "max_init" in options:
-                warnings.warn("`max_init` will soon be deprecated "
-                              "in favour of `max_initial`.")
-                options["max_initial"] = options.pop("max_init")
-            # END OF DEPRECATION BLOCK
             self.max_initial = options.get("max_initial", 10 * self.d * self.n_initial)
-            # DEPRECATED ON 2022-07-28
-            if "max_points" in options:
-                warnings.warn("`max_points` will soon be deprecated "
-                              "in favour of `max_total`.")
-                options["max_total"] = options.pop("max_points")
-            if "max_accepted" in options:
-                warnings.warn("`max_accepted` will soon be deprecated "
-                              "in favour of `max_finite`.")
-                options["max_finite"] = options.pop("max_accepted")
-            # END OF DEPRECATION BLOCK
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", min(mpi_size, self.d))
@@ -369,22 +353,13 @@ class Runner(object):
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
-            # DEPRECATED ON 2022-07-28
-            self.callback_is_single_arg = (callable(callback) and
-                                           len(getfullargspec(callback).args) == 1)
-            if self.callback is not None and not self.callback_is_single_arg:
-                warnings.warn("callback functions should from now on take the Runner "
-                              "instance as a single argument. The multiple-arguments "
-                              "definition will be deprecated in the future.")
-            # END OF DEPRECATION BLOCK
             # Print resume
             self.log("Initialized GPry.", level=3)
         if multiple_processes:
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "options", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
-                         "callback_is_single_arg", "loaded_from_checkpoint",
-                         "initial_proposer", "progress"):
+                         "loaded_from_checkpoint", "initial_proposer", "progress"):
                 share_attr(self, attr)
             self._share_gpr_from_main()
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
@@ -451,7 +426,7 @@ class Runner(object):
                 footer = default_header_footer
             self.log(max_line_length * str(footer), level=level)
 
-    def read_checkpoint(self, model=True):
+    def read_checkpoint(self, model=None):
         """
         Loads checkpoint files to be able to resume a run or save the results for
         further processing.
@@ -595,22 +570,8 @@ class Runner(object):
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
             if self.callback:
                 if self.callback_is_MPI_aware or is_main_process:
-                    # DEPRECATED ON 2022-07-28 -- remove `else` clause
-                    if self.callback_is_single_arg:
-                        args = [self]
-                    else:
-                        # TODO: not ideal: duplicates memory innecessarily
-                        acquisition = mpi_comm.bcast(
-                            self.acquisition if is_main_process else None)
-                        if not self.convergence_is_MPI_aware:
-                            convergence = mpi_comm.bcast(
-                                self.convergence if is_main_process else None)
-                        args = [self.model, self.gpr, acquisition, convergence,
-                                self.options, self.progress,
-                                self.old_gpr, self.new_X, self.new_y, self.y_pred]
-                    # END OF DEPRECATION BLOCK
                     with Timer() as timer_callback:
-                        self.callback(*args)
+                        self.callback(self)
                     if is_main_process:
                         self.log(f"[CALLBACK] ({timer_callback.time:.2g} sec) Evaluated "
                                  "the callback function.", level=3)
@@ -924,127 +885,3 @@ class Runner(object):
         else:
             plt.savefig(output)
         plt.close(fig)
-
-
-def run(model, gpr="RBF", gp_acquisition="LogExp",
-        convergence_criterion="CorrectCounter",
-        callback=None, callback_is_MPI_aware=False,
-        convergence_options=None, options={}, checkpoint=None,
-        load_checkpoint=None, verbose=3):
-    r"""
-    This function is just a wrapper which internally creates a runner instance and runs
-    the bayesian optimization loop. This function will probably be deprecated in a few
-    versions.
-
-    Parameters
-    ----------
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        Contains all information about the parameters in the likelihood and
-        their priors as well as the likelihood itself. Cobaya is only used here
-        as a wrapper to get the logposterior etc.
-
-    gpr : GaussianProcessRegressor, "RBF" or "Matern", optional (default="RBF")
-        The GP used for interpolating the posterior. If None or "RBF" is given
-        a GP with a constant kernel multiplied with an anisotropic RBF kernel
-        and dynamic bounds is generated. The same kernel with a Matern 3/2
-        kernel instead of a RBF is generated if "Matern" is passed. This might
-        be useful if the posterior is not very smooth.
-        Otherwise a custom GP regressor can be created and passed.
-
-    gp_acquisition : GPAcquisition, optional (default="LogExp")
-        The acquisition object. If None is given the LogExp acquisition
-        function is used (with the :math:`\zeta` value chosen automatically
-        depending on the dimensionality of the prior) and the GP's X-values are
-        preprocessed to be in the uniform hypercube before optimizing the
-        acquistion function.
-
-    convergence_criterion : Convergence_criterion, optional (default="KL")
-        The convergence criterion. If None is given the KL-divergence between
-        consecutive runs is calculated with an MCMC run and the run converges
-        if KL<0.02 for two consecutive steps.
-
-    convergence_options: optional parameters passed to the convergence criterion.
-
-    options : dict, optional (default=None)
-        A dict containing all options regarding the bayesian optimization loop.
-        The available options are:
-
-            * n_initial : Number of finite initial truth evaluations before starting the
-              BO loop (default: ``3*number of dimensions``)
-            * max_initial : Maximum number of truth evaluations at initialization. If it
-              is reached before `n_initial` finite points have been found, the run will
-              fail. To avoid that, try decreasing the volume of your prior
-              (default: ``10 * number of dimensions * n_initial``).
-            * n_points_per_acq : Number of points which are aquired with
-              Kriging believer for every acquisition step (default: equals the
-              number of parallel processes)
-            * max_total : Maximum number of attempted sampling points before the run
-              fails. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: ``70 * (number of dimensions)**1.5``).
-            * max_finite : Maximum number of sampling points accepted into the GP training
-              set before the run fails. This might be useful if you use the DontConverge
-              convergence criterion, specifying exactly how many points you want to have
-              in your GP. If you set this limit by hand and find that it is easily
-              saturated, try shrinking your prior boundaries (default: ``max_total``).
-
-    callback: callable, optional (default=None)
-        Function run each iteration after adapting the recently acquired points and
-        the computation of the convergence criterion. This function should take arguments
-        ``callback(runner_instance)``.
-        When running in parallel, the function is run by the main process only.
-
-    callback_is_MPI_aware: bool (default: False)
-        If True, the callback function is called for every process simultaneously, and
-        it is expected to handle parallelisation internally. If false, only the main
-        process calls it.
-
-    checkpoint : str, optional (default=None)
-        Path for storing checkpointing information from which to resume in case the
-        algorithm crashes. If None is given no checkpoint is saved.
-
-    load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
-        Whether to resume from the checkpoint files if existing ones are found
-        at the location specified by ´checkpoint´.
-
-    verbose : 1, 2, 3, optional (default: 3)
-        Level of verbosity. 3 prints Infos, Warnings and Errors, 2
-        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
-        problems arise. Is passed to the GP, Acquisition and Convergence
-        criterion if they are built automatically.
-
-    Returns
-    -------
-    model : Cobaya model
-        The model that was used to run the GP on (if running in parallel, needs to be
-        passed for all processes).
-
-    gpr : GaussianProcessRegressor
-        This can be used to call an MCMC sampler for getting marginalized
-        properties. This is the most crucial component.
-
-    gp_acquisition : GP_acquisition
-        The acquisition object that was used for the active sampling procedure.
-
-    convergence_criterion : Convergence_criterion
-        The convergence criterion used for determining convergence. Depending
-        on the criterion used this also contains the approximate covariance
-        matrix of the posterior distribution which can be used by the MCMC
-        sampler.
-
-    options : dict
-        The options dict used for the active sampling loop.
-
-    progress : Progress
-        Object containing per-iteration progress information: number of finite training
-        points, number of GP evaluations, timing of different parts of the algorithm, and
-        value of the convergence criterion.
-    """
-    runner = Runner(model, gpr=gpr, gp_acquisition=gp_acquisition,
-                    convergence_criterion=convergence_criterion, callback=callback,
-                    callback_is_MPI_aware=callback_is_MPI_aware,
-                    convergence_options=convergence_options, options=options,
-                    checkpoint=checkpoint, load_checkpoint=load_checkpoint,
-                    verbose=verbose)
-    runner.run()
-    return (runner.model, runner.gpr, runner.acquisition, runner.convergence,
-            runner.options, runner.progress)
