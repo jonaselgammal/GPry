@@ -384,7 +384,7 @@ class Runner(object):
                          "n_points_per_acq", "options", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "callback_is_single_arg", "loaded_from_checkpoint",
-                         "initial_proposer"):
+                         "initial_proposer", "progress"):
                 share_attr(self, attr)
             self._share_gpr_from_main()
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
