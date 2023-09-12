@@ -3,6 +3,7 @@ Interface for Cobaya: wrapper using the Cobaya.sampler.Sampler class.
 """
 
 import os
+import re
 import logging
 from tempfile import gettempdir
 
@@ -71,6 +72,7 @@ class GPrySampler(Sampler):
 
     # Other options
     _gpry_output_dir = "gpry_output"
+    _surrogate_suffix = "gpr"
 
     def initialize(self):
         """
@@ -89,6 +91,7 @@ class GPrySampler(Sampler):
         # Prepare output
         self.path_checkpoint = self.get_base_dir(self.output)
         self.mc_sample = None
+        self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
         # Initialize the runner
         self.gpry_runner = Runner(
             model=self.model,
@@ -101,8 +104,7 @@ class GPrySampler(Sampler):
             options=self.options,
             initial_proposer=self.initial_proposer,
             checkpoint=self.path_checkpoint,
-            # TODO: handle resuming/overwriting properly
-            load_checkpoint="overwrite",
+            load_checkpoint=self.output_strategy,
             seed=self._rng,
             plots=self.plots,
             verbose=self.verbose,
@@ -113,18 +115,20 @@ class GPrySampler(Sampler):
         Gets the initial training points and starts the acquistion loop.
         """
         self.gpry_runner.run()
+        self.do_surrogate_sample(resume=self.output.is_resuming())
+
+    def do_surrogate_sample(self, resume=False):
         if self.output:
-            # TODO: do not overwrite updated.yaml if writing to root folder of sample!
             output_path = os.path.realpath(
-                os.path.join(self.path_checkpoint, "..", self.output.prefix)
+                os.path.join(self.path_checkpoint, "..", self.surrogate_prefix)
             )
         else:
             output_path = os.path.realpath(
-                os.path.join(self.path_checkpoint, self.output.prefix)
+                os.path.join(self.path_checkpoint, self.surrogate_prefix)
             )
         # TODO: option to re-do final sample
         self.mc_sample = self.gpry_runner.generate_mc_sample(
-            sampler=self.mc_sampler, output=output_path, resume=False
+            sampler=self.mc_sampler, output=output_path, resume=resume
         )
 
     def products(
@@ -143,8 +147,38 @@ class GPrySampler(Sampler):
             "sample": self.mc_sample,
         }
 
+    @property
+    def surrogate_prefix(self):
+        """
+        Prefix for the MC sample of the surrogate model.
+        """
+        return self.output.prefix + ("_" if self.output else "") + self._surrogate_suffix
+
     @classmethod
     def get_base_dir(cls, output):
         if output:
             return output.add_suffix(cls._gpry_output_dir, separator="_")
         return os.path.join(gettempdir(), cls._gpry_output_dir)
+
+    @classmethod
+    def output_files_regexps(cls, output, info=None, minimal=False):
+        """
+        Returns a list of tuples `(regexp, root)` of output files potentially produced.
+        If `root` in the tuple is `None`, `output.folder` is used.
+
+        If `minimal=True`, returns regexp's for the files that should really not be there
+        when we are not resuming.
+        """
+        # GPry checkpoint files
+        regexps_tuples = [
+            (re.compile(re.escape(name + ".pkl")), cls.get_base_dir(output))
+            for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
+        ]
+        if minimal:
+            return regexps_tuples
+        return regexps_tuples + [
+            # Raw products base dir
+            (None, cls.get_base_dir(output)),
+            # Main sample
+            (output.collection_regexp(name=None), None),
+        ]
