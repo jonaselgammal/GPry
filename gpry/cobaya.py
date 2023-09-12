@@ -118,6 +118,10 @@ class GPrySampler(Sampler):
         self.do_surrogate_sample(resume=self.output.is_resuming())
 
     def do_surrogate_sample(self, resume=False):
+        """
+        Perform an MC sample of the surrogate model. Can be called by hand if the initial
+        one did not converge.
+        """
         if self.output:
             output_path = os.path.realpath(
                 os.path.join(self.path_checkpoint, "..", self.surrogate_prefix)
@@ -126,7 +130,6 @@ class GPrySampler(Sampler):
             output_path = os.path.realpath(
                 os.path.join(self.path_checkpoint, self.surrogate_prefix)
             )
-        # TODO: option to re-do final sample
         self.mc_sample = self.gpry_runner.generate_mc_sample(
             sampler=self.mc_sampler, output=output_path, resume=resume
         )
