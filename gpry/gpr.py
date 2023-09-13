@@ -1111,3 +1111,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 raise ValueError("Unknown optimizer %s." % self.optimizer)
 
         return theta_opt, func_min
+
+    def _kernel_inverse(self, kernel):
+        """ Compute inverse of the kernel and store relevant quantities"""
+        try:
+            self.L_ = cholesky(kernel, lower=True)
+            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]),lower=True)
+        except np.linalg.LinAlgError as exc:
+            exc.args = ("The kernel, %s, is not returning a "
+                        "positive definite matrix. Try gradually "
+                        "increasing the 'noise_level' parameter of your "
+                        "GaussianProcessRegressor estimator."
+                        % self.kernel_) + exc.args
+            raise
+        self.alpha_ = cho_solve((self.L_, True), self.y_train_)

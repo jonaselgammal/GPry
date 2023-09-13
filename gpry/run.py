@@ -183,6 +183,7 @@ class Runner():
                  # DEPRECATED ON 13-09-2023:
                  convergence_options=None,
                  ):
+        self.verbose = verbose
         if model is None:
             if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
                 raise ValueError(
@@ -198,13 +199,13 @@ class Runner():
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
             if is_main_process:
-                create_path(self.checkpoint, verbose=verbose >= 3)
+                create_path(self.checkpoint, verbose=self.verbose >= 3)
                 if plots:
-                    create_path(self.plots_path, verbose=verbose >= 3)
+                    create_path(self.plots_path, verbose=self.verbose >= 3)
         else:
             self.plots_path = _plots_path
             if plots and is_main_process:
-                create_path(self.plots_path, verbose=verbose >= 3)
+                create_path(self.plots_path, verbose=self.verbose >= 3)
         self.plots = plots
         self.ensure_paths(plots=self.plots)
         self.random_state = get_random_state(seed)
@@ -321,6 +322,8 @@ class Runner():
                 raise ValueError("The maximum number of initial truth evaluations needs "
                                  "to be smaller than the maximum total number of "
                                  "evaluations.")
+            # Diagnosis
+            self.diagnosis = options.get("diagnosis", None)
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
@@ -354,6 +357,7 @@ class Runner():
         self.has_run = False
         self.has_converged = False
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
+        self.mean, self.cov = None, None
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -901,7 +905,7 @@ class Runner():
         """
         if not is_main_process:
             return
-	self.ensure_paths(plots=True)
+        self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=False, save=os.path.join(self.plots_path, "timing.svg"))
@@ -1063,7 +1067,7 @@ class Runner():
         """
         if not is_main_process:
             return
-         self.ensure_paths(plots=True)
+        self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         mean = sampler.products()["sample"].mean()
         covmat = sampler.products()["sample"].cov()

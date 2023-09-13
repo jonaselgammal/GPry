@@ -29,6 +29,7 @@ setup(
         'Source': 'https://github.com/jonaselgammal/GPry',
         },
     packages=['gpry'],
+    package_data={'gpry': ["CobayaSampler.yaml"]},
     classifiers=[
         'Development Status :: 4 - Beta',
         'Operating System :: OS Independent',
