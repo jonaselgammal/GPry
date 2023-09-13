@@ -39,5 +39,10 @@ info["output"] = "chains/coba"
 info["force"] = True
 info["debug"] = False
 
-from cobaya.run import run
-updated_info, sampler = run(info)
+def test_cobaya():
+    from cobaya.run import run
+    updated_info, sampler = run(info)
+
+
+if __name__ == "__main__":
+    test_cobaya()

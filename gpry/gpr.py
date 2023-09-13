@@ -2,6 +2,7 @@
 import warnings
 from copy import deepcopy
 from operator import itemgetter
+from typing import Mapping
 
 # numpy and scipy
 import numpy as np
@@ -44,17 +45,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Parameters
     ----------
-    kernel : kernel object, optional (default: "RBF")
+    kernel : kernel object, string, dict, optional (default: "RBF")
         The kernel specifying the covariance function of the GP. If
         "RBF"/"Matern" is passed, the asymmetric kernel::
 
-            ConstantKernel(1, [0.001, 10000]) * RBF/Matern([0.01]*n_dim, "dynamic")
+            ConstantKernel() * RBF/Matern()
 
         is used as default where ``n_dim`` is the number of dimensions of the
         training space. In this case you will have to provide the prior bounds
         as the ``bounds`` parameter to the GP. For the Matern kernel
-        :math:`\nu=3/2`. Note that the kernel's hyperparameters are optimized
-        during fitting.
+        :math:`\nu=3/2`. To pass different arguments to the kernel, e.g. ``nu=5/2``
+        for Matern, pass a single-key dict as ``{"Matern": {"nu": 2.5}}"``. Note
+        that the kernel's hyperparameters are optimized during fitting.
 
     noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
@@ -234,9 +236,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         # Auto-construct inbuilt kernels
         if isinstance(kernel, str):
+            kernel = {kernel: {}}
+        if isinstance(kernel, Mapping):
+            if len(kernel) != 1:
+                raise ValueError("'kernel' must be a single-key dict.")
+            kernel_name = list(kernel)[0]
+            kernel_args = kernel[kernel_name] or {}
             if self.bounds is None:
                 raise ValueError("You selected used the automatically "
-                                 f"constructed '{kernel}' kernel without "
+                                 f"constructed '{kernel_name}' kernel without "
                                  "specifying prior bounds.")
             # Transform prior bounds if neccessary
             if self.preprocessing_X is not None:
@@ -244,18 +252,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             else:
                 self.bounds_ = self.bounds
             # Check if it's a supported kernel
-            if kernel not in ["RBF", "Matern"]:
-                raise ValueError("Currently only 'RBF' and 'Matern' are "
-                                 f"supported as standard kernels. Got {kernel}")
+            try:
+                length_corr_kernel = {"rbf": RBF, "matern": Matern}[kernel_name.lower()]
+            except KeyError as excpt:
+                raise ValueError(
+                    "Currently only 'RBF' and 'Matern' are "
+                    f"supported as standard kernels. Got '{kernel_name}'."
+                ) from excpt
             # Build kernel
-            elif kernel == "RBF":
-                kernel = C(1.0, [0.001, 10000]) \
-                    * RBF([0.01] * self.d, "dynamic",
-                          prior_bounds=self.bounds_)
-            elif kernel == "Matern":
-                kernel = C(1.0, [0.001, 10000]) \
-                    * Matern([0.01] * self.d, "dynamic",
-                             prior_bounds=self.bounds_)
+            kernel = C(1.0, [0.001, 10000]) \
+                * length_corr_kernel([0.01] * self.d, "dynamic",
+                                     prior_bounds=self.bounds_, **kernel_args)
 
         super(GaussianProcessRegressor, self).__init__(
             kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
@@ -266,18 +273,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
-            print("Kernel:")
-            if kernel == "RBF":
-                # TODO: fix this!
-                print("ConstantKernel(1, [0.001, 10000])"
-                      " * RBF([0.01]*n_dim, 'dynamic')")
-            else:
-                print(self.kernel.hyperparameters)
-            print("Optimizer restarts: %i" % n_restarts_optimizer)
-            print("X-preprocessor: %s" % (preprocessing_X is not None))
-            print("y-preprocessor: %s" % (preprocessing_y is not None))
-            print("SVM to account for infinities: %s"
-                  % (account_for_inf is not None))
+            print("* Kernel:")
+            print("   ", self.kernel)
+            print("  with hyperparameters:")
+            for h in self.kernel.hyperparameters:
+                print("    -", h)
+            print(f"* Noise level: {noise_level}")
+            print(f"* Optimizer: {optimizer}")
+            print(f"* Optimizer restarts: {n_restarts_optimizer}")
+            print(f"* X-preprocessor: {preprocessing_X is not None}")
+            print(f"* y-preprocessor: {preprocessing_y is not None}")
+            print(f"* SVM to account for infinities: {bool(account_for_inf)}")
 
     @property
     def d(self):

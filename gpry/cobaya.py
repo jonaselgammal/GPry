@@ -15,6 +15,7 @@ from tempfile import gettempdir
 from inspect import cleandoc
 
 from cobaya.sampler import Sampler
+from cobaya.log import LoggedError
 
 from gpry.run import Runner
 
@@ -45,22 +46,28 @@ class CobayaSampler(Sampler):
         self.mc_sample = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
         # Initialize the runner
-        self.gpry_runner = Runner(
-            model=self.model,
-            gpr=self.gpr,
-            gp_acquisition=self.gp_acquisition,
-            convergence_criterion=self.convergence_criterion,
-            callback=self.callback,
-            callback_is_MPI_aware=self.callback_is_MPI_aware,
-            convergence_options=self.convergence_options,
-            options=self.options,
-            initial_proposer=self.initial_proposer,
-            checkpoint=self.path_checkpoint,
-            load_checkpoint=self.output_strategy,
-            seed=self._rng,
-            plots=self.plots,
-            verbose=self.verbose,
-        )
+        try:
+            self.gpry_runner = Runner(
+                model=self.model,
+                gpr=self.gpr,
+                gp_acquisition=self.gp_acquisition,
+                convergence_criterion=self.convergence_criterion,
+                callback=self.callback,
+                callback_is_MPI_aware=self.callback_is_MPI_aware,
+                convergence_options=self.convergence_options,
+                options=self.options,
+                initial_proposer=self.initial_proposer,
+                checkpoint=self.path_checkpoint,
+                load_checkpoint=self.output_strategy,
+                seed=self._rng,
+                plots=self.plots,
+                verbose=self.verbose,
+            )
+        except (ValueError, TypeError) as excpt:
+            raise LoggedError(
+                self.log,
+                f"Error when initializing GPry: {str(excpt)}"
+            ) from excpt
 
     def run(self):
         """

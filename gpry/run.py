@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 from copy import deepcopy
 from inspect import getfullargspec
+from typing import Mapping
 
 from cobaya.model import Model
 
@@ -48,13 +49,14 @@ class Runner(object):
         ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
         be ignored) if a Cobaya ``Model`` instance is passed as ``model``.
 
-    gpr : GaussianProcessRegressor, "RBF" or "Matern", optional (default="RBF")
+    gpr : GaussianProcessRegressor, str, dict, optional (default="RBF")
         The GP used for interpolating the posterior. If None or "RBF" is given
         a GP with a constant kernel multiplied with an anisotropic RBF kernel
         and dynamic bounds is generated. The same kernel with a Matern 3/2
         kernel instead of a RBF is generated if "Matern" is passed. This might
-        be useful if the posterior is not very smooth.
-        Otherwise a custom GP regressor can be created and passed.
+        be useful if the posterior is not very smooth. Otherwise a custom GP regressor can
+        be defined as a dict containing the arguments of ``GaussianProcessRegressor``, or
+        passing an already initialized instance.
 
     gp_acquisition : GPAcquisition, optional (default="LogExp")
         The acquisition object. If None is given the LogExp acquisition
@@ -260,24 +262,33 @@ class Runner(object):
                 self.initial_proposer = initial_proposer
 
             # Construct GP if it's not already constructed
-            if isinstance(gpr, str):
-                if gpr not in ["RBF", "Matern"]:
-                    raise ValueError("Supported standard kernels are 'RBF' "
-                                     f"and Matern, got {gpr}")
-                self.gpr = GaussianProcessRegressor(
-                    kernel=gpr,
-                    n_restarts_optimizer=10 + 2 * self.d,
-                    preprocessing_X=Normalize_bounds(prior_bounds),
-                    preprocessing_y=Normalize_y(),
-                    bounds=prior_bounds,
-                    verbose=verbose,
-                    random_state=self.random_state
-                )
-            elif not isinstance(gpr, GaussianProcessRegressor):
-                raise TypeError("gpr should be a GP regressor, 'RBF' or 'Matern'"
-                                f", got {gpr}")
-            else:
+            if isinstance(gpr, GaussianProcessRegressor):
                 self.gpr = gpr
+            elif isinstance(gpr, Mapping) or isinstance(gpr, str):
+                if isinstance(gpr, str):
+                    gpr = {"kernel": gpr}
+                gpr_defaults = {
+                    "kernel": "RBF",
+                    "n_restarts_optimizer": 10 + 2 * self.d,
+                    "preprocessing_X": Normalize_bounds(prior_bounds),
+                    "preprocessing_y": Normalize_y(),
+                    "bounds": prior_bounds,
+                    "random_state": self.random_state,
+                    "verbose": self.verbose,
+                }
+                for k, value in gpr_defaults.items():
+                    if gpr.get(k) is None:
+                        gpr[k] = value
+                try:
+                    self.gpr = GaussianProcessRegressor(**gpr)
+                except ValueError as excpt:
+                    raise ValueError(
+                        f"Error when initializing the GP regressor: {str(excpt)}"
+                    ) from excpt
+            else:
+                raise TypeError(
+                    "'gpr' should be a GP regressor, a dict of arguments for the GPR, "
+                    "or s string specifying the kernel ('RBF' or 'Matern'), got {gpr}")
             # Construct the acquisition object if it's not already constructed
             if isinstance(gp_acquisition, str):
                 if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
