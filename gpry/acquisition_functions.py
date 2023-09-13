@@ -971,24 +971,23 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
             else:
                 mu, std = gp.predict(X, return_std=True)
 
-        noise_var = gp.alpha
         if self.sigma_n is None:
             sigma_n = gp.noise_level
             if isinstance(sigma_n, Iterable):
-                noise_var += np.mean(sigma_n)**2
+                noise_var = np.mean(sigma_n)
             else:
-                noise_var += sigma_n**2
+                noise_var = sigma_n
         else:
-            noise_var = self.sigma_n**2
+            noise_var = self.sigma_n
         zeta = self.zeta
-        var = std**2 - noise_var
+        var = std**2 - noise_var**2.
         mask = (var > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
         baseline = gp.y_max
         # Alternative option, but found not to work extremely well
         # baseline = gp.preprocessing_y.inverse_transform([0])[0]
         if np.any(mask):
-            values[mask] = self.f(mu[mask] - baseline, np.sqrt(var[mask]), zeta)
+            values[mask] = self.f(mu[mask], std[mask], baseline, noise_var, zeta)
         if np.any(~mask):
             values[~mask] = - np.inf
         if eval_gradient:
@@ -1010,7 +1009,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
             return values
 
     def __repr__(self):
-        return "{0:.3f}".format(self.zeta)
+        return str(self.__class__) + "with zeta={0:.3f}".format(self.zeta)
 
 
 class LogExp(BaseLogExp):
@@ -1067,9 +1066,9 @@ class LogExp(BaseLogExp):
     """
 
     @staticmethod
-    def f(mu, std, zeta):
+    def f(mu, std, baseline, noise_level, zeta):
         """Linearized exponentiated log-error bar."""
-        return 2 * zeta * mu + np.log(std)
+        return 2 * zeta * (mu - baseline) + np.log(np.sqrt(np.clip(std**2.-noise_level**2., 0., None)))
 
 
 # UNUSED
@@ -1121,9 +1120,9 @@ class NonlinearLogExp(BaseLogExp):
     """
 
     @staticmethod
-    def f(mu, std, zeta):
+    def f(mu, std, baseline, noise_level, zeta):
         """Exponentiated log-error bar"""
-        return 2 * zeta * mu + _safe_log_expm1(std)
+        return 2 * zeta * (mu - baseline) + _safe_log_expm1(np.sqrt(np.clip(std**2.-noise_level**2., 0., None)))
 
 
 # Function for determining whether an object is an acquisition function

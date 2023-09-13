@@ -482,6 +482,9 @@ class CorrectCounter(ConvergenceCriterion):
         max_diff = 0
         max_thres = 0
         for yn, yl in zip(new_y, pred_y):
+            # Remove warning case that does not trigger any condition below
+            if yn == -np.inf:
+                continue
             # rel_difference = np.abs((yl - gp.y_max) / (yn - gp.y_max) - 1.)
             diff = np.abs(yl - yn)
             thres = np.abs(yn - gp.y_max) * self.reltol + self.abstol

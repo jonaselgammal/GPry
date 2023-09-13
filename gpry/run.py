@@ -206,7 +206,7 @@ class Runner():
             if plots and is_main_process:
                 create_path(self.plots_path, verbose=verbose >= 3)
         self.plots = plots
-        self.verbose = verbose
+        self.ensure_paths(plots=self.plots)
         self.random_state = get_random_state(seed)
         if is_main_process:
             self.options = options or {}
@@ -300,7 +300,8 @@ class Runner():
                          "the feature space. This may lead to slow convergence."
                          "Consider running it with less cores or decreasing "
                          "n_points_per_acq manually.", level=2)
-            elif self.n_points_per_acq < mpi_size:
+            elif (self.n_points_per_acq < mpi_size and self.n_points_per_acq < mpi_size and
+                  self.n_points_per_acq < self.d):
                 self.log("Warning: parallellisation not fully utilised! It is advised to "
                          "make ``n_points_per_acq`` equal to the number of MPI processes "
                          "(default when not specified).", level=2)
@@ -329,7 +330,8 @@ class Runner():
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "options", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
-                         "loaded_from_checkpoint", "initial_proposer", "progress"):
+                         "loaded_from_checkpoint", "initial_proposer", "progress",
+                         "diagnosis"):
                 share_attr(self, attr)
             self._share_gpr_from_main()
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
@@ -511,6 +513,16 @@ class Runner():
         if level is None or level <= self.verbose:
             print(msg)
 
+    def ensure_paths(self, plots=True):
+        """
+        Creates paths for checkpoint and plots.
+        """
+        if is_main_process:
+            if self.checkpoint:
+                create_path(self.checkpoint, verbose=self.verbose >= 3)
+            if plots:
+                create_path(self.plots_path, verbose=self.verbose >= 3)
+
     @property
     def n_total_left(self):
         """Number of truth evaluations before stopping."""
@@ -615,6 +627,7 @@ class Runner():
             self.old_gpr = deepcopy(self.gpr)
             self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
             # Acquire new points in parallel
+            sync_processes()  # to sync the timer
             with TimerCounter(self.gpr) as timer_acq:
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
                     self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state)
@@ -625,11 +638,11 @@ class Runner():
                 self.log("New location(s) proposed, as [X, logp_gp(X), acq(X)]:", level=4)
                 for X, y, acq in zip(new_X, y_pred, acq_vals):
                     self.log(f"   {X} {y} {acq}", level=4)
-            sync_processes()
             # Get logposterior value(s) for the acquired points (in parallel)
             new_X_this_process = new_X[
                 i_evals_this_process: i_evals_this_process + n_evals_this_process]
             new_y_this_process = np.empty(0)
+            sync_processes()  # to sync the timer
             with Timer() as timer_truth:
                 for x in new_X_this_process:
                     self.log(f"[{mpi_rank}] Evaluating true posterior at {x}", level=4)
@@ -660,22 +673,29 @@ class Runner():
             sync_processes()
             # Add the newly evaluated truths to the GPR, and maye refit hyperparameters
             if is_main_process:
-                do_simplified_fit = (
-                    self.current_iteration % self.fit_full_every !=
-                    self.fit_full_every - 1
-                )
+                kwargs_append = {}
+                kwargs_append["simplified_fit"] = \
+                    (self.current_iteration % self.fit_full_every !=
+                     self.fit_full_every - 1)
+                if self.cov is not None:
+                    stds = np.sqrt(np.diag(self.cov))
+                    prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
+                    relative_stds = stds / (prior_bounds[:, 1] - prior_bounds[:, 0])
+                    new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
+                    kwargs_append["hyperparameter_bounds"] = self.gpr.kernel_.bounds.copy()
+                    kwargs_append["hyperparameter_bounds"][1:] = np.log(new_bounds)
                 with TimerCounter(self.gpr) as timer_fit:
                     self.gpr.append_to_data(new_X, new_y,
-                                            fit=True, simplified_fit=do_simplified_fit)
+                                            fit=True, **kwargs_append)
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             if is_main_process:
-                hyperparams_or_not = "*not* " if do_simplified_fit else ""
+                hyperparams_or_not = "*not* " if kwargs_append["simplified_fit"] else ""
                 self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new "
                          "acquired points, "
                          f"{hyperparams_or_not}including GPR hyperparameters. "
-                         f"{self.gpr.n_last_appended_finite} finite points were added to "
+                         f"{(self.gpr.n_last_appended_finite if sum(np.isfinite(new_y)) else 0)} finite points were added to "
                          "the GPR.", level=3)
-                self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
+                self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=2)
             self._share_gpr_from_main()
             sync_processes()
             # share new_X, new_y and y_pred to the runner instance
@@ -731,11 +751,14 @@ class Runner():
                          f"{self.convergence.last_value:.2g} (limit "
                          f"{self.convergence.thres[-1]:.2g}).", level=3)
             sync_processes()
+            # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
+            # self.update_mean_cov()
             self.progress.mpi_sync()
             self.save_checkpoint()
             if is_main_process and self.plots:
                 self.plot_progress()
         else:  # check "while" ending condition
+            sync_processes()
             if is_main_process:
                 lines = "Finished!\n"
                 if self.has_converged:
@@ -747,6 +770,8 @@ class Runner():
                     lines += ("- The maximum number of finite truth evaluations "
                               f"({self.max_finite}) has been reached.")
                 self.banner(lines)
+            if self.diagnosis:
+                self.diagnose()
         self.has_run = True
 
     def do_initial_training(self):
@@ -792,6 +817,7 @@ class Runner():
             np.ceil(self.max_initial / n_to_sample_per_process))
         # Initial samples loop. The initial samples are drawn from the prior
         # and according to the distribution of the prior.
+        sync_processes()  # to sync the timer
         with Timer() as timer_truth:
             for i in range(n_iterations_before_giving_up):
                 X_init_loop = np.empty((0, self.d))
@@ -856,12 +882,26 @@ class Runner():
         self._share_gpr_from_main()
         self.progress.mpi_sync()
 
+    def update_mean_cov(self):
+        """
+        Updates and shares mean and cov if available, checking GPAcquisition first, and
+        Convergence second if not present in GPAcquisition.
+        """
+        for attr in ["mean", "cov"]:
+            if is_main_process:
+                value = getattr(self.acquisition, attr, None)
+                if value is None:
+                    value = getattr(self.convergence, attr, None)
+                setattr(self, attr, value)
+            share_attr(self, attr)
+
     def plot_progress(self):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
         if not is_main_process:
             return
+	self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=False, save=os.path.join(self.plots_path, "timing.svg"))
@@ -915,9 +955,39 @@ class Runner():
                                  add_options=add_options, resume=resume,
                                  verbose=self.verbose)
 
+    def diagnose(self):
+        if is_main_process:
+            lines = "Starting diagnosis\n"
+            lines += "- Evaluating corners"
+            self.log(lines)
+            bounds = self.model.prior.bounds()
+            ndim = len(bounds)
+            mesh = np.meshgrid(*bounds)
+            corners = np.stack(mesh, axis=-1).reshape(-1, ndim)
+            # Evaluate GP at all corners
+            vals_in_corners = self.gpr.predict(corners, validate=False)
+            # Check if at any point it's overshooting
+            higher_than_max = vals_in_corners > self.gpr.y_max
+            if np.sum(higher_than_max) > 0:
+                lines = f"WARNING: found {np.sum(higher_than_max)} corners\n"
+                lines += "where the GP predicts a higher value than its\n"
+                lines += "maximum. Reevaluating those corners..."
+                self.log(lines)
+                # Filter the points where the high values are predicted and
+                # evaluate the posterior distribution there
+                points_to_evaluate = np.atleast_2d(corners[higher_than_max])
+                new_vals = np.empty(len(points_to_evaluate))
+                for i, p in enumerate(points_to_evaluate):
+                    new_vals[i] = self.model.logpost(p)
+                    self.gpr.append_to_data(points_to_evaluate, new_vals,
+                            fit=True)
+                self._share_gpr_from_main()
+                # self.save_checkpoint()
+                self.log("...done.")
+
     # pylint: disable=import-outside-toplevel
-    def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
-        output=None):
+    def plot_mc(self, surr_info_or_sample_folder, sampler=None, add_training=True,
+                add_samples=None, output=None):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.
@@ -936,7 +1006,7 @@ class Runner():
             Whether the training locations are plotted on top of the contours.
 
         add_samples : dict(label, getdist.MCSamples), optional (default=None)
-            Whether the training locations are plotted on top of the contours.
+            Extra getdist.MCSamples objects to be added to the plot.
 
         output : str or os.path, optional (default=None)
             The location to save the generated plot in. If ``None`` it will be saved in
@@ -945,11 +1015,19 @@ class Runner():
         """
         if not is_main_process:
             return None
-        from getdist.mcsamples import MCSamplesFromCobaya
+        self.ensure_paths(plots=True)
+        if isinstance(surr_info_or_sample_folder, str):
+            root = os.path.abspath(surr_info_or_sample_folder)
+            if os.path.isdir(root):
+                root += "/"  # to force GetDist to treat it as folder, not prefix
+            from getdist.mcsamples import loadMCSamples
+            gdsamples_gp = loadMCSamples(root)
+        else:  # passed surr_info, sampler
+            gdsamples_gp = sampler.products(
+                to_getdist=True, combined=True, skip_samples=0.33)["sample"]
         import getdist.plots as gdplt
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
-        gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
         gdplot = gdplt.get_subplot_plotter(width_inch=5)
         to_plot = [gdsamples_gp]
         if add_samples:
@@ -985,6 +1063,7 @@ class Runner():
         """
         if not is_main_process:
             return
+         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         mean = sampler.products()["sample"].mean()
         covmat = sampler.products()["sample"].cov()

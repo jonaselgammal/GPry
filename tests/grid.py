@@ -1,7 +1,8 @@
 """
 Script to generate grids of gaussian models for different input parameter values.
 
-Run with arguments [dim N] to generate N runs per parameter value with dimension dim.
+Run with arguments [dim N path] to generate N runs per parameter value with dimension dim,
+and save the results in `path`.
 
 Run with "plot" as a single argument to plot the results of a run.
 

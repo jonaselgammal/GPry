@@ -148,11 +148,14 @@ class Ring(Model_generator):
                 self.offset*x_0, loc=self.mean_radius, scale=self.std)
         info = {"likelihood": {"ring": {
             "external":ring, "input_params": self.input_params}}}
-        lower = self.mean_radius - self.prior_size_in_std*self.std
-        upper = self.mean_radius + self.prior_size_in_std*self.std
+        lower_x_0 = self.offset - self.mean_radius - self.prior_size_in_std*self.std
+        upper_x_0 = self.offset + self.mean_radius + self.prior_size_in_std*self.std
+        lower_x_1 = -1*self.mean_radius - self.prior_size_in_std*self.std
+        upper_x_1 = self.mean_radius + self.prior_size_in_std*self.std
+        bounds = np.array([[lower_x_0, upper_x_0], [lower_x_1, upper_x_1]])
         info["params"] = {}
         for k, p in enumerate(self.input_params):
-            info["params"][p] = {"prior": {"min": lower, "max": upper}}
+            info["params"][p] = {"prior": {"min": bounds[k, 0], "max": bounds[k, 1]}}
         model = get_model(info)
         return model
 

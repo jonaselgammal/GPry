@@ -28,6 +28,32 @@ def kl_norm(mean_0, cov_0, mean_1, cov_1):
                   (mean_1 - mean_0).T @ cov_1_inv @ (mean_1 - mean_0))
 
 
+def kl_mc(X, logq_func, logp=None, logp_func=None, weight=None):
+    """
+    Computes KL(P||Q) divergence using Monte Carlo samples X of P, and the logpdf of Q.
+
+    All functions assumed vectorised.
+
+    The logpdf's must be both normalised, or with the same off-normalisation factor, e.g.
+    different normalised likelihods with the same prior which is much larger than the
+    mode.
+    """
+    if logp is None and logp_func is None:
+        raise ValueError("Needs either logp at X, or a logp(X) function.")
+    if logp is None:
+        logp = logp_func(X)
+    mask = np.isfinite(logp)
+    logp = logp[mask]
+    logq_at_X = logq_func(X[mask])
+    if weight is None:
+        weight = np.ones(len(logp))
+        total_weight = len(logp)
+    else:
+        weight = weight[mask]
+        total_weight = np.sum(weight)
+    return np.dot(weight, logp - logq_at_X) / total_weight
+
+
 def is_valid_covmat(covmat):
     """Returns True for a Real, positive-definite, symmetric matrix."""
     try:

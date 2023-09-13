@@ -323,6 +323,7 @@ class SVM(SVC):
             raise ValueError("All values that have been passed are infinite. "
                              "This cannot be tolerated as it breaks the GP.")
         else:
+            self.all_finite = False
             super().fit(self.X_train_, self.finite)
         return self.finite
 
@@ -333,7 +334,7 @@ class SVM(SVC):
         threshold = self.threshold_preprocessed if y_is_preprocessed else self.threshold
         return np.logical_and(np.isfinite(y), y - np.max(y) > threshold)
 
-    def predict(self, X):
+    def predict(self, X, validate=True):
         """
         Wrapper for the predict method of the SVM which does the preprocessing.
         Returns a boolean array which is true at locations where the SVM
@@ -350,6 +351,11 @@ class SVM(SVC):
         A boolean array which is True at locations predicted finite posterior
         and False at locations with predicted infinite posterior.
 
+        Raises
+        ------
+        ValueError: "ndarray is not C-contiguous"
+           May be raised if ``validate`` is False. Call ``numpy.ascontiguousarray()`` on
+           the input before the call.
         """
         # Check if all training values were finite, then just return one for
         # every value
@@ -358,7 +364,11 @@ class SVM(SVC):
         # preprocess to the right dimensions if neccessary
         if self.preprocessing_X is not None:
             X = self.preprocessing_X.transform(X)
-        return super().predict(X)
+        if validate:
+            return super().predict(X)
+        else:  # valid for our use only (dense, 2 classes), when input is guaranteed valid
+            y = self._dense_predict(X)
+            return self.classes_.take(np.asarray(y, dtype=np.intp))
 
     @property
     def threshold(self):

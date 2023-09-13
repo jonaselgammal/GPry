@@ -44,7 +44,6 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
 
     Parameters
     ----------
-
     n : int
         The number of atomic tasks
     n_proc : int, optional (default=number of MPI comm's)
@@ -52,7 +51,6 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
 
     Returns
     -------
-
     An array with the number of tasks corresponding each process.
     """
     n_rounded_to_nproc = int(np.ceil(n / n_proc)) * n_proc
@@ -64,17 +62,17 @@ def split_number_for_parallel_processes(n, n_proc=mpi_size):
 
 def multi_gather_array(arrs):
     """
-    Gathers (possibly a list of) arrays from all processes into the main process
+    Gathers (possibly a list of) arrays from all processes into the main process.
+
+    NB: mpi-gather guarantees rank order is preserved.
 
     Parameters
     ----------
-
     arrs : array-like
         The arrays to gather
 
     Returns
     -------
-
     The gathered array(s) from all processes
     """
     if not isinstance(arrs, (list, tuple)):

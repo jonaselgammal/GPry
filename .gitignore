@@ -144,3 +144,6 @@ tests/files/*
 
 # emacs backups
 *~
+
+# profiling
+*.prof
