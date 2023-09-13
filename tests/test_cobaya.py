@@ -33,7 +33,7 @@ info["params"]["r"] = {"derived": get_r}
 info["params"]["theta"] = {"derived": get_theta,
                            "latex": r"\theta", "min": 0, "max": np.pi/2}
 
-info["sampler"] = {"gpry.cobaya.gprysampler": {}}
+info["sampler"] = {"gpry.CobayaSampler": {}}
 
 info["output"] = "chains/coba"
 info["force"] = True

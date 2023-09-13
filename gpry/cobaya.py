@@ -1,5 +1,11 @@
 """
 Interface for Cobaya: wrapper using the Cobaya.sampler.Sampler class.
+
+To use with Cobaya, once GPry has been installed with pip, add it to the sampler block
+as ``gpry.CobayaSampler`.
+
+For input arguments and options, see ``CobayaSampler.yaml`` in this folder, or run
+``cobaya-doc gpry.CobayaSampler`` in a shell.
 """
 
 import os
@@ -12,64 +18,9 @@ from cobaya.sampler import Sampler
 
 from gpry.run import Runner
 
-class GPrySampler(Sampler):
-    # The GP used for interpolating the posterior.
-    gpr = "RBF"  # or Matern, or GaussianProcessRegressor instance
-    # TODO: option for kernel args
 
-    # Acquisition class. Can pass an instance too
-    gp_acquisition = "LogExp"
-    # TODO: acquisition object args (e.g. zeta)
-
-    # Proposer used for drawing the initial training samples before running the aquisition
-    # loop. Can pass instance too.
-    initial_proposer = "reference"  # or prior, or uniform (within prior bounds)
-    # TODO: initial proposer args
-
-    # The convergence criterion. Can pass instance too
-    convergence_criterion = "CorrectCounter"
-
-    # Convergence criterion args
-    convergence_options = None
-    # TODO: maybe rename to _args
-
-    # Options regarding the bayesian optimization loop.
-    options = {
-        # Number of inite initial truth evaluations before starting the acq loop.
-        ## "n_initial": None,  # default: 3 times the dimensionality.
-        # Maximum number of truth evaluations at initialization. If it
-        # is reached before `n_initial` finite points have been found, the run will fail.
-        ##"max_initial": None,  # default: 10 times the dimensionality times n_initial
-        # Number of points aquired with Kriging believer at every acquisition step
-        ##"n_points_per_acq": None,  # default: number of parallel MPI processes
-        # Maximum number of attempted sampling points before the run fails.
-        ##"max_total": None,  # default: 70 times the dimentionality ^1.5
-        # Maximum number of points accepted into the GP training set before the run fails.
-        ##"max_finite": None,  # default: value of max_total
-        # Scaling of the :math:`\zeta` parameter in the exponential acquisition function
-        # with the number of dimensions :math:`\zeta=1/d^-scaling`
-        ##"zeta_scaling": None,  # default: 0.85
-    }
-
-    # Cobaya sampler used to generate the final sample from the surrogate model
-    mc_sampler = "mcmc"  # default: mcmc with Cobaya defaults
-
-    # Produce progress plots (inside the gpry_output dir).
-    # Adds overhead for very fast likelihoods.
-    plots = False
-
-    # Function run each iteration after adapting the recently acquired points and
-    # the computation of the convergence criterion. See docs for implementation.
-    callback = None
-
-    # Whether the callback function handles MPI-parallelization internally.
-    # Otherwise run only by the rank-0 process
-    callback_is_MPI_aware = None
-
-    # Change to increase or reduce verbosity. If None, it is handled by Cobaya.
-    # '3' produces general progress output (default for Cobaya if None),
-    # and '4' debug-level output
-    verbose = None
+class CobayaSampler(Sampler):
+    """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
 
     # Other options
     _gpry_output_dir = "gpry_output"
