@@ -65,12 +65,14 @@ class Runner(object):
         preprocessed to be in the uniform hypercube before optimizing the
         acquistion function.
 
-    initial_proposer : str or InitialPointProposer (default="reference")
+    initial_proposer : InitialPointProposer, str, dict (default="reference")
         Proposer used for drawing the initial training samples before running the
         Bayesian optimisation loop. As standard the samples are drawn from the model
         reference (prior if no reference is specified). Alternative options which can be
         passed as strings are ``"prior", "uniform"``. The ``"reference"`` proposer
-        defaults to the prior if no reference distribution is provided.
+        defaults to the prior if no reference distribution is provided. If defined as a
+        dict with the proposer name as single key, the values will be passed as kwargs to
+        the proposer.
 
     convergence_criterion : Convergence_criterion, optional (default="CorrectCounter")
         The convergence criterion. If None is given the Correct counter convergence
@@ -241,30 +243,38 @@ class Runner(object):
                 prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
-                                   f"the model instance: {excpt}")
+                                   f"the model instance: {excpt}") from excpt
             # Construct initial_proposer if not already constructed
-            if isinstance(initial_proposer, str):
-                if initial_proposer not in ["reference", "prior", "uniform"]:
-                    raise ValueError("Supported standard initial point proposers are"
-                                     "'reference', 'prior', 'uniform', got"
-                                     f" {initial_proposer}")
-                elif initial_proposer == "reference":
-                    self.initial_proposer = ReferenceProposer(self.model)
-                elif initial_proposer == "prior":
-                    self.initial_proposer = PriorProposer(self.model)
-                elif initial_proposer == "uniform":
-                    self.initial_proposer = UniformProposer(prior_bounds)
+            if isinstance(initial_proposer, InitialPointProposer):
+                self.intial_proposer = initial_proposer
+            elif isinstance(initial_proposer, (Mapping, str)):
+                if isinstance(initial_proposer, str):
+                    initial_proposer = {initial_proposer: {}}
+                initial_proposer_name = list(initial_proposer)[0]
+                initial_proposer_args = initial_proposer[initial_proposer_name]
+                if initial_proposer_name.lower() == "reference":
+                    self.initial_proposer = ReferenceProposer(
+                        self.model, **initial_proposer_args)
+                elif initial_proposer_name.lower() == "prior":
+                    self.initial_proposer = PriorProposer(
+                        self.model, **initial_proposer_args)
+                elif initial_proposer_name.lower() == "uniform":
+                    self.initial_proposer = UniformProposer(
+                        prior_bounds, **initial_proposer_args)
+                else:
+                    raise ValueError(
+                        "Supported standard initial point proposers are "
+                        f"'reference', 'prior', 'uniform'. Got {initial_proposer}")
             else:
-                if not isinstance(initial_proposer, InitialPointProposer):
-                    raise TypeError("initial_proposer should be an InitialPointProposer"
-                                    " object, 'reference', 'prior' or 'uniform', got "
-                                    f"{initial_proposer}.")
-                self.initial_proposer = initial_proposer
-
+                raise TypeError(
+                    "'initial_proposer' should be an InitialPointProposer instance, a "
+                    "dict specification, or one of 'reference', 'prior' or 'uniform'. "
+                    f" Got {initial_proposer}"
+                )
             # Construct GP if it's not already constructed
             if isinstance(gpr, GaussianProcessRegressor):
                 self.gpr = gpr
-            elif isinstance(gpr, Mapping) or isinstance(gpr, str):
+            elif isinstance(gpr, (Mapping, str)):
                 if isinstance(gpr, str):
                     gpr = {"kernel": gpr}
                 gpr_defaults = {
@@ -288,7 +298,8 @@ class Runner(object):
             else:
                 raise TypeError(
                     "'gpr' should be a GP regressor, a dict of arguments for the GPR, "
-                    "or s string specifying the kernel ('RBF' or 'Matern'), got {gpr}")
+                    "or a string specifying the kernel ('RBF' or 'Matern'). Got {gpr}"
+                )
             # Construct the acquisition object if it's not already constructed
             if isinstance(gp_acquisition, str):
                 if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:

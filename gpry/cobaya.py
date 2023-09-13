@@ -20,6 +20,8 @@ from cobaya.log import LoggedError
 from gpry.run import Runner
 
 
+# pylint: disable=no-member,access-member-before-definition
+# pylint: disable=attribute-defined-outside-init
 class CobayaSampler(Sampler):
     """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
 

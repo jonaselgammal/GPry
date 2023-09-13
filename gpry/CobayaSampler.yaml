@@ -1,20 +1,21 @@
 # The GP regressor used for interpolating the posterior, with options
 gpr:
-  kernel: "RBF"  # e.g. "RBF", "Matern", {Matern: {nu: 2.5}}, ...
+  kernel: RBF  # e.g. RBF, Matern, {Matern: {nu: 2.5}}, ...
   noise_level: 1e-2
-  optimizer: "fmin_l_bfgs_b"
+  optimizer: fmin_l_bfgs_b
   n_restarts_optimizer:  # default (undefined) is 10 + 2 * dim
-  account_for_inf: "SVM"  # Undefined or null for not using an SVM classificator
+  account_for_inf: SVM  # Undefined or null for not using an SVM classificator
   verbose:  # set only if you want different verbosity for the GPR
+
+# Proposer used for drawing the initial training samples before running
+# the acquisition loop. One of [reference, prior, uniform].
+# Can be specified as dict with args, e.g. {reference: {max_tries: 1000}}
+initial_proposer: reference
 
 # Acquisition class. Can pass an instance too
 gp_acquisition: "LogExp"
 # TODO: acquisition object args (e.g. zeta)
 
-# Proposer used for drawing the initial training samples before running the aquisition
-# loop. Can pass instance too.
-initial_proposer: "reference"  # or prior, or uniform (within prior bounds)
-# TODO: initial proposer args
 
 # The convergence criterion. Can pass instance too
 convergence_criterion: "CorrectCounter"
