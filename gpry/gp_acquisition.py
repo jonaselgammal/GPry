@@ -1,19 +1,128 @@
+"""
+GPAcquisition classes, which take care of proposing new locations where to evaluate the
+true function.
+"""
+
+import sys
 import warnings
+from copy import deepcopy
+import inspect
+from typing import Mapping
 import numpy as np
 import scipy.optimize
-from copy import deepcopy
 from sklearn.base import is_regressor
 
 from gpry.acquisition_functions import LogExp, NonlinearLogExp
 from gpry.acquisition_functions import is_acquisition_function
-from gpry.proposal import PartialProposer, CentroidsProposer
+import gpry.acquisition_functions as gpryacqfuncs
+from gpry.proposal import PartialProposer, CentroidsProposer, Proposer
 from gpry.mpi import mpi_comm, mpi_rank, is_main_process, \
     split_number_for_parallel_processes, multi_gather_array
 from gpry.tools import check_random_state
 
+# TODO: inconsistent use of random_state: passed at init, and also at acquisition time
 
-class GPAcquisition(object):
-    """Run Gaussian Process acquisition.
+
+def builtin_names():
+    """
+    Lists all names of all built-in acquisition functions criteria.
+    """
+    list_names = [name for name, obj in inspect.getmembers(sys.modules[__name__])
+                  if (issubclass(obj.__class__, GenericGPAcquisition.__class__) and
+                      obj is not GenericGPAcquisition)]
+    return list_names
+
+
+class GenericGPAcquisition():
+    """Generic class for acquisition objects."""
+
+    def __init__(self,
+                 bounds,
+                 preprocessing_X=None,
+                 random_state=None,
+                 verbose=1,
+                 acq_func="LogExp",
+                 # DEPRECATED ON 13-09-2023:
+                 zeta=None,
+                 zeta_scaling=None,
+                 ):
+        self.bounds = bounds
+        self.n_d = np.shape(bounds)[0]
+        self.preprocessing_X = preprocessing_X
+        self.verbose = verbose
+        self.random_state = random_state
+        if is_acquisition_function(acq_func):
+            self.acq_func = acq_func
+        elif isinstance(acq_func, (Mapping, str)):
+            if isinstance(acq_func, str):
+                acq_func = {acq_func: {}}
+            # DEPRECATED ON 13-09-2023:
+            if zeta is not None or zeta_scaling is not None:
+                print(
+                    "*Warning*: 'zeta' and 'zeta_scaling' have been deprecated as kwargs "
+                    "and should be passed inside the 'acq_func' arg dict, e.g. "
+                    "'acq_func={\"LogExp\": {\"zeta_scaling\": 0.85}}'. The given values "
+                    "are being used, but this will fail in the future."
+                )
+                acq_func[list(acq_func)[0]].update(
+                    {"zeta": zeta, "zeta_scaling": zeta_scaling})
+            # END OF DEPRECATION BLOCK
+            acq_func_name = list(acq_func)[0]
+            acq_func_args = acq_func[acq_func_name] or {}
+            acq_func_args["dimension"] = self.n_d
+            try:
+                acq_func_class = getattr(gpryacqfuncs, acq_func_name)
+            except AttributeError as excpt:
+                raise ValueError(
+                    f"Unknown AcquisitionFunction class {acq_func_name}. "
+                    f"Available convergence criteria: {gpryacqfuncs.builtin_names()}"
+                ) from excpt
+            try:
+                self.acq_func = acq_func_class(**acq_func_args)
+            except Exception as excpt:
+                raise ValueError(
+                    "Error when initialising the AcquisitionFunction object "
+                    f"{acq_func_name} with arguments {acq_func_args}: "
+                    f"{str(excpt)}"
+                ) from excpt
+        else:
+            raise TypeError(
+                "acq_func should be an AcquisitionFunction or a str or dict "
+                f"specification. Got {acq_func}"
+            )
+
+    def __call__(self, X, gpr, eval_gradient=False):
+        """Returns the value of the acquision function at ``X`` given a ``gpr``."""
+        return self.acq_func(X, gpr, eval_gradient=eval_gradient)
+
+    def multi_add(self, gpr, n_points=1, random_state=None):
+        """
+        Method to query multiple points where the objective function
+        shall be evaluated.
+        """
+
+    def _has_already_been_sampled(self, gpr, new_X):
+        """
+        Method for determining whether points which have been found by the
+        acquisition algorithm are already in the GP. This is called from the
+        optimize_acq_func method to determine whether points may have been
+        sampled multiple times which could break the GP.
+        This is meant to be used for a **single** point new_X.
+        """
+        X_train = np.copy(gpr.X_train)
+
+        for i, xi in enumerate(X_train):
+            if np.allclose(new_X, xi):
+                if self.verbose > 1:
+                    warnings.warn("A point has been sampled multiple times. "
+                                  "Excluding this.")
+                return True
+        return False
+
+
+class BatchOptimizer(GenericGPAcquisition):
+    """
+    Run Gaussian Process acquisition.
 
     Works similarly to a GPRegressor but instead of optimizing the kernel's
     hyperparameters it optimizes the Acquisition function in order to find one
@@ -108,20 +217,23 @@ class GPAcquisition(object):
 
     """
 
-    def __init__(self, bounds,
-                 proposer=None,
+    def __init__(self,
+                 bounds,
+                 preprocessing_X=None,
+                 random_state=None,
+                 verbose=1,
                  acq_func="LogExp",
+                 zeta=None,
+                 zeta_scaling=None,
+                 # Class-specific:
+                 proposer=None,
                  acq_optimizer="fmin_l_bfgs_b",
                  n_restarts_optimizer=0,
                  n_repeats_propose=0,
-                 preprocessing_X=None,
-                 random_state=None,
-                 zeta_scaling=0.85,
-                 zeta=None,
-                 verbose=1):
-
-        self.bounds = bounds
-        self.n_d = np.shape(bounds)[0]
+                 ):
+        super().__init__(
+            bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
+            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
         self.proposer = proposer
         self.obj_func = None
 
@@ -130,24 +242,12 @@ class GPAcquisition(object):
         if self.proposer is None:
             self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
         else:
-            # TODO: Catch error if it's not the right instance
+            if not isinstance(proposer, Proposer):
+                raise TypeError(
+                    "'proposer' must be a Proposer instance. "
+                    f"Got {proposer} of type {type(proposer)}."
+                )
             self.proposer = proposer
-
-        if is_acquisition_function(acq_func):
-            self.acq_func = acq_func
-        elif acq_func == "LogExp":
-            # If the LogExp acquisition function is chosen it's zeta is set
-            # automatically using the dimensionality of the prior.
-            self.acq_func = LogExp(
-                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
-        elif acq_func == "NonlinearLogExp":
-            # If the LogExp acquisition function is chosen it's zeta is set
-            # automatically using the dimensionality of the prior.
-            self.acq_func = NonlinearLogExp(
-                dimension=self.n_d, zeta=zeta, zeta_scaling=zeta_scaling)
-        else:
-            raise TypeError("acq_func needs to be an Acquisition_Function or "
-                            f"'LogExp' or 'NonlinearLogExp', instead got {acq_func}")
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -177,16 +277,8 @@ class GPAcquisition(object):
         self.n_restarts_optimizer = n_restarts_optimizer
         self.n_repeats_propose = n_repeats_propose
 
-        self.preprocessing_X = preprocessing_X
-
-        self.verbose = verbose
-
         self.mean_ = None
         self.cov = None
-
-    def __call__(self, X, gpr, eval_gradient=False):
-        """Returns the value of the acquision function at ``X`` given a ``gpr``."""
-        return self.acq_func(X, gpr, eval_gradient=eval_gradient)
 
     def optimize_acquisition_function(self, gpr, i, random_state=None):
         """Exposes the optimization method for the acquisition function. When
@@ -438,20 +530,13 @@ class GPAcquisition(object):
 
         return theta_opt, func_min
 
-    def _has_already_been_sampled(self, gpr, new_X):
-        """
-        Method for determining whether points which have been found by the
-        acquisition algorithm are already in the GP. This is called from the
-        optimize_acq_func method to determine whether points may have been
-        sampled multiple times which could break the GP.
-        This is meant to be used for a **single** point new_X.
-        """
-        X_train = np.copy(gpr.X_train)
 
-        for i, xi in enumerate(X_train):
-            if np.allclose(new_X, xi):
-                if self.verbose > 1:
-                    warnings.warn("A point has been sampled multiple times. "
-                                  "Excluding this.")
-                return True
-        return False
+# DEPRECATED ON 13-09-2023:
+class GPAcquisition(BatchOptimizer):
+
+    def __init__(self, *args, **kwargs):
+        print(
+            "*Warning*: This class has been renamed to BatchOptimizer. "
+            "This will fail in the future."
+        )
+        super().__init__(*args, **kwargs)

@@ -12,7 +12,9 @@ from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_s
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
     UniformProposer
 from gpry.gpr import GaussianProcessRegressor
-from gpry.gp_acquisition import GPAcquisition
+from gpry.gp_acquisition import GenericGPAcquisition
+import gpry.gp_acquisition as gprygpacqs
+import gpry.acquisition_functions as gpryacqfuncs
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, Normalize_y
 import gpry.convergence as gpryconv
@@ -58,12 +60,13 @@ class Runner():
         be defined as a dict containing the arguments of ``GaussianProcessRegressor``, or
         passing an already initialized instance.
 
-    gp_acquisition : GPAcquisition, optional (default="LogExp")
-        The acquisition object. If None is given the LogExp acquisition
-        function is used (with the :math:`\zeta` value chosen automatically
+    gp_acquisition : GenericGPAcquisition, optional (default="LogExp")
+        The acquisition object. If None is given the BatchOptimizer with a LogExp
+        acquisition function is used (with the :math:`\zeta` value chosen automatically
         depending on the dimensionality of the prior) and the GP's X-values are
         preprocessed to be in the uniform hypercube before optimizing the
-        acquistion function.
+        acquistion function. It can also be passed an initialized instance, or a dict with
+        arguments with which to initialize one.
 
     initial_proposer : InitialPointProposer, str, dict, optional (default="reference")
         Proposer used for drawing the initial training samples before running the
@@ -101,15 +104,6 @@ class Runner():
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try decreasing the volume of your prior (default: max_total).
-            * zeta_scaling : scaling of the :math:`\zeta` parameter in the exponential
-              acquisition function with the number of dimensions :math:`\zeta=1/d^x`
-              where :math:`x` is the scaling parameter. The standard value is 0.85.
-
-              .. note::
-
-                  This value is overwritten if a
-                  :class:`GPAcquisition <gp_acquisition.GPAcquisition>` object is passed
-                  instead of a string for ``gp_acquisition``.
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
@@ -153,7 +147,7 @@ class Runner():
         This can be used to call an MCMC sampler for getting marginalized
         properties. This is the most crucial component.
 
-    gp_acquisition : GPAcquisition
+    gp_acquisition : GenericGPAcquisition
         The acquisition object that was used for the active sampling procedure.
 
     convergence_criterion : Convergence_criterion
@@ -171,11 +165,24 @@ class Runner():
         value of the convergence criterion.
     """
 
-    def __init__(self, model=None, bounds=None, gpr="RBF", gp_acquisition="LogExp",
-                 convergence_criterion="CorrectCounter", callback=None,
-                 callback_is_MPI_aware=False, convergence_options=None, options=None,
+    def __init__(self,
+                 model=None,
+                 bounds=None,
+                 gpr="RBF",
+                 gp_acquisition="LogExp",
                  initial_proposer="reference",
-                 checkpoint=None, load_checkpoint=None, seed=None, plots=True, verbose=3):
+                 convergence_criterion="CorrectCounter",
+                 callback=None,
+                 callback_is_MPI_aware=False,
+                 options=None,
+                 checkpoint=None,
+                 load_checkpoint=None,
+                 seed=None,
+                 plots=False,
+                 verbose=3,
+                 # DEPRECATED ON 13-09-2023:
+                 convergence_options=None,
+                 ):
         if model is None:
             if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
                 raise ValueError(
@@ -238,126 +245,43 @@ class Runner():
                     raise TypeError("'model' needs to be a likelihood function or a "
                                     f"Cobaya model. got {model!r}")
             try:
-                prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
+                self.prior_bounds = self.model.prior.bounds(
+                    confidence_for_unbounded=0.99995)
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
                                    f"the model instance: {excpt}") from excpt
-            # Construct initial_proposer if not already constructed
-            if isinstance(initial_proposer, InitialPointProposer):
-                self.intial_proposer = initial_proposer
-            elif isinstance(initial_proposer, (Mapping, str)):
-                if isinstance(initial_proposer, str):
-                    initial_proposer = {initial_proposer: {}}
-                initial_proposer_name = list(initial_proposer)[0]
-                initial_proposer_args = initial_proposer[initial_proposer_name]
-                if initial_proposer_name.lower() == "reference":
-                    self.initial_proposer = ReferenceProposer(
-                        self.model, **initial_proposer_args)
-                elif initial_proposer_name.lower() == "prior":
-                    self.initial_proposer = PriorProposer(
-                        self.model, **initial_proposer_args)
-                elif initial_proposer_name.lower() == "uniform":
-                    self.initial_proposer = UniformProposer(
-                        prior_bounds, **initial_proposer_args)
-                else:
-                    raise ValueError(
-                        "Supported standard initial point proposers are "
-                        f"'reference', 'prior', 'uniform'. Got {initial_proposer}")
-            else:
-                raise TypeError(
-                    "'initial_proposer' should be an InitialPointProposer instance, a "
-                    "dict specification, or one of 'reference', 'prior' or 'uniform'. "
-                    f" Got {initial_proposer}"
+            # Construct the main loop elements:
+            # GPR, GPAcquisition, InitialProposer and ConvergenceCriterion
+            # DEPRECATED ON 13-09-2023:
+            if convergence_options is not None and isinstance(convergence_criterion, str):
+                self.log(
+                    "*Warning*: 'convergence_options' has been deprecated. You can "
+                    "now speficy arguments for the convergence criterion passing it "
+                    "as a dict, e.g. 'convergence_criterion={\"CorrectCounter\": "
+                    "{\"kwarg\": value}'. Your arguments have been passed, but this "
+                    "will fail in the future."
                 )
-            # Construct GP if it's not already constructed
-            if isinstance(gpr, GaussianProcessRegressor):
-                self.gpr = gpr
-            elif isinstance(gpr, (Mapping, str)):
-                if isinstance(gpr, str):
-                    gpr = {"kernel": gpr}
-                gpr_defaults = {
-                    "kernel": "RBF",
-                    "n_restarts_optimizer": 10 + 2 * self.d,
-                    "preprocessing_X": Normalize_bounds(prior_bounds),
-                    "preprocessing_y": Normalize_y(),
-                    "bounds": prior_bounds,
-                    "random_state": self.random_state,
-                    "verbose": self.verbose,
-                }
-                for k, value in gpr_defaults.items():
-                    if gpr.get(k) is None:
-                        gpr[k] = value
-                try:
-                    self.gpr = GaussianProcessRegressor(**gpr)
-                except ValueError as excpt:
-                    raise ValueError(
-                        f"Error when initializing the GP regressor: {str(excpt)}"
-                    ) from excpt
-            else:
-                raise TypeError(
-                    "'gpr' should be a GP regressor, a dict of arguments for the GPR, "
-                    "or a string specifying the kernel ('RBF' or 'Matern'). Got {gpr}"
+                convergence_criterion = {convergence_criterion: convergence_options}
+            zeta_scaling = (options or {}).pop("zeta_scaling", None)
+            if zeta_scaling is not None:
+                self.log(
+                    "*Warning*: Passing 'zeta_scaling' as part of the 'options' has been "
+                    "deprecated. It should be passed as a key of the 'acq_func' dict "
+                    "the GPAcquisition specification, e.g. '{\"BatchOptimizer\": "
+                    "{\"acq_func\": {\"zeta_scaling\": 0.85}}}'. The given 'zeta_scaling'"
+                    " is being used, but this will fail in the future."
                 )
-            # Construct the acquisition object if it's not already constructed
-            if isinstance(gp_acquisition, str):
-                if gp_acquisition not in ["LogExp", "NonlinearLogExp"]:
-                    raise ValueError("Supported acquisition function is 'LogExp', "
-                                     f"'NonlinearLogExp', got {gp_acquisition}")
-                self.acquisition = GPAcquisition(
-                    prior_bounds, proposer=None, acq_func=gp_acquisition,
-                    acq_optimizer="fmin_l_bfgs_b",
-                    n_restarts_optimizer=5 * self.d, n_repeats_propose=10,
-                    preprocessing_X=Normalize_bounds(prior_bounds),
-                    zeta_scaling=options.get("zeta_scaling", 0.85), verbose=verbose)
-            elif isinstance(gp_acquisition, GPAcquisition):
-                self.acquisition = gp_acquisition
-            else:
-                raise TypeError(
-                    "gp_acquisition should be an Acquisition object or "
-                    f"'LogExp', or 'NonlinearLogExp', got {gp_acquisition}")
-            # Construct the convergence criterion
-            if isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
-                self.convergence = convergence_criterion
-            elif isinstance(convergence_criterion, (Mapping, str)):
-                if isinstance(convergence_criterion, str):
-                    convergence_criterion = {convergence_criterion: {}}
-                convergence_name = list(convergence_criterion)[0]
-                # DEPRECATED ON 13-09-2023 in favour of dict specification
-                if convergence_options is not None:
-                    self.log(
-                        "*Warning*: 'convergence_options' has been deprecated. You can "
-                        "now speficy arguments for the convergence criterion passing it "
-                        "as a dict, e.g. 'convergence_criterion={\"CorrectCounter\": "
-                        "{\"kwarg\": value}'. Your arguments have been passed, but this "
-                        "will fail in the future."
-                    )
-                    convergence_criterion[convergence_name] = convergence_options
-                # END OF DEPRECATION BLOCK
-                convergence_args = convergence_criterion[convergence_name] or {}
-                try:
-                    convergence_class = getattr(gpryconv, convergence_name)
-                except AttributeError as excpt:
-                    raise ValueError(
-                        f"Unknown convergence criterion {convergence_name}. "
-                        f"Available convergence criteria: {gpryconv.builtin_names()}"
-                    ) from excpt
-                try:
-                    self.convergence = convergence_class(
-                        self.model.prior, convergence_args)
-                except Exception as excpt:
-                    raise ValueError(
-                        "Error when initialising the convergence criterion "
-                        f"{convergence_name} with arguments {convergence_args}: "
-                        f"{str(excpt)}"
-                    ) from excpt
-            else:
-                raise TypeError(
-                    "'convergence_criterion' should be a ConvergenceCriterion instance, "
-                    "or a dict or string specification for one of "
-                    f"{gpryconv.builtin_names()}. Got {convergence_criterion}"
-                )
-            # This attr allows *not* to have to share the convergence criterion
-            self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
+                if isinstance(gp_acquisition, str):
+                    gp_acquisition = {gp_acquisition: {"zeta_scaling": zeta_scaling}}
+            # END OF DEPRECATION BLOCK
+            self._construct_gpr(gpr)
+            self._construct_gp_acquisition(gp_acquisition)
+            self._construct_initial_proposer(initial_proposer)
+            self._construct_convergence_criterion(convergence_criterion)
+
+
+
+
             # Read in options for the run
             if options is None:
                 self.log(
@@ -428,6 +352,151 @@ class Runner():
         self.has_run = False
         self.has_converged = False
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
+
+    def _construct_gpr(self, gpr):
+        """Constructs or passes the GPR."""
+        if isinstance(gpr, GaussianProcessRegressor):
+            self.gpr = gpr
+        elif isinstance(gpr, (Mapping, str)):
+            if isinstance(gpr, str):
+                gpr = {"kernel": gpr}
+            gpr_defaults = {
+                "kernel": "RBF",
+                "n_restarts_optimizer": 10 + 2 * self.d,
+                "preprocessing_X": Normalize_bounds(self.prior_bounds),
+                "preprocessing_y": Normalize_y(),
+                "bounds": self.prior_bounds,
+                "random_state": self.random_state,
+                "verbose": self.verbose,
+            }
+            for k, value in gpr_defaults.items():
+                if gpr.get(k) is None:
+                    gpr[k] = value
+            try:
+                self.gpr = GaussianProcessRegressor(**gpr)
+            except ValueError as excpt:
+                raise ValueError(
+                    f"Error when initializing the GP regressor: {str(excpt)}"
+                ) from excpt
+        else:
+            raise TypeError(
+                "'gpr' should be a GP regressor, a dict of arguments for the GPR, "
+                "or a string specifying the kernel ('RBF' or 'Matern'). Got {gpr}"
+            )
+
+    def _construct_gp_acquisition(self, gp_acquisition):
+        """Constructs or passes the GPAcquisition instance."""
+        default_gq_acquisition = "BatchOptimizer"
+        if isinstance(gp_acquisition, GenericGPAcquisition):
+            self.acquisition = gp_acquisition
+        elif isinstance(gp_acquisition, (Mapping, str)) or gp_acquisition is None:
+            if gp_acquisition is None:
+                gp_acquisition = {default_gq_acquisition: {}}
+            elif isinstance(gp_acquisition, str):
+                gp_acquisition = {gp_acquisition: {}}
+            # If an acq_func name was passed, use the standard batch-optimization one
+            if list(gp_acquisition)[0] in gpryacqfuncs.builtin_names():
+                gp_acquisition = {
+                    default_gq_acquisition: {"acq_func": {list(gp_acquisition)[0]: {}}}}
+            gp_acquisition_name = list(gp_acquisition)[0]
+            gp_acquisition_args = gp_acquisition[gp_acquisition_name] or {}
+            gp_acquisition_defaults = {
+                "bounds": self.prior_bounds,
+                "preprocessing_X": Normalize_bounds(self.prior_bounds),
+                "acq_func": {"LogExp": {"zeta_scaling": 0.85}},
+                "proposer": None,
+                "acq_optimizer": "fmin_l_bfgs_b",
+                "n_restarts_optimizer": 5 * self.d,
+                "n_repeats_propose": 10,
+                "verbose": self.verbose,
+            }
+            for k, value in gp_acquisition_defaults.items():
+                if gp_acquisition_args.get(k) is None:
+                    gp_acquisition_args[k] = value
+            try:
+                gp_acquisition_class = getattr(gprygpacqs, gp_acquisition_name)
+            except AttributeError as excpt:
+                raise ValueError(
+                    f"Unknown GPAcquisiton class {gp_acquisition_name}. "
+                    f"Available GPAcquisition classes: {gprygpacqs.builtin_names()}"
+                ) from excpt
+            try:
+                self.acquisition = gp_acquisition_class(**gp_acquisition_args)
+            except Exception as excpt:
+                raise ValueError(
+                    "Error when initialising the GPAcquisition object "
+                    f"{gp_acquisition_name} with arguments {gp_acquisition_args}: "
+                    f"{str(excpt)}"
+                ) from excpt
+        else:
+            raise TypeError(
+                "'gp_acquisition' should be a GPAcquisition object, "
+                "or a dict or string specification for one of "
+                f"{gprygpacqs.builtin_names()}. Got {gp_acquisition}"
+            )
+
+    def _construct_initial_proposer(self, initial_proposer):
+        """Constructs or passes the initial proposer."""
+        if isinstance(initial_proposer, InitialPointProposer):
+            self.intial_proposer = initial_proposer
+        elif isinstance(initial_proposer, (Mapping, str)):
+            if isinstance(initial_proposer, str):
+                initial_proposer = {initial_proposer: {}}
+            initial_proposer_name = list(initial_proposer)[0]
+            initial_proposer_args = initial_proposer[initial_proposer_name]
+            if initial_proposer_name.lower() == "reference":
+                self.initial_proposer = ReferenceProposer(
+                    self.model, **initial_proposer_args)
+            elif initial_proposer_name.lower() == "prior":
+                self.initial_proposer = PriorProposer(
+                    self.model, **initial_proposer_args)
+            elif initial_proposer_name.lower() == "uniform":
+                self.initial_proposer = UniformProposer(
+                    self.prior_bounds, **initial_proposer_args)
+            else:
+                raise ValueError(
+                    "Supported standard initial point proposers are "
+                    f"'reference', 'prior', 'uniform'. Got {initial_proposer}")
+        else:
+            raise TypeError(
+                "'initial_proposer' should be an InitialPointProposer instance, a "
+                "dict specification, or one of 'reference', 'prior' or 'uniform'. "
+                f" Got {initial_proposer}"
+            )
+
+    def _construct_convergence_criterion(self, convergence_criterion):
+        """Constructs or passes the convergence criterion."""
+        if isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
+            self.convergence = convergence_criterion
+        elif isinstance(convergence_criterion, (Mapping, str)):
+            if isinstance(convergence_criterion, str):
+                convergence_criterion = {convergence_criterion: {}}
+            convergence_name = list(convergence_criterion)[0]
+            convergence_args = convergence_criterion[convergence_name] or {}
+            try:
+                convergence_class = getattr(gpryconv, convergence_name)
+            except AttributeError as excpt:
+                raise ValueError(
+                    f"Unknown convergence criterion {convergence_name}. "
+                    f"Available convergence criteria: {gpryconv.builtin_names()}"
+                ) from excpt
+            try:
+                self.convergence = convergence_class(
+                    self.model.prior, convergence_args)
+            except Exception as excpt:
+                raise ValueError(
+                    "Error when initialising the convergence criterion "
+                    f"{convergence_name} with arguments {convergence_args}: "
+                    f"{str(excpt)}"
+                ) from excpt
+        else:
+            raise TypeError(
+                "'convergence_criterion' should be a ConvergenceCriterion instance, "
+                "or a dict or string specification for one of "
+                f"{gpryconv.builtin_names()}. Got {convergence_criterion}"
+            )
+        # This attr allows *not* to have to share the convergence criterion
+        self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
 
     @property
     def d(self):

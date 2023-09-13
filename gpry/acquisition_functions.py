@@ -51,11 +51,11 @@ should not be needed.
 
 """
 
-
+import sys
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
 from collections.abc import Iterable
-from inspect import signature
+from inspect import signature, getmembers
 import warnings
 
 import numpy as np
@@ -73,6 +73,16 @@ def _safe_log_expm1(x):
     ret[mask] = np.log(np.expm1(x[mask]))
     ret[~mask] = x[~mask] + np.log1p(-np.exp(-x[~mask]))
     return ret
+
+
+def builtin_names():
+    """
+    Lists all names of all built-in acquisition functions criteria.
+    """
+    list_names = [name for name, obj in getmembers(sys.modules[__name__])
+                  if (issubclass(obj.__class__, AcquisitionFunction.__class__) and
+                      obj is not AcquisitionFunction)]
+    return list_names
 
 
 class AcquisitionFunction(metaclass=ABCMeta):

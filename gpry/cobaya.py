@@ -52,8 +52,8 @@ class CobayaSampler(Sampler):
             self.gpry_runner = Runner(
                 model=self.model,
                 gpr=self.gpr,
-                initial_proposer=self.initial_proposer,
                 gp_acquisition=self.gp_acquisition,
+                initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
                 options=self.options,
                 callback=self.callback,

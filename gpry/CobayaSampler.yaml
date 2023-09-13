@@ -7,14 +7,17 @@ gpr:
   account_for_inf: SVM  # Undefined or null for not using an SVM classificator
   verbose:  # set only if you want different verbosity for the GPR
 
+# Acquisition class. If simply passed the name of an acquisition function,
+# (e.g. "LogExp") uses the default BatchOptimizer with that function.
+gp_acquisition:
+  BatchOptimizer:
+    acq_func:
+      LogExp: {zeta_scaling: 0.85}
+
 # Proposer used for drawing the initial training samples before running
 # the acquisition loop. One of [reference, prior, uniform].
 # Can be specified as dict with args, e.g. {reference: {max_tries: 1000}}
 initial_proposer: reference
-
-# Acquisition class. Can pass an instance too
-gp_acquisition: "LogExp"
-# TODO: acquisition object args (e.g. zeta)
 
 # Convergence criterion.
 # Can be specified as a dict with args, e.g. {CorrectCounter: {abstol: 0.01s}}
