@@ -16,13 +16,9 @@ initial_proposer: reference
 gp_acquisition: "LogExp"
 # TODO: acquisition object args (e.g. zeta)
 
-
-# The convergence criterion. Can pass instance too
+# Convergence criterion.
+# Can be specified as a dict with args, e.g. {CorrectCounter: {abstol: 0.01s}}
 convergence_criterion: "CorrectCounter"
-
-# Convergence criterion args
-convergence_options:
-# TODO: maybe rename to _args
 
 # Options regarding the bayesian optimization loop.
 options: {}

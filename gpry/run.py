@@ -1,9 +1,9 @@
 import os
 import warnings
-import numpy as np
 from copy import deepcopy
 from inspect import getfullargspec
 from typing import Mapping
+import numpy as np
 
 from cobaya.model import Model
 
@@ -26,7 +26,7 @@ from gpry.tools import create_cobaya_model
 _plots_path = "images"
 
 
-class Runner(object):
+class Runner():
     r"""
     Class that takes care of constructing the Bayesian quadrature/likelihood
     characterization loop. After initialisation, the algorithm can be launched with
@@ -65,7 +65,7 @@ class Runner(object):
         preprocessed to be in the uniform hypercube before optimizing the
         acquistion function.
 
-    initial_proposer : InitialPointProposer, str, dict (default="reference")
+    initial_proposer : InitialPointProposer, str, dict, optional (default="reference")
         Proposer used for drawing the initial training samples before running the
         Bayesian optimisation loop. As standard the samples are drawn from the model
         reference (prior if no reference is specified). Alternative options which can be
@@ -74,13 +74,11 @@ class Runner(object):
         dict with the proposer name as single key, the values will be passed as kwargs to
         the proposer.
 
-    convergence_criterion : Convergence_criterion, optional (default="CorrectCounter")
+    convergence_criterion : ConvergenceCriterion, str, dict, optional (default="CorrectCounter")
         The convergence criterion. If None is given the Correct counter convergence
-        criterion is used with a relative threshold of 0.01 and an absolute threshold of
-        0.05.
-
-    convergence_options : dict, optional (default=None)
-        optional parameters passed to the convergence criterion.
+        criterion is used with adaptive relative and absoluter thresholds. Can be
+        specified as a dict to initialize a ConvergenceCriterion class with some
+        arguments, or directly as an instance of ConvergenceCriterion.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -175,7 +173,7 @@ class Runner(object):
 
     def __init__(self, model=None, bounds=None, gpr="RBF", gp_acquisition="LogExp",
                  convergence_criterion="CorrectCounter", callback=None,
-                 callback_is_MPI_aware=False, convergence_options=None, options={},
+                 callback_is_MPI_aware=False, convergence_options=None, options=None,
                  initial_proposer="reference",
                  checkpoint=None, load_checkpoint=None, seed=None, plots=True, verbose=3):
         if model is None:
@@ -204,7 +202,7 @@ class Runner(object):
         self.verbose = verbose
         self.random_state = get_random_state(seed)
         if is_main_process:
-            self.options = options
+            self.options = options or {}
             # Check if a checkpoint exists already and if so resume from there
             self.loaded_from_checkpoint = False
             if checkpoint is not None:
@@ -318,21 +316,47 @@ class Runner(object):
                     "gp_acquisition should be an Acquisition object or "
                     f"'LogExp', or 'NonlinearLogExp', got {gp_acquisition}")
             # Construct the convergence criterion
-            if isinstance(convergence_criterion, str):
-                try:
-                    conv_class = getattr(gpryconv, convergence_criterion)
-                except AttributeError:
-                    raise ValueError(
-                        f"Unknown convergence criterion {convergence_criterion}. "
-                        f"Available convergence criteria: {gpryconv.builtin_names()}")
-                self.convergence = conv_class(self.model.prior, convergence_options or {})
-            elif isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
+            if isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
                 self.convergence = convergence_criterion
+            elif isinstance(convergence_criterion, (Mapping, str)):
+                if isinstance(convergence_criterion, str):
+                    convergence_criterion = {convergence_criterion: {}}
+                convergence_name = list(convergence_criterion)[0]
+                # DEPRECATED ON 13-09-2023 in favour of dict specification
+                if convergence_options is not None:
+                    self.log(
+                        "*Warning*: 'convergence_options' has been deprecated. You can "
+                        "now speficy arguments for the convergence criterion passing it "
+                        "as a dict, e.g. 'convergence_criterion={\"CorrectCounter\": "
+                        "{\"kwarg\": value}'. Your arguments have been passed, but this "
+                        "will fail in the future."
+                    )
+                    convergence_criterion[convergence_name] = convergence_options
+                # END OF DEPRECATION BLOCK
+                convergence_args = convergence_criterion[convergence_name] or {}
+                try:
+                    convergence_class = getattr(gpryconv, convergence_name)
+                except AttributeError as excpt:
+                    raise ValueError(
+                        f"Unknown convergence criterion {convergence_name}. "
+                        f"Available convergence criteria: {gpryconv.builtin_names()}"
+                    ) from excpt
+                try:
+                    self.convergence = convergence_class(
+                        self.model.prior, convergence_args)
+                except Exception as excpt:
+                    raise ValueError(
+                        "Error when initialising the convergence criterion "
+                        f"{convergence_name} with arguments {convergence_args}: "
+                        f"{str(excpt)}"
+                    ) from excpt
             else:
-                raise TypeError("convergence_criterion should be a "
-                                "Convergence_criterion object or an instance of "
-                                f"{gpryconv.builtin_names()}, got "
-                                f"{convergence_criterion}")
+                raise TypeError(
+                    "'convergence_criterion' should be a ConvergenceCriterion instance, "
+                    "or a dict or string specification for one of "
+                    f"{gpryconv.builtin_names()}. Got {convergence_criterion}"
+                )
+            # This attr allows *not* to have to share the convergence criterion
             self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
             # Read in options for the run
             if options is None:
@@ -403,6 +427,7 @@ class Runner(object):
         self.current_iteration = 0
         self.has_run = False
         self.has_converged = False
+        self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
 
     @property
     def d(self):
@@ -566,8 +591,10 @@ class Runner(object):
             sync_processes()
             # Add the newly evaluated truths to the GPR, and maye refit hyperparameters
             if is_main_process:
-                do_simplified_fit = (self.current_iteration % self.fit_full_every != \
-                                     self.fit_full_every - 1)
+                do_simplified_fit = (
+                    self.current_iteration % self.fit_full_every !=
+                    self.fit_full_every - 1
+                )
                 with TimerCounter(self.gpr) as timer_fit:
                     self.gpr.append_to_data(new_X, new_y,
                                             fit=True, simplified_fit=do_simplified_fit)
@@ -722,7 +749,7 @@ class Runner(object):
                     # Only finite values contributes to the number of initial samples
                     n_finite_new = sum(is_finite(y_init - max(y_init)))
                     # Break loop if the desired number of initial samples is reached
-                    finished = (n_finite_new >= n_still_needed)
+                    finished = n_finite_new >= n_still_needed
                 if multiple_processes:
                     finished = mpi_comm.bcast(finished if is_main_process else None)
                 if finished:
@@ -738,7 +765,7 @@ class Runner(object):
                      f", of which {sum(is_finite(y_init - max(y_init)))} returned a "
                      f"finite value." +
                      (" Each MPI process evaluated at most "
-                      f"{max([len(p) for p in all_points])} locations."
+                      f"{max(len(p) for p in all_points)} locations."
                       if multiple_processes else ""), level=3)
         if is_main_process:
             # Raise error if the number of initial samples hasn't been reached
@@ -766,7 +793,7 @@ class Runner(object):
         """
         if not is_main_process:
             return
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=False, save=os.path.join(self.plots_path, "timing.svg"))
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
@@ -819,6 +846,7 @@ class Runner(object):
                                  add_options=add_options, resume=resume,
                                  verbose=self.verbose)
 
+    # pylint: disable=import-outside-toplevel
     def plot_mc(self, surr_info, sampler, add_training=True, add_samples=None,
         output=None):
         """
@@ -847,7 +875,7 @@ class Runner(object):
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
         if not is_main_process:
-            return
+            return None
         from getdist.mcsamples import MCSamplesFromCobaya
         import getdist.plots as gdplt
         from gpry.plots import getdist_add_training
@@ -888,7 +916,7 @@ class Runner(object):
         """
         if not is_main_process:
             return
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         mean = sampler.products()["sample"].mean()
         covmat = sampler.products()["sample"].cov()
         fig, ax = plot_distance_distribution(

@@ -18,7 +18,6 @@ def _test_io(
     convergence_criterion="CorrectCounter",
     callback=None,
     callback_is_MPI_aware=False,
-    convergence_options=None,
     options=None,
     checkpoint="files",
     verbose=3,
@@ -34,7 +33,6 @@ def _test_io(
         convergence_criterion=convergence_criterion,
         callback=callback,
         callback_is_MPI_aware=callback_is_MPI_aware,
-        convergence_options=convergence_options,
         options=options,
         checkpoint=checkpoint,
         load_checkpoint="overwrite",  # first time do not resume
