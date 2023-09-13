@@ -6,6 +6,7 @@ import os
 import re
 import logging
 from tempfile import gettempdir
+from inspect import cleandoc
 
 from cobaya.sampler import Sampler
 
@@ -185,3 +186,21 @@ class GPrySampler(Sampler):
             # Main sample
             (output.collection_regexp(name=None), None),
         ]
+
+    @classmethod
+    def get_desc(cls, info=None):
+        return ("GPry: a package for Bayesian inference of expensive likelihoods "
+                r"with Gaussian Processes \cite{Gammal:2022eob}.")
+
+    @classmethod
+    def get_bibtex(cls):
+        return cleandoc(r"""
+            @article{Gammal:2022eob,
+                author = {Gammal, Jonas El and Sch\"oneberg, Nils and Torrado, Jes\'us and Fidler, Christian},
+                title = "{Fast and robust Bayesian Inference using Gaussian Processes with GPry}",
+                eprint = "2211.02045",
+                archivePrefix = "arXiv",
+                primaryClass = "astro-ph.CO",
+                month = "11",
+                year = "2022"
+            }""")
