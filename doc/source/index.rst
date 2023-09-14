@@ -25,6 +25,7 @@ Contents:
   intro_example
   adv_example
   running
+  running_cobaya
   callback
   modules
 

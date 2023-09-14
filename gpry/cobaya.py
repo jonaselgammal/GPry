@@ -155,7 +155,7 @@ class CobayaSampler(Sampler):
     def get_bibtex(cls):
         return cleandoc(r"""
             @article{Gammal:2022eob,
-                author = {Gammal, Jonas El and Sch\"oneberg, Nils and Torrado, Jes\'us and Fidler, Christian},
+                author = {{El Gammal}, Jonas and Sch\"oneberg, Nils and Torrado, Jes\'us and Fidler, Christian},
                 title = "{Fast and robust Bayesian Inference using Gaussian Processes with GPry}",
                 eprint = "2211.02045",
                 archivePrefix = "arXiv",
