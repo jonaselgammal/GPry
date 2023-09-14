@@ -13,6 +13,21 @@ gp_acquisition:
   BatchOptimizer:
     acq_func:
       LogExp: {zeta_scaling: 0.85}
+    proposer:  # default (undefined): a mixture of uniform and centroids
+    acq_optimizer: fmin_l_bfgs_b
+    n_restarts_optimizer: 5d
+    n_repeats_propose: 10
+    verbose:  # set only if you want different verbosity for the acq process
+#  NORA:
+#    acq_func:
+#      LogExp: {zeta_scaling: 0.85}
+#    mc_every: 2d
+#    nlive_per_training: 3
+#    nlive_per_dim_max: 25
+#    num_repeats_per_dim: 5
+#    precision_criterion_target: 0.005
+#    nprior_per_nlive: 10
+#    verbose:  # set only if you want different verbosity for the acq process
 
 # Proposer used for drawing the initial training samples before running
 # the acquisition loop. One of [reference, prior, uniform].
@@ -21,7 +36,7 @@ initial_proposer: reference
 
 # Convergence criterion.
 # Can be specified as a dict with args, e.g. {CorrectCounter: {abstol: 0.01s}}
-convergence_criterion: "CorrectCounter"
+convergence_criterion: CorrectCounter
 
 # Options regarding the bayesian optimization loop.
 options: {}
@@ -36,12 +51,9 @@ options: {}
     ##"max_total": None,  # default: 70 times the dimentionality ^1.5
     # Maximum number of points accepted into the GP training set before the run fails.
     ##"max_finite": None,  # default: value of max_total
-    # Scaling of the :math:`\zeta` parameter in the exponential acquisition function
-    # with the number of dimensions :math:`\zeta=1/d^-scaling`
-    ##"zeta_scaling": None,  # default: 0.85
 
 # Cobaya sampler used to generate the final sample from the surrogate model
-mc_sampler: "mcmc"  # default: mcmc with Cobaya defaults
+mc_sampler: mcmc  # default: mcmc with Cobaya defaults
 
 # Produce progress plots (inside the gpry_output dir).
 # Adds overhead for very fast likelihoods.

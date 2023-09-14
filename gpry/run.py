@@ -409,11 +409,8 @@ class Runner():
             gp_acquisition_defaults = {
                 "bounds": self.prior_bounds,
                 "preprocessing_X": Normalize_bounds(self.prior_bounds),
+                "random_state": self.random_state,
                 "acq_func": {"LogExp": {"zeta_scaling": 0.85}},
-                "proposer": None,
-                "acq_optimizer": "fmin_l_bfgs_b",
-                "n_restarts_optimizer": 5 * self.d,
-                "n_repeats_propose": 10,
                 "verbose": self.verbose,
             }
             for k, value in gp_acquisition_defaults.items():
