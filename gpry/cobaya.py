@@ -15,7 +15,9 @@ from tempfile import gettempdir
 from inspect import cleandoc
 
 from cobaya.sampler import Sampler
+from cobaya.component import get_component_class
 from cobaya.log import LoggedError
+from cobaya.output import get_output
 
 from gpry.run import Runner
 
@@ -44,8 +46,10 @@ class CobayaSampler(Sampler):
             else:
                 self.verbose = 2
         # Prepare output
-        self.path_checkpoint = self.get_base_dir(self.output)
-        self.mc_sample = None
+        self.path_checkpoint, self.surrogate_prefix = \
+            self.get_checkpoint_dir_and_surr_prefix(self.output)
+        self.mc_sampler_upd_info = None
+        self.mc_sampler_instance = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
         # Initialize the runner
         try:
@@ -75,23 +79,39 @@ class CobayaSampler(Sampler):
         Gets the initial training points and starts the acquistion loop.
         """
         self.gpry_runner.run()
-        self.do_surrogate_sample(resume=self.output.is_resuming())
+        self.mc_sampler_upd_info, self.mc_sampler_instance = \
+            self.do_surrogate_sample(resume=self.output.is_resuming())
 
-    def do_surrogate_sample(self, resume=False):
+    def do_surrogate_sample(self, resume=False, prefix=None):
         """
-        Perform an MC sample of the surrogate model. Can be called by hand if the initial
-        one did not converge.
+        Perform an MC sample of the surrogate model.
+
+        This function is called automatically at the end of a run, but it can be called by
+        hand too e.g. if the initial one did not converge.
+
+        Parameters
+        ----------
+        resume: bool (default: False)
+            Whether to try to resume a previous run
+        prefix: str, optional
+            An alternative path where to save the sample. If not given, the sample will
+            use the default one with suffix ``(_)gpr``.
+
+        Resume
+        ------
+        surr_info : dict
+            The dictionary that was used to run (or initialized) the sampler,
+            corresponding to the surrogate model, and populated with the sampler input
+            specification.
+
+        sampler : Sampler instance
+            The sampler instance that has been run (or just initialised). The sampler
+            products can be retrieved with the `Sampler.products()` method.
         """
-        if self.output:
-            output_path = os.path.realpath(
-                os.path.join(self.path_checkpoint, "..", self.surrogate_prefix)
-            )
-        else:
-            output_path = os.path.realpath(
-                os.path.join(self.path_checkpoint, self.surrogate_prefix)
-            )
-        self.mc_sample = self.gpry_runner.generate_mc_sample(
-            sampler=self.mc_sampler, output=output_path, resume=resume
+        if prefix is None:
+            prefix = self.surrogate_prefix
+        return self.gpry_runner.generate_mc_sample(
+            sampler=self.mc_sampler, output=prefix, resume=resume
         )
 
     def products(
@@ -104,24 +124,57 @@ class CobayaSampler(Sampler):
         Returns the products of the run: an MC sample of the surrogate posterior under
         ``sample``, and the GPRy ``Runner`` object under ``runner``.
         """
-        # TODO: MPI interactions -- look at cobaya.mcmc
         return {
+            "sample": self.mc_sampler_instance.products(
+                combined=combined,
+                skip_samples=skip_samples,
+                to_getdist=to_getdist,
+            ),
             "runner": self.gpry_runner,
-            "sample": self.mc_sample,
         }
 
-    @property
-    def surrogate_prefix(self):
-        """
-        Prefix for the MC sample of the surrogate model.
-        """
-        return self.output.prefix + ("_" if self.output else "") + self._surrogate_suffix
-
     @classmethod
-    def get_base_dir(cls, output):
+    def get_checkpoint_dir_and_surr_prefix(cls, output=None):
+        """
+        Folder where the checkpoint output of GPry is going to be saved, and prefix for
+        the output object of the MC sample of the surrogate model.given a Cobaya
+        ``Output`` instance.
+
+        These two are wrapped into a single classmethod in order to use the same temp
+        folder if called with dummy output.
+
+        Parameters
+        ----------
+        output: cobaya.output.Output, cobaya.output.DummyOutput, optional
+            Cobaya output instance. Can be a dummy one or None, in which case a temporary
+            folder will be created.
+
+        Returns
+        -------
+        checkpoint_dir: str
+            Relative folder where the GPry checkpoint will be saved.
+        surrogate_prefix: str
+            Prefix for surrogate MC chains for a Cobaya ``Output`` with relative path.
+
+        Examples
+        --------
+        Assuming that ``cls._gpry_output_dir = "gpry_output"`` and
+        ``cls._surrogate_suffix = "gpr"``:
+
+        >>> from cobaya.output import get_output
+        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output("folder/"))
+        'folder/gpry_output', 'folder/gpr'
+        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output("folder/prefix"))
+        'folder/prefix_gpry_output', 'folder/prefix_gpr'
+        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output())  # dummy output
+        '[tmp_folder]/gpry_output', '[tmp_folder]/gpr'
+        """
         if output:
-            return output.add_suffix(cls._gpry_output_dir, separator="_")
-        return os.path.join(gettempdir(), cls._gpry_output_dir)
+            return (output.add_suffix(cls._gpry_output_dir, separator="_"),
+                    output.add_suffix(cls._surrogate_suffix, separator="_"))
+        tmpdir = gettempdir()
+        return (os.path.join(tmpdir, cls._gpry_output_dir),
+                os.path.join(tmpdir, cls._surrogate_suffix))
 
     @classmethod
     def output_files_regexps(cls, output, info=None, minimal=False):
@@ -130,22 +183,30 @@ class CobayaSampler(Sampler):
         If `root` in the tuple is `None`, `output.folder` is used.
 
         If `minimal=True`, returns regexp's for the files that should really not be there
-        when we are not resuming.
+        when we are not resuming: GPry checkpoint products and the MC sample from the
+        surrogate.
         """
+        path_checkpoint, surrogate_prefix = \
+            cls.get_checkpoint_dir_and_surr_prefix(output)
         # GPry checkpoint files
         regexps_tuples = [
-            (re.compile(re.escape(name + ".pkl")), cls.get_base_dir(output))
+            (re.compile(re.escape(name + ".pkl")), path_checkpoint)
             for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
         ]
-        if minimal:
-            return regexps_tuples
-        return regexps_tuples + [
-            # Raw products base dir
-            (None, cls.get_base_dir(output)),
-            # Main sample
-            (output.collection_regexp(name=None), None),
-        ]
-
+        # MC sample from surrogate -- more precise if we know the sampler
+        surr_mc_output = get_output(prefix=surrogate_prefix)
+        surr_mc_sampler = (info or {}).get("mc_sampler")
+        if surr_mc_sampler:
+            sampler = get_component_class(surr_mc_sampler, kind="sampler")
+            regexps_tuples += [
+                (regexp[0], os.path.join(surr_mc_output.folder, regexp[1] or ""))
+                 for regexp in sampler.output_files_regexps(
+                         output=surr_mc_output, minimal=minimal)
+            ]
+        else:
+            regexps_tuples += \
+                [(surr_mc_output.collection_regexp(name=None), surr_mc_output.folder)]
+        return regexps_tuples
     @classmethod
     def get_desc(cls, info=None):
         return ("GPry: a package for Bayesian inference of expensive likelihoods "
