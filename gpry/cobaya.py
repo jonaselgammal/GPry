@@ -78,9 +78,23 @@ class CobayaSampler(Sampler):
         """
         Gets the initial training points and starts the acquistion loop.
         """
-        self.gpry_runner.run()
-        self.mc_sampler_upd_info, self.mc_sampler_instance = \
-            self.do_surrogate_sample(resume=self.output.is_resuming())
+        self.log.info("Starting learning stage...")
+        try:
+            self.gpry_runner.run()
+        except Exception as excpt:
+            raise LoggedError(self.log, "GPry failed during learning: %s", str(excpt))
+        self.log.info("Learning stage finished successfully!")
+        self.log.info("Starting MC-sampling stage...")
+        try:
+            self.mc_sampler_upd_info, self.mc_sampler_instance = \
+                self.do_surrogate_sample(resume=self.output.is_resuming())
+        except Exception as excpt:
+            raise LoggedError(
+                self.log,
+                "GPry failed during MC sampling of the surrogate model: %s",
+                str(excpt)
+            )
+        self.log.info("MC-sampling finished successfully!")
 
     def do_surrogate_sample(self, resume=False, prefix=None):
         """
@@ -207,10 +221,22 @@ class CobayaSampler(Sampler):
             regexps_tuples += \
                 [(surr_mc_output.collection_regexp(name=None), surr_mc_output.folder)]
         return regexps_tuples
+
+    @staticmethod
+    def is_nora(info):
+        """Returns True if NORA is being used."""
+        acq_method = list(((info or {}).get("gp_acquisition", {}) or {}).keys())
+        print("a", (acq_method and isinstance(acq_method[0], str) and
+                    acq_method[0].lower() == "nora"), acq_method)
+        return (len(acq_method) > 0 and isinstance(acq_method[0], str) and
+                acq_method[0].lower() == "nora")
+
     @classmethod
     def get_desc(cls, info=None):
         return ("GPry: a package for Bayesian inference of expensive likelihoods "
-                r"with Gaussian Processes \cite{Gammal:2022eob}.")
+                r"with Gaussian Processes \cite{Gammal:2022eob}" +
+                (", using the NORA acquisition approach \cite{Torrado:2023cbj}."
+                 if cls.is_nora(info) else "."))
 
     @classmethod
     def get_bibtex(cls):
@@ -223,4 +249,12 @@ class CobayaSampler(Sampler):
                 primaryClass = "astro-ph.CO",
                 month = "11",
                 year = "2022"
-            }""")
+            @article{Torrado:2023cbj,
+                author = {Torrado, Jes\'us and Sch\"oneberg, Nils and Gammal, Jonas El},
+                title = "{Parallelized Acquisition for Active Learning using Monte Carlo Sampling}",
+                eprint = "2305.19267",
+                archivePrefix = "arXiv",
+                primaryClass = "stat.ML",
+                month = "5",
+                year = "2023"
+           }""")
