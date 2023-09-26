@@ -7,13 +7,18 @@
 | Source code   | [Source code on GitHub](https://github.com/jonaselgammal/GPry)                                                                                                                                                                                                                                                                                             |
 | Documentation | [Documentation on Read the Docs](https://gpry.readthedocs.io/en/latest/)                                                                                                                                                                                                                                                                                   |
 | License       | [LGPL](https://www.gnu.org/licenses/lgpl-3.0.en.html) + mandatory bug reporting asap + <br>mandatory [arXiv'ing](https://arxiv.org) of publications using it (see [LICENCE.txt](https://github.com/jonaselgammal/GPry/blob/main/LICENSE) for exceptions).<br>The documentation is licensed under the [GFDL](https://www.gnu.org/licenses/fdl-1.3.en.html). |
-| Support       | For questions drop me an [email](mailto:jonas.el.gammal@rwth-aachen.de). For issues/bugs please use GitHub's functions.                                                                                                                                                                                                                                    |
+| Support       | For questions drop me an [email](mailto:jonas.e.elgammal@uis.no). For issues/bugs please use GitHub's functions.                                                                                                                                                                                                                                    |
 | Installation  | ``pip install gpry``                                                                                                                                                                                                                                                                                                                                       |
 
-GPry was developed as a result of my master thesis and and can be seen as an alternative to established samplers like MCMC and Nested Sampling.
+GPry was developed as a result of my master/PhD thesis and and can be seen as an alternative to established samplers like MCMC and Nested Sampling.
 It is targeted at a specific class of posterior distributions (with the initial goal of speeding up inference in cosmology) with the aim of creating an algorithm which can efficiently obtain marginal quantities from (computationally) expensive likelihoods.
 
 Although our background is in cosmology, GPry will work with any likelihood which can be called as a python function. It uses [Cobaya's](https://github.com/CobayaSampler/cobaya) model framework so all of Cobaya's inbuilt likelihoods work too.
+
+If you are interested in how exactly GPry works there are two papers which explain everything that went into making this package:
+
+- [arXiv:2211.02045](https://arxiv.org/abs/2211.02045) explains the core algorithm.
+- [arXiv:2305.19267](https://arxiv.org/abs/2305.19267) explains the NORA algorithm for robust and efficient active learning with nested sampling.
 
 ### What kinds of likelihoods/posteriors work with GPry?
 The requirements that your likelihood/posterior has to fulfil in order for this algorithm to be efficient and give correct results are as follows:
@@ -29,12 +34,13 @@ Furthermore GPry implements a number of tricks to mitigate some of the pitfalls 
 - A novel **acquisition function** for efficient sampling of the parameter space. This procedure is inspired by Bayesian optimization.
 - A batch acquisition algorithm which enables evaluating the likelihood/posterior in parallel using multiple cores. This is based on the **Kriging-believer** algorithm. A nice bonus is that it also decreases the time for fitting the GP's hyperparameters.
 - In order to prevent sampling regions which fall well outside the 2- &sigma; contours and account for the fact that many theory codes just return 0 far away from the fiducial values instead of computing the actual likelihood (which leads to - &infin; in the log-posterior) we shrink the prior using an **SVM classifier** to divide the parameter space into a "finite" region of interest and an "infinite" (uninteresting) region.
+- Instead of simply optimizing the acquisition function we created the **N**ested sampling **O**ptimization for **R**anked **A**cquisition algorithm for parallelizing the acquisition procedure and gaining robustness with regards to the highly multimodal nature of the acquisition function. 
 
 ### What benefits does GPry offer compared to MCMC, Nested Sampling, ...?
 To put it bluntly mostly the number of samples required to converge to the correct posterior shape. The increase in performance is therefore most pronounced in cases where evaluating the likelihood/posterior at a single location is very costly (i.e. when it requires running some expensive theory calculations, large amounts of data need to be processed, ...).
 
 ### Why does GPry require so few samples to converge?
-Unlike most samplers GPry does not select sampling locations statistically but instead uses a deterministic function which is optimized in order to always sample the location which adds most information. Furthermore, unlike samplers which essentially build a histogram of the sampling locations (like MCMC) and are oblivious to the posterior values themselves, GPry uses all information it can get from the samples by interpolating. There are no such things as rejected steps. Every sample contributes to the GP interpolation.
+Unlike most samplers GPry does not select sampling locations stochastically but instead uses a deterministic function which is optimized in order to always sample the location which adds most information. Furthermore, unlike samplers which essentially build a histogram of the sampling locations (like MCMC) and are oblivious to the posterior values themselves, GPry uses all information it can get from the samples by interpolating. There are no such things as rejected steps. Every sample contributes to the GP interpolation.
 
 ### Where's the catch?
 Like every other sampler GPry isn't perfect and has some limitations:
