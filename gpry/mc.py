@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from copy import deepcopy
 from gpry.gpr import GaussianProcessRegressor
-from gpry.mpi import mpi_rank
+import gpry.mpi as mpi
 from gpry.tools import generic_params_names, is_valid_covmat
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
@@ -137,7 +137,7 @@ def mcmc_info_from_run(model, gpr, cov=None, cov_params=None, verbose=3):
     # Set the reference point of the prior to the sampled location with maximum
     # posterior value
     try:
-        i_max_location = np.argsort(gpr.y_train)[-mpi_rank - 1]
+        i_max_location = np.argsort(gpr.y_train)[-mpi.RANK - 1]
         max_location = gpr.X_train[i_max_location]
     except IndexError:  # more MPI processes than training points: sample from prior
         max_location = [None] * gpr.X_train.shape[-1]

@@ -7,8 +7,7 @@ import numpy as np
 
 from cobaya.model import Model
 
-from gpry.mpi import mpi_comm, mpi_size, mpi_rank, is_main_process, get_random_state, \
-    split_number_for_parallel_processes, multiple_processes, sync_processes, share_attr
+import gpry.mpi as mpi
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
     UniformProposer
 from gpry.gpr import GaussianProcessRegressor
@@ -198,18 +197,18 @@ class Runner():
         self.checkpoint = checkpoint
         if self.checkpoint is not None:
             self.plots_path = os.path.join(self.checkpoint, _plots_path)
-            if is_main_process:
+            if mpi.is_main_process:
                 create_path(self.checkpoint, verbose=self.verbose >= 3)
                 if plots:
                     create_path(self.plots_path, verbose=self.verbose >= 3)
         else:
             self.plots_path = _plots_path
-            if plots and is_main_process:
+            if plots and mpi.is_main_process:
                 create_path(self.plots_path, verbose=self.verbose >= 3)
         self.plots = plots
         self.ensure_paths(plots=self.plots)
-        self.random_state = get_random_state(seed)
-        if is_main_process:
+        self.random_state = mpi.get_random_state(seed)
+        if mpi.is_main_process:
             self.options = options or {}
             # Check if a checkpoint exists already and if so resume from there
             self.loaded_from_checkpoint = False
@@ -292,7 +291,7 @@ class Runner():
             self.max_initial = options.get("max_initial", 10 * self.d * self.n_initial)
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
-            self.n_points_per_acq = options.get("n_points_per_acq", min(mpi_size, self.d))
+            self.n_points_per_acq = options.get("n_points_per_acq", min(mpi.SIZE, self.d))
             self.fit_full_every = options.get(
                 "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
             if self.n_points_per_acq > self.d:
@@ -301,7 +300,7 @@ class Runner():
                          "the feature space. This may lead to slow convergence."
                          "Consider running it with less cores or decreasing "
                          "n_points_per_acq manually.", level=2)
-            elif (self.n_points_per_acq < mpi_size and self.n_points_per_acq < mpi_size and
+            elif (self.n_points_per_acq < mpi.SIZE and self.n_points_per_acq < mpi.SIZE and
                   self.n_points_per_acq < self.d):
                 self.log("Warning: parallellisation not fully utilised! It is advised to "
                          "make ``n_points_per_acq`` equal to the number of MPI processes "
@@ -329,26 +328,26 @@ class Runner():
             self.callback_is_MPI_aware = callback_is_MPI_aware
             # Print resume
             self.log("Initialized GPry.", level=3)
-        if multiple_processes:
+        if mpi.multiple_processes:
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "options", "acquisition",
                          "convergence_is_MPI_aware", "callback_is_MPI_aware",
                          "loaded_from_checkpoint", "initial_proposer", "progress",
                          "diagnosis"):
-                share_attr(self, attr)
+                mpi.share_attr(self, attr)
             self._share_gpr_from_main()
             # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
             if self.convergence_is_MPI_aware:
-                share_attr(self, "convergence")
-            elif not is_main_process:
+                mpi.share_attr(self, "convergence")
+            elif not mpi.is_main_process:
                 self.convergence = None
             if self.callback_is_MPI_aware:
-                share_attr(self, "callback")
+                mpi.share_attr(self, "callback")
             else:  # for check of whether to call it
                 callback_func = callback
-                self.callback = mpi_comm.bcast(
-                    (callback is not None) if is_main_process else None)
-                if is_main_process:
+                self.callback = mpi.comm.bcast(
+                    (callback is not None) if mpi.is_main_process else None)
+                if mpi.is_main_process:
                     self.callback = callback_func
         # Prepare progress summary table; the table key is the iteration number
         if not self.loaded_from_checkpoint:
@@ -518,7 +517,7 @@ class Runner():
         """
         Creates paths for checkpoint and plots.
         """
-        if is_main_process:
+        if mpi.is_main_process:
             if self.checkpoint:
                 create_path(self.checkpoint, verbose=self.verbose >= 3)
             if plots:
@@ -573,7 +572,7 @@ class Runner():
         Saves checkpoint files to be able to resume a run or save the results for
         further processing.
         """
-        if is_main_process:
+        if mpi.is_main_process:
             save_checkpoint(self.checkpoint, self.model, self.gpr, self.acquisition,
                             self.convergence, self.options, self.progress)
 
@@ -581,9 +580,9 @@ class Runner():
         """
         Shares the GPR of the main process, restoring each process' RNG.
         """
-        if not multiple_processes:
+        if not mpi.multiple_processes:
             return
-        share_attr(self, "gpr")
+        mpi.share_attr(self, "gpr")
         self.gpr.set_random_state(self.random_state)
 
     def run(self):
@@ -596,19 +595,19 @@ class Runner():
             return
         if not self.loaded_from_checkpoint:
             # Define initial training set
-            if is_main_process:
+            if mpi.is_main_process:
                 self.banner("Drawing initial samples.")
             self.do_initial_training()
-            if is_main_process:
+            if mpi.is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
         # Run bayesian optimization loop
         n_evals_per_acq_per_process = \
-            split_number_for_parallel_processes(self.n_points_per_acq)
-        n_evals_this_process = n_evals_per_acq_per_process[mpi_rank]
-        i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi_rank])
+            mpi.split_number_for_parallel_processes(self.n_points_per_acq)
+        n_evals_this_process = n_evals_per_acq_per_process[mpi.RANK]
+        i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi.RANK])
         self.has_converged = False
-        if is_main_process:
+        if mpi.is_main_process:
             maybe_stop_before_max_total = (
                 (self.max_finite < self.max_total) or
                 not isinstance(self.convergence, gpryconv.DontConverge))
@@ -617,7 +616,7 @@ class Runner():
                not self.has_converged):
             self.current_iteration += 1
             self.progress.add_iteration()
-            if is_main_process:
+            if mpi.is_main_process:
                 n_iter_left = int(np.ceil(self.n_total_left / self.n_points_per_acq))
                 self.banner(f"Iteration {self.current_iteration} "
                             f"({at_most_str}{n_iter_left} left)\n"
@@ -628,12 +627,12 @@ class Runner():
             self.old_gpr = deepcopy(self.gpr)
             self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
             # Acquire new points in parallel
-            sync_processes()  # to sync the timer
+            mpi.sync_processes()  # to sync the timer
             with TimerCounter(self.gpr) as timer_acq:
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
                     self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state)
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
-            if is_main_process:
+            if mpi.is_main_process:
                 self.log(f"[ACQUISITION] ({timer_acq.time:.2g} sec) Proposed {len(new_X)}"
                          " point(s) for truth evaluation.", level=3)
                 self.log("New location(s) proposed, as [X, logp_gp(X), acq(X)]:", level=4)
@@ -643,37 +642,37 @@ class Runner():
             new_X_this_process = new_X[
                 i_evals_this_process: i_evals_this_process + n_evals_this_process]
             new_y_this_process = np.empty(0)
-            sync_processes()  # to sync the timer
+            mpi.sync_processes()  # to sync the timer
             with Timer() as timer_truth:
                 for x in new_X_this_process:
-                    self.log(f"[{mpi_rank}] Evaluating true posterior at {x}", level=4)
+                    self.log(f"[{mpi.RANK}] Evaluating true posterior at {x}", level=4)
                     new_y_this_process = np.append(
                         new_y_this_process, self.model.logpost(x))
-                    self.log(f"[{mpi_rank}] Got true log-posterior {new_y_this_process} "
+                    self.log(f"[{mpi.RANK}] Got true log-posterior {new_y_this_process} "
                              f"at {x}", level=4)
             self.progress.add_truth(timer_truth.time, len(new_X))
             # Collect (if parallel) and append to the current model
-            if multiple_processes:
+            if mpi.multiple_processes:
                 # GATHER keeps rank order (MPI standard): we can do X and y separately
-                new_Xs = mpi_comm.gather(new_X_this_process)
-                new_ys = mpi_comm.gather(new_y_this_process)
-                if is_main_process:
+                new_Xs = mpi.comm.gather(new_X_this_process)
+                new_ys = mpi.comm.gather(new_y_this_process)
+                if mpi.is_main_process:
                     new_X = np.concatenate(new_Xs)
                     new_y = np.concatenate(new_ys)
-                new_X, new_y = mpi_comm.bcast(
-                    (new_X, new_y) if is_main_process else (None, None))
+                new_X, new_y = mpi.comm.bcast(
+                    (new_X, new_y) if mpi.is_main_process else (None, None))
             else:
                 new_y = new_y_this_process
-            if is_main_process:
+            if mpi.is_main_process:
                 self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) Evaluated the true "
                          f"model at {len(new_X)} location(s)" +
                          (f" (at most {len(new_X_this_process)} per MPI process)"
-                          if multiple_processes else "") +
+                          if mpi.multiple_processes else "") +
                          f", of which {sum(np.isfinite(new_y))} returned a finite value.",
                          level=3)
-            sync_processes()
+            mpi.sync_processes()
             # Add the newly evaluated truths to the GPR, and maye refit hyperparameters
-            if is_main_process:
+            if mpi.is_main_process:
                 kwargs_append = {}
                 kwargs_append["simplified_fit"] = \
                     (self.current_iteration % self.fit_full_every !=
@@ -689,7 +688,7 @@ class Runner():
                     self.gpr.append_to_data(new_X, new_y,
                                             fit=True, **kwargs_append)
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
-            if is_main_process:
+            if mpi.is_main_process:
                 hyperparams_or_not = "*not* " if kwargs_append["simplified_fit"] else ""
                 self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new "
                          "acquired points, "
@@ -698,26 +697,26 @@ class Runner():
                          "the GPR.", level=3)
                 self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=2)
             self._share_gpr_from_main()
-            sync_processes()
+            mpi.sync_processes()
             # share new_X, new_y and y_pred to the runner instance
-            self.new_X, self.new_y, self.y_pred = mpi_comm.bcast(
-                (new_X, new_y, y_pred) if is_main_process else (None, None, None))
+            self.new_X, self.new_y, self.y_pred = mpi.comm.bcast(
+                (new_X, new_y, y_pred) if mpi.is_main_process else (None, None, None))
             # We *could* check the max_total/finite condition and stop now, but it is
             # good to run the convergence criterion anyway, in case it has converged
             # Run the `callback` function
             # TODO: better failsafes for MPI_aware=False BUT actually using MPI
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
             if self.callback:
-                if self.callback_is_MPI_aware or is_main_process:
+                if self.callback_is_MPI_aware or mpi.is_main_process:
                     with Timer() as timer_callback:
                         self.callback(self)
-                    if is_main_process:
+                    if mpi.is_main_process:
                         self.log(f"[CALLBACK] ({timer_callback.time:.2g} sec) Evaluated "
                                  "the callback function.", level=3)
-                sync_processes()
+                mpi.sync_processes()
             # Calculate convergence and break if the run has converged
             if not self.convergence_is_MPI_aware:
-                if is_main_process:
+                if mpi.is_main_process:
                     try:
                         with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                             self.has_converged = self.convergence.is_converged(
@@ -745,22 +744,22 @@ class Runner():
                         timer_convergence.time, timer_convergence.evals,
                         np.nan)
                     self.has_converged = False
-            share_attr(self, "has_converged")
-            if is_main_process:
+            mpi.share_attr(self, "has_converged")
+            if mpi.is_main_process:
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
                          "Evaluated convergence criterion to "
                          f"{self.convergence.last_value:.2g} (limit "
                          f"{self.convergence.thres[-1]:.2g}).", level=3)
-            sync_processes()
+            mpi.sync_processes()
             # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
             # self.update_mean_cov()
             self.progress.mpi_sync()
             self.save_checkpoint()
-            if is_main_process and self.plots:
+            if mpi.is_main_process and self.plots:
                 self.plot_progress()
         else:  # check "while" ending condition
-            sync_processes()
-            if is_main_process:
+            mpi.sync_processes()
+            if mpi.is_main_process:
                 lines = "Finished!\n"
                 if self.has_converged:
                     lines += "- The run has converged.\n"
@@ -796,20 +795,20 @@ class Runner():
                 y, y_is_preprocessed=False)
         else:
             is_finite = lambda y: np.isfinite(y)
-        if is_main_process:
+        if mpi.is_main_process:
             # Check if the GP already contains points. If so they are reused.
             pretrained = 0
             if hasattr(self.gpr, "y_train"):
                 if len(self.gpr.y_train) > 0:
                     pretrained = len(self.gpr.y_train)
             n_still_needed = self.n_initial - pretrained
-            n_to_sample_per_process = int(np.ceil(n_still_needed / mpi_size))
+            n_to_sample_per_process = int(np.ceil(n_still_needed / mpi.SIZE))
             # Arrays to store the initial sample
             X_init = np.empty((0, self.d))
             y_init = np.empty(0)
-        if multiple_processes:
-            n_to_sample_per_process = mpi_comm.bcast(
-                n_to_sample_per_process if is_main_process else None)
+        if mpi.multiple_processes:
+            n_to_sample_per_process = mpi.comm.bcast(
+                n_to_sample_per_process if mpi.is_main_process else None)
         if n_to_sample_per_process == 0 and self.verbose > 1:  # Enough pre-training
             warnings.warn("The number of pretrained points exceeds the number of "
                           "initial samples")
@@ -818,7 +817,7 @@ class Runner():
             np.ceil(self.max_initial / n_to_sample_per_process))
         # Initial samples loop. The initial samples are drawn from the prior
         # and according to the distribution of the prior.
-        sync_processes()  # to sync the timer
+        mpi.sync_processes()  # to sync the timer
         with Timer() as timer_truth:
             for i in range(n_iterations_before_giving_up):
                 X_init_loop = np.empty((0, self.d))
@@ -826,44 +825,44 @@ class Runner():
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
                     X = self.initial_proposer.get(random_state=self.random_state)
-                    self.log(f"[{mpi_rank}] Evaluating true posterior at {X}", level=4)
+                    self.log(f"[{mpi.RANK}] Evaluating true posterior at {X}", level=4)
                     y = self.model.logpost(X)
-                    self.log(f"[{mpi_rank}] Got true log-posterior {y} at {X}", level=4)
+                    self.log(f"[{mpi.RANK}] Got true log-posterior {y} at {X}", level=4)
                     X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                     y_init_loop = np.append(y_init_loop, y)
                 # Gather points and decide whether to break.
-                if multiple_processes:
+                if mpi.multiple_processes:
                     # GATHER keeps rank order (MPI standard): we can do X and y separately
-                    all_points = mpi_comm.gather(X_init_loop)
-                    all_posts = mpi_comm.gather(y_init_loop)
+                    all_points = mpi.comm.gather(X_init_loop)
+                    all_posts = mpi.comm.gather(y_init_loop)
                 else:
                     all_points = [X_init_loop]
                     all_posts = [y_init_loop]
-                if is_main_process:
+                if mpi.is_main_process:
                     X_init = np.concatenate([X_init, np.concatenate(all_points)])
                     y_init = np.concatenate([y_init, np.concatenate(all_posts)])
                     # Only finite values contributes to the number of initial samples
                     n_finite_new = sum(is_finite(y_init - max(y_init)))
                     # Break loop if the desired number of initial samples is reached
                     finished = n_finite_new >= n_still_needed
-                if multiple_processes:
-                    finished = mpi_comm.bcast(finished if is_main_process else None)
+                if mpi.multiple_processes:
+                    finished = mpi.comm.bcast(finished if mpi.is_main_process else None)
                 if finished:
                     break
                 else:
                     # TODO: maybe re-fit SVM to shrink initial sample region
                     pass
-        if self.progress and is_main_process:
+        if self.progress and mpi.is_main_process:
             self.progress.add_truth(timer_truth.time, len(X_init))
-        if is_main_process:
+        if mpi.is_main_process:
             self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) "
                      f"Evaluated the true model at {len(X_init)} location(s)"
                      f", of which {sum(is_finite(y_init - max(y_init)))} returned a "
                      f"finite value." +
                      (" Each MPI process evaluated at most "
                       f"{max(len(p) for p in all_points)} locations."
-                      if multiple_processes else ""), level=3)
-        if is_main_process:
+                      if mpi.multiple_processes else ""), level=3)
+        if mpi.is_main_process:
             # Raise error if the number of initial samples hasn't been reached
             if not finished:
                 raise RuntimeError("The desired number of finite initial "
@@ -889,18 +888,18 @@ class Runner():
         Convergence second if not present in GPAcquisition.
         """
         for attr in ["mean", "cov"]:
-            if is_main_process:
+            if mpi.is_main_process:
                 value = getattr(self.acquisition, attr, None)
                 if value is None:
                     value = getattr(self.convergence, attr, None)
                 setattr(self, attr, value)
-            share_attr(self, attr)
+            mpi.share_attr(self, attr)
 
     def plot_progress(self):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
-        if not is_main_process:
+        if not mpi.is_main_process:
             return
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
@@ -957,7 +956,7 @@ class Runner():
                                  verbose=self.verbose)
 
     def diagnose(self):
-        if is_main_process:
+        if mpi.is_main_process:
             lines = "Starting diagnosis\n"
             lines += "- Evaluating corners"
             self.log(lines)
@@ -1014,7 +1013,7 @@ class Runner():
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
-        if not is_main_process:
+        if not mpi.is_main_process:
             return None
         self.ensure_paths(plots=True)
         if isinstance(surr_info_or_sample_folder, str):
@@ -1062,7 +1061,7 @@ class Runner():
             ``.png`` format at ``checkpoint_path/images/``, or ``./images/`` if
             ``checkpoint_path`` was ``None``.
         """
-        if not is_main_process:
+        if not mpi.is_main_process:
             return
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel

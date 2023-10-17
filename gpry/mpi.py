@@ -8,11 +8,11 @@ from numpy.random import SeedSequence, default_rng, Generator
 MPI.pickle.__init__(dill.dumps, dill.loads)
 
 # Define some interfaces
-mpi_comm = MPI.COMM_WORLD
-mpi_size = mpi_comm.Get_size()
-mpi_rank = mpi_comm.Get_rank()
-is_main_process = not bool(mpi_rank)
-multiple_processes = mpi_size > 1
+comm = MPI.COMM_WORLD
+SIZE = comm.Get_size()
+RANK = comm.Get_rank()
+is_main_process = not bool(RANK)
+multiple_processes = SIZE > 1
 
 
 def get_random_state(seed=None):
@@ -30,12 +30,12 @@ def get_random_state(seed=None):
         return seed
     if is_main_process:
         ss = SeedSequence(seed)
-        child_seeds = ss.spawn(mpi_size)
-    ss = mpi_comm.scatter(child_seeds if is_main_process else None)
+        child_seeds = ss.spawn(SIZE)
+    ss = comm.scatter(child_seeds if is_main_process else None)
     return default_rng(ss)
 
 
-def split_number_for_parallel_processes(n, n_proc=mpi_size):
+def split_number_for_parallel_processes(n, n_proc=SIZE):
     """
     Splits a number of atomic tasks `n` between the parallel processes.
 
@@ -79,10 +79,10 @@ def multi_gather_array(arrs):
         arrs = [arrs]
     Nobj = len(arrs)
     if multiple_processes:
-        all_arrs = mpi_comm.gather(arrs)
+        all_arrs = comm.gather(arrs)
         if is_main_process:
             arrs = [np.concatenate([all_arrs[r][i]
-                                   for r in range(mpi_size)]) for i in range(Nobj)]
+                                   for r in range(SIZE)]) for i in range(Nobj)]
             return arrs
         else:
             return [None for i in range(Nobj)]
@@ -94,7 +94,7 @@ def sync_processes():
     """
     Makes all processes halt here until all have reached this point.
     """
-    mpi_comm.barrier()
+    comm.barrier()
 
 
 def share_attr(instance, attr_name, root=0):
@@ -102,4 +102,4 @@ def share_attr(instance, attr_name, root=0):
     if not multiple_processes:
         return
     setattr(instance, attr_name,
-            mpi_comm.bcast(getattr(instance, attr_name, None), root=root))
+            comm.bcast(getattr(instance, attr_name, None), root=root))

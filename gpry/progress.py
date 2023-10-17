@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import pandas as pd
-from gpry.mpi import is_main_process, multiple_processes, mpi_comm, sync_processes
+import gpry.mpi as mpi
 
 
 class Progress:
@@ -93,7 +93,7 @@ class Progress:
         one, instead of the total number of new evaluations, in order to be consistent
         with the reported evaluation time.
         """
-        if not multiple_processes:
+        if not mpi.multiple_processes:
             return
         # For the number of evaluations, not sure summing them is very helpful.
         # Maybe keep all of them so that the can be plotted per item in slightly different
@@ -107,7 +107,7 @@ class Progress:
         self.bcast_last_max("time_convergence")
         self.bcast_sum("evals_convergence")
         self.bcast_last_max("convergence_crit_value")  # prob not needed
-        sync_processes()
+        mpi.sync_processes()
 
     def bcast_last_max(self, column):
         """
@@ -127,13 +127,13 @@ class Progress:
 
     def _bcast_operation(self, column, operation):
         f = {"max": max, "sum": sum}[operation.lower()]
-        all_values = np.array(mpi_comm.gather(
+        all_values = np.array(mpi.comm.gather(
             self.data.iloc[-1, self.data.columns.get_loc(column)]))
         max_value = None
-        if is_main_process:
+        if mpi.is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
-        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi_comm.bcast(max_value)
+        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.comm.bcast(max_value)
 
     def _x_ticks_for_bar_plot(self, fig, ax):
         fig.canvas.draw()
@@ -172,7 +172,7 @@ class Progress:
         plt.xlabel("Iteration")
         plt.draw()
         self._x_ticks_for_bar_plot(fig, ax)
-        multiprocess_str = " (max over processes)" if multiple_processes else ""
+        multiprocess_str = " (max over processes)" if mpi.multiple_processes else ""
         plt.ylabel("Time (s)" + multiprocess_str)
         plt.legend()
         if save:
@@ -205,7 +205,7 @@ class Progress:
             bottom += self.data[col].to_numpy(dtype=dtype)
         ax.set_xlabel("Iteration")
         self._x_ticks_for_bar_plot(fig, ax)
-        multiprocess_str = " (summed over processes)" if multiple_processes else ""
+        multiprocess_str = " (summed over processes)" if mpi.multiple_processes else ""
         plt.ylabel("Number of evaluations" + multiprocess_str)
         plt.legend()
         if save:

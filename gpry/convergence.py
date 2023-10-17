@@ -11,7 +11,7 @@ import inspect
 from copy import deepcopy
 from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
 from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd
-from gpry.mpi import mpi_comm, is_main_process, multiple_processes
+import gpry.mpi as mpi
 
 
 class ConvergenceCheckError(Exception):
@@ -226,7 +226,7 @@ class GaussianKL(ConvergenceCriterion):
     def _get_new_mean_and_cov(self, gp):
         self.thres.append(self.limit)
         cov_mcmc = None
-        if is_main_process:
+        if mpi.is_main_process:
             reused = False
             if self._last_collection is not None:
                 points = \
@@ -261,23 +261,23 @@ class GaussianKL(ConvergenceCriterion):
                    self.n_reused < self.max_reused:
                     self.n_reused += 1
                     reused = True
-        if multiple_processes:
-            reused = mpi_comm.bcast(reused if is_main_process else None)
+        if mpi.multiple_processes:
+            reused = mpi.comm.bcast(reused if mpi.is_main_process else None)
         if reused:
-            if multiple_processes:
-                mean_reweighted, cov_reweighted = mpi_comm.bcast(
-                    (mean_reweighted, cov_reweighted) if is_main_process else None)
+            if mpi.multiple_processes:
+                mean_reweighted, cov_reweighted = mpi.comm.bcast(
+                    (mean_reweighted, cov_reweighted) if mpi.is_main_process else None)
             return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
         self.n_reused = 0
         self._last_info, collection = self._sample_mcmc(gp, covmat=cov_mcmc)
-        if multiple_processes:
-            all_collections = mpi_comm.gather(collection)
+        if mpi.multiple_processes:
+            all_collections = mpi.comm.gather(collection)
         else:
             all_collections = [collection]
         # Chains in process of rank 0 now!
         # Compute mean and cov, and broadcast
-        if is_main_process:
+        if mpi.is_main_process:
             for i, colect in enumerate(all_collections):
                 colect.detemper()
                 # Skip 1/3 of the chain
@@ -290,9 +290,9 @@ class GaussianKL(ConvergenceCriterion):
             # Only main process caches this one, to save memory
             self._last_collection = single_collection
         # Broadcast results
-        if multiple_processes:
-            mean_new, cov_new = mpi_comm.bcast(
-                (mean_new, cov_new) if is_main_process else None)
+        if mpi.multiple_processes:
+            mean_new, cov_new = mpi.comm.bcast(
+                (mean_new, cov_new) if mpi.is_main_process else None)
         return mean_new, cov_new
 
     def _sample_mcmc(self, gpr, covmat=None):
@@ -324,8 +324,8 @@ class GaussianKL(ConvergenceCriterion):
             success = True
         except LoggedError:
             success = False
-        if multiple_processes:
-            success = all(mpi_comm.allgather(success))
+        if mpi.multiple_processes:
+            success = all(mpi.comm.allgather(success))
         if not success:
             raise ConvergenceCheckError
         updated_info = model.info()

@@ -1,6 +1,6 @@
 import pytest
 from gpry.run import Runner
-from gpry.mpi import is_main_process, mpi_comm
+import gpry.mpi as mpi
 from model_generator import *
 
 import numpy as np
@@ -32,7 +32,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
     surr_info, sampler = runner.generate_mc_sample(sampler=mc_sampler)
     runner.plot_mc(surr_info, sampler)
 
-    if mean is not None and is_main_process:
+    if mean is not None and mpi.is_main_process:
         import os
         from getdist.mcsamples import MCSamplesFromCobaya
         import getdist.plots as gdplt
@@ -48,7 +48,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
                         dpi=300)
 
     # Compare with the true function to get the KL divergence
-    if is_main_process:
+    if mpi.is_main_process:
         s = sampler.products()["sample"]
         x_values = s.data[s.sampled_params]
         logp = s['minuslogpost']
@@ -75,10 +75,10 @@ def test_gaussian(dim):
     # Supported models:
     # Himmelblau, Rosenbrock, Spike, Loggaussian, Ring, Random_gaussian, Curved_degeneracy
     generator = None
-    if is_main_process:
+    if mpi.is_main_process:
     generator = Random_gaussian(ndim=dim)
         generator.redraw()
-    generator = mpi_comm.bcast(generator)
+    generator = mpi.comm.bcast(generator)
     model = generator.get_model()
     _test_pipeline(model, desired_kl=0.05, mean=generator.mean, cov=generator.cov)
 
