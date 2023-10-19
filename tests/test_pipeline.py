@@ -76,7 +76,7 @@ def test_gaussian(dim):
     # Himmelblau, Rosenbrock, Spike, Loggaussian, Ring, Random_gaussian, Curved_degeneracy
     generator = None
     if mpi.is_main_process:
-    generator = Random_gaussian(ndim=dim)
+        generator = Random_gaussian(ndim=dim)
         generator.redraw()
     generator = mpi.comm.bcast(generator)
     model = generator.get_model()
@@ -85,4 +85,7 @@ def test_gaussian(dim):
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) <= 1:
+        print("Pass the dimensionality as first argument.")
+        exit(1)
     test_gaussian(dim=int(sys.argv[1]))

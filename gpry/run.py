@@ -1013,18 +1013,19 @@ class Runner():
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
-        if not mpi.is_main_process:
-            return None
         self.ensure_paths(plots=True)
-        if isinstance(surr_info_or_sample_folder, str):
+        if not isinstance(surr_info_or_sample_folder, str): # passed surr_info, sampler
+            # This call is MPI-aware, so it needs to be done before skipping for non-root
+            gdsamples_gp = sampler.products(
+                to_getdist=True, combined=True, skip_samples=0.33)["sample"]
+        else:
             root = os.path.abspath(surr_info_or_sample_folder)
             if os.path.isdir(root):
                 root += "/"  # to force GetDist to treat it as folder, not prefix
             from getdist.mcsamples import loadMCSamples
             gdsamples_gp = loadMCSamples(root)
-        else:  # passed surr_info, sampler
-            gdsamples_gp = sampler.products(
-                to_getdist=True, combined=True, skip_samples=0.33)["sample"]
+        if not mpi.is_main_process:
+            return None
         import getdist.plots as gdplt
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
