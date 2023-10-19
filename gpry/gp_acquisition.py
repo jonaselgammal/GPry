@@ -916,8 +916,7 @@ class NORA(GenericGPAcquisition):
         elif sigma_y is None:
             this_y = y[i_this_process: i_this_process + n_this_process]
             if len(this_y) > 0:
-                _, this_sigma_y = gpr.predict(this_X, return_std=True, validate=False)
-                # assert np.allclose(this_y, _)
+                this_sigma_y = gpr.predict_std(this_X, validate=False)
             else:
                 this_sigma_y = np.array([], dtype=float)
             self.sigma_y = mpi.multi_gather_array(this_sigma_y)[0]
@@ -1133,7 +1132,7 @@ class RankedPool():
         if y is None:
             y, sigma = self._gpr.predict(X, return_std=True, validate=False)
         elif sigma is None:
-            _, sigma = self._gpr.predict(X, return_std=True, validate=False)
+            sigma = self._gpr.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
         err_sorting = f"Sorting {sorting} not known. Pass 'a'|'d'|None."
@@ -1233,8 +1232,8 @@ class RankedPool():
                 break
             # Otherwise, compute conditioned acquisition value, using point above,
             # and continue to the next iteration to re-rank
-            sigma_cond = self.gpr_cond[i_new - 1].predict(
-                np.atleast_2d(X), return_std=True, validate=False)[1][0]
+            sigma_cond = self.gpr_cond[i_new - 1].predict_std(
+                np.atleast_2d(X), validate=False)[0]
             self.log(level=4,
                      msg=f"[pool.add] Updated conditional std: {sigma_cond}")
             # New acquisition should not be higher than the old one, since the new one
@@ -1343,8 +1342,8 @@ class RankedPool():
             i_1st_inf = next(i for i, ac in enumerate(self.acq_cond) if ac == -np.inf)
         except StopIteration:
             i_1st_inf = len(self) + 1
-        sigma_cond = upper_gpr_cond.predict(
-            self.X[i_start:i_1st_inf], return_std=True, validate=False)[1]
+        sigma_cond = upper_gpr_cond.predict_std(
+            self.X[i_start:i_1st_inf], validate=False)
         # Cond acq cannot be higher than less cond one. This clipping takes care of
         # numerical noise that may make it higher. In particular, keeps -inf if it was so.
         acq_cond = np.clip(

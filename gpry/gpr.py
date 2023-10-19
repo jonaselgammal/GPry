@@ -1033,6 +1033,83 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         return y_mean
 
+    def predict_std(self, X, validate=True):
+        """
+        Predict output standart deviation for X.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Query points where the GP is evaluated.
+
+        validate : bool, default: True
+            If False, ``X`` is assumed to be correctly formatted (2-d float array, with
+            points as rows and dimensions/features as columns, C-contiguous), and no
+            checks are performed on it. Reduces overhead. Use only for repeated calls when
+            the input is programmatically generated to be correct at each stage.
+
+        Returns
+        -------
+        y_std : array, shape = (n_samples,), optional
+            Standard deviation of predictive distribution at query points.
+            Only returned when return_std is True.
+        """
+        self.n_eval += len(X)
+
+        if validate and (self.kernel is None or self.kernel.requires_vector_input):
+            X = check_array(X, ensure_2d=True, dtype="numeric")
+        elif validate:
+            X = check_array(X, ensure_2d=False, dtype=None)
+
+        if not hasattr(self, "X_train_"):  # Not fit; predict based on GP prior
+            # we assume that since the GP has not been fit to data the SVM can be ignored
+            return np.sqrt(self.kernel.diag(X))
+
+        # First check if the SVM says that the value should be -inf
+        if self.account_for_inf is not None:
+            # Every variable that ends in _full is the full (including infinite) values
+            X = np.copy(X)  # copy since we might change it
+            n_samples = X.shape[0]
+            # Initialize the full arrays for filling them later with infinite
+            # and non-infinite values
+            y_std_full = np.zeros(n_samples)  # std is zero when mu is -inf
+            finite = self.account_for_inf.predict(X, validate=validate)
+            # If all values are infinite there's no point in running the
+            # prediction through the GP
+            if np.all(~finite):
+                return np.zeros(n_samples)
+            X = X[finite]  # only predict the finite samples
+
+        if self.preprocessing_X is not None:
+            X = self.preprocessing_X.transform(X)
+
+        # Predict based on GP posterior
+        K_trans = self.kernel_(X, self.X_train_)
+        M = tri_mul(1., self.V_, K_trans.T, lower=True)
+        # Compute variance of predictive distribution
+        y_var = self.kernel_.diag(X)
+        y_var -= np.einsum("ji,ji->i", M, M, optimize=True)
+        # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
+        # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
+        # Check if any of the variances is negative because of
+        # numerical issues. If yes: set the variance to 0.
+        y_var_negative = y_var < 0
+        if np.any(y_var_negative):
+            if self.verbose > 4:
+                warnings.warn("Predicted variances smaller than 0. "
+                              "Setting those variances to 0.")
+            y_var[y_var_negative] = 0.0
+        y_std = np.sqrt(y_var)
+        # Undo normalization
+        if self.preprocessing_y is not None:
+            y_std = self.preprocessing_y.\
+                inverse_transform_noise_level(y_std)
+        # Add infinite values
+        if self.account_for_inf is not None:
+            y_std_full[finite] = y_std
+            y_std = y_std_full
+        return y_std
+
     def __deepcopy__(self, memo):
         """
         Overwrites the internal deepcopy method of the class in order to
