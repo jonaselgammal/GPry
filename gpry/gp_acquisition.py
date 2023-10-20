@@ -1126,9 +1126,6 @@ class RankedPool():
             self.add(
                 X[0], y[0] if y else None, sigma[0] if sigma else None, sorting=sorting)
             return
-        # Multiple points: sort in descending order of acquisition function values before
-        # adding them one-by-one, for stability, since the addition order has some
-        # influence on the final order. It is also faster: fewer insertions into the pool.
         if y is None:
             y, sigma = self._gpr.predict(X, return_std=True, validate=False)
         elif sigma is None:
@@ -1350,8 +1347,9 @@ class RankedPool():
             self._acq_func(self.y[i_start:i_1st_inf], sigma_cond),
             None, np.inf if i_start == 0 else self.acq_cond[i_start - 1]
         )
-        self.log(level=4, msg=f"[pool.sort] New conditioned std: {sigma_cond}")
-        self.log(level=4, msg=f"[pool.sort] New conditioned acq: {acq_cond}")
+        if self.verbose >= 4:  # avoid creating the f-strings
+            self.log(level=4, msg=f"[pool.sort] New conditioned std: {sigma_cond}")
+            self.log(level=4, msg=f"[pool.sort] New conditioned acq: {acq_cond}")
         j_sort = np.argsort(-acq_cond)  # descending order! -- This is a *sub*list index!
         acq_cond_max = acq_cond[j_sort[0]]
         # If the max found was -inf, no need to re-sort points: disable all and return
