@@ -15,11 +15,11 @@ import numpy as np
 import scipy.optimize
 from sklearn.base import is_regressor
 
-from gpry.acquisition_functions import is_acquisition_function
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 import gpry.mpi as mpi
 from gpry.tools import NumpyErrorHandling
+
 
 # TODO: inconsistent use of random_state: passed at init, and also at acquisition time
 
@@ -52,7 +52,7 @@ class GenericGPAcquisition():
         self.preprocessing_X = preprocessing_X
         self.verbose = verbose
         self.random_state = random_state
-        if is_acquisition_function(acq_func):
+        if gpryacqfuncs.is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif isinstance(acq_func, (Mapping, str)):
             if isinstance(acq_func, str):
@@ -863,7 +863,7 @@ class NORA(GenericGPAcquisition):
         # mpi.sync_processes()
         # s = time()
         merged_pool = self._parallel_rank_and_merge(
-            this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
+            this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method="auto")
         # if mpi.is_main_process:
         #     PARA = time() - s
         #     # print(merged_pool)
@@ -943,7 +943,7 @@ class NORA(GenericGPAcquisition):
         return self.pool
 
     def _parallel_rank_and_merge(
-            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr):
+            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None):
         # The size of the pool should be at least the amount of points to be acquired.
         # If running several processes in parallel, it can be reduced down to the number
         #   of points to be evaluated per process, but with less guarantee to find an
@@ -951,9 +951,8 @@ class NORA(GenericGPAcquisition):
         self.pool = RankedPool(
             n_points, gpr=gpr, acq_func=self.acq_func_y_sigma, verbose=self.verbose - 3)
         with np.errstate(divide='ignore'):
-            for i in range(len(this_X) - 1, -1, -1):
-                self.pool.add_one(this_X[i], this_y[i], this_sigma_y[i], this_acq[i])
-            merged_pool = self._merge_pools(n_points, gpr)
+            self.pool.add(this_X, this_y, this_sigma_y, this_acq, method=method)
+            merged_pool = self._merge_pools(n_points, gpr, method=method)
         return merged_pool
 
     def _gather_pools(self):
@@ -981,7 +980,7 @@ class NORA(GenericGPAcquisition):
             return pool_X, pool_y, pool_sigma, pool_acq
         return None, None, None, None
 
-    def _merge_pools(self, n_points, gpr):
+    def _merge_pools(self, n_points, gpr, method=None):
         """
         Merges the pools of parallel processes to find ``n_points`` optimal locations.
 
@@ -997,7 +996,7 @@ class NORA(GenericGPAcquisition):
             merged_pool = RankedPool(
                 n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
                 verbose=self.pool.verbose)
-            merged_pool.add(pool_X, pool_y, pool_sigma, pool_acq, sorting="d")
+            merged_pool.add(pool_X, pool_y, pool_sigma, pool_acq, method=method)
         merged_pool = mpi.comm.bcast(merged_pool)
         return merged_pool
 
@@ -1096,10 +1095,9 @@ class RankedPool():
     def __str__(self):
         return self.str_pool(include_last=False)
 
-    def add(self, X, y=None, sigma=None, acq=None, sorting=None):
+    def add(self, X, y=None, sigma=None, acq=None, method="auto"):
         """
-        Adds points to the pool. For stability, it sorts them first in order of growing
-        acquisition value function.
+        Adds points to the pool.
 
         Parameters
         ----------
@@ -1115,16 +1113,18 @@ class RankedPool():
         acq: np.ndarray (1 dimension fewer than X) or float, optional
             Acquisition function values (unconditioned). Will be computed if not passed.
 
-        sorting: {"d", "a", None} (default: None)
-            Whether to sort the batch before adding it, in descending (``"d"``) or
-            ascending (``"a"``) order, or not change order (``None``, default).
+        method: {"auto", "single", "single sort acq", "single sort y", "bulk"}
+            Uses the one-by-one algorithm ("single", with pre-sorting accorting to X if
+            "single sort X"), or the bulk algorithm. "auto" selects bulk addition for
+            dimensionalities 4 and smaller, where it is expected to be faster, and
+            "single sort acq" for larger dimensionalities.
         """
         if len(X.shape) < 2:
-            self.add(X, y, sigma, sorting=sorting)
+            self.add(X, y, sigma, method=method)
             return
         if X.shape[1] == 1:
             self.add(
-                X[0], y[0] if y else None, sigma[0] if sigma else None, sorting=sorting)
+                X[0], y[0] if y else None, sigma[0] if sigma else None, method=method)
             return
         if y is None:
             y, sigma = self._gpr.predict(X, return_std=True, validate=False)
@@ -1132,21 +1132,60 @@ class RankedPool():
             sigma = self._gpr.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
-        err_sorting = f"Sorting {sorting} not known. Pass 'a'|'d'|None."
-        if isinstance(sorting, str):
-            if sorting.lower() == "a":
-                i_sort = np.argsort(acq)
-            elif sorting.lower() == "d":
-                i_sort = np.argsort(acq)[::-1]  # descending order
-            else:
-                raise ValueError(err_sorting)
-            for i in i_sort:
+        if method.lower() == "auto":
+            method = "bulk" if self._gpr.d <= 4 else "single sort acq"
+        if method.lower() == "bulk":
+            self.add_bulk(X, y, sigma, acq)
+        elif method.lower().startswith("single"):
+            i_sort = None
+            if "sort" in method.lower():
+                i_sort = np.argsort(
+                    {"acq": acq, "y": y}[method.lower().split()[-1]])[::-1]
+            # Descending order of unconditioned acq:
+            # minimizes the number of swaps: model caches + calculation of acq_cond
+            for i in (i_sort if i_sort is not None else range(len(X))):
                 self.add_one(X[i], y[i], sigma[i], acq[i])
-        elif sorting is None:
-            for X_i, y_i, sigma_i, acq_i in zip(X, y, sigma, acq):
-                self.add_one(X_i, y_i, sigma_i, acq_i)
         else:
-            raise ValueError(err_sorting)
+            ValueError(f"Algorithm '{method}' not known.")
+
+    def add_bulk(self, X, y, sigma, acq,
+                 #sigma=None, acq=None,
+                 i_start=0):
+        # Compute acq using the model just above (and cache it if needed)
+        if i_start == 0:  # no need to condition
+            gpr = self._gpr
+            acq_cond = acq
+        else:
+            gpr = self.cache_model(i_start - 1)
+            sigma_cond = gpr.predict_std(X, validate=False)
+            acq_cond = self._acq_func(y, sigma_cond)
+        # Find best
+        i_max = np.argmax(acq_cond)
+        acq_cond_max = acq_cond[i_max]
+        if acq_cond_max == np.inf:
+            self.log(
+                level=4,
+                msg=f"No finite acq points to fill the pool from [{i_start}] down."
+            )
+            return
+        self.X[i_start] = X[i_max]
+        self.y[i_start] = y[i_max]
+        self.sigma[i_start] = sigma[i_max]
+        self.acq[i_start] = acq[i_max]
+        self.acq_cond[i_start] = acq_cond_max
+        if i_start == len(self) - 1:
+            # Last position just filled. We are done.
+            return
+        # Remove infinities (cond acq will cannot grow when conditioning even more points)
+        i_finite_acq_cond = np.logical_not(acq_cond == -np.inf)
+        i_finite_acq_cond[i_max] = False  # also remove point just added
+        self.add_bulk(
+            X[i_finite_acq_cond],
+            y[i_finite_acq_cond],
+            sigma[i_finite_acq_cond],
+            acq[i_finite_acq_cond],
+            i_start=i_start + 1,
+        )
 
     def add_one(self, X, y=None, sigma=None, acq=None, acq_nan_is_null=False):
         """
@@ -1185,19 +1224,27 @@ class RankedPool():
         ------
         ValueError: if invalid acquisition function value, unless ``acq_nan_is_null=True``.
         """
-        if y is None:
-            y, sigma = self._gpr.predict(
-                np.atleast_2d(X), return_std=True, validate=False)
+        # Discard the point as early as possible!
+        # NB: The equals sign below takes care of the case in which we are trying to add a
+        # point with -inf acq. func. to a pool which is not full (min acq. func. = -inf)
+        if acq <= self.min_acq:
+            self.log(level=4, msg="[pool.add] Acq. func. value too small. Ignoring.")
+            return
+        X = np.atleast_2d(X)
+        if y is None:  # assume sigma is also None
+            y, sigma = self._gpr.predict(X, return_std=True, validate=False)
             y, sigma = y[0], sigma[0]
+        elif not hasattr(y, "__len__"):
+            y = np.array([y])
+        if sigma is None:
+            sigma = self._gpr.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
         if self.verbose >= 4:
             self.log(
                 level=4, msg=("[pool.add] Checking point " +
                               self.str_point(X, y, sigma, acq)))
-        # Discard the point as early as possible!
-        # NB: The equals sign below takes care of the case in which we are trying to add a
-        # point with -inf acq. func. to a pool which is not full (min acq. func. = -inf)
+        # Repeat the min acq test above to leave asap
         if acq <= self.min_acq:
             self.log(level=4, msg="[pool.add] Acq. func. value too small. Ignoring.")
             return
@@ -1229,10 +1276,7 @@ class RankedPool():
                 break
             # Otherwise, compute conditioned acquisition value, using point above,
             # and continue to the next iteration to re-rank
-            sigma_cond = self.gpr_cond[i_new - 1].predict_std(
-                np.atleast_2d(X), validate=False)[0]
-            self.log(level=4,
-                     msg=f"[pool.add] Updated conditional std: {sigma_cond}")
+            sigma_cond = self.gpr_cond[i_new - 1].predict_std(X, validate=False)[0]
             # New acquisition should not be higher than the old one, since the new one
             # corresponds to a model with more training points (though fake ones).
             # This may happen anyway bc numerical errors, e.g. when the correlation
@@ -1240,9 +1284,12 @@ class RankedPool():
             # models are different. We can just ignore it.
             # (Sometimes, it's just ~1e6 relative differences, which is not worrying)
             acq_cond = min(acq_cond, self._acq_func(y, sigma_cond))
-            self.log(level=4,
-                     msg=f"[pool.add] Updated conditional acquisition: {acq_cond}")
             i_new_last = i_new
+            if self.verbose >= 4:  # avoid creating the f-strings
+                self.log(level=4,
+                         msg=f"[pool.add] Updated conditional std: {sigma_cond}")
+                self.log(level=4,
+                         msg=f"[pool.add] Updated conditional acquisition: {acq_cond}")
         # The last position is just a place-holder: don't save it if it falls there.
         if i_new >= len(self):
             self.log(level=4, msg="[pool.add] Discarded!")
