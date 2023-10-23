@@ -897,10 +897,12 @@ class NORA(GenericGPAcquisition):
         Parallelises the computation if possible (returns split arrays per process).
         """
         X = mpi.comm.bcast(self.X)
-        n_per_process = mpi.split_number_for_parallel_processes(len(X))
-        n_this_process = n_per_process[mpi.RANK]
-        i_this_process = sum(n_per_process[:mpi.RANK])
-        this_X = X[i_this_process: i_this_process + n_this_process]
+        # We don't use mpi.split_number_for_parallel_processes because for the ranking
+        # it is good to have similar y scaling in all MPI processes. But if we use that
+        # function, some processes get the top of the dist, and others the bottom, and
+        # the bottom one's scaling does not perform well with the add_one method, even
+        # after sorting, and the slowest MPI process sets the global speed
+        this_X = X[mpi.RANK::mpi.SIZE]
         y = mpi.comm.bcast(self.y)
         sigma_y = mpi.comm.bcast(self.sigma_y)
         if y is None:  # assume sigma_y is also None
@@ -914,7 +916,7 @@ class NORA(GenericGPAcquisition):
             mpi.share_attr(self, "y")
             mpi.share_attr(self, "sigma_y")
         elif sigma_y is None:
-            this_y = y[i_this_process: i_this_process + n_this_process]
+            this_y = y[mpi.RANK::mpi.SIZE]
             if len(this_y) > 0:
                 this_sigma_y = gpr.predict_std(this_X, validate=False)
             else:
@@ -922,8 +924,8 @@ class NORA(GenericGPAcquisition):
             self.sigma_y = mpi.multi_gather_array(this_sigma_y)[0]
             mpi.share_attr(self, "sigma_y")
         else:  # both y and sigma_y are known
-            this_y = y[i_this_process: i_this_process + n_this_process]
-            this_sigma_y = sigma_y[i_this_process: i_this_process + n_this_process]
+            this_y = y[mpi.RANK::mpi.SIZE]
+            this_sigma_y = sigma_y[mpi.RANK::mpi.SIZE]
         with np.errstate(divide='ignore'):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
         self.acq_value = mpi.multi_gather_array(this_acq)[0]
@@ -944,6 +946,11 @@ class NORA(GenericGPAcquisition):
 
     def _parallel_rank_and_merge(
             self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None):
+        # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
+        merge_method = None
+        if method.lower() == "auto":
+            method = "bulk" if gpr.d <= 4 else "single sort acq"
+            merge_method = "bulk"
         # The size of the pool should be at least the amount of points to be acquired.
         # If running several processes in parallel, it can be reduced down to the number
         #   of points to be evaluated per process, but with less guarantee to find an
@@ -952,7 +959,7 @@ class NORA(GenericGPAcquisition):
             n_points, gpr=gpr, acq_func=self.acq_func_y_sigma, verbose=self.verbose - 3)
         with np.errstate(divide='ignore'):
             self.pool.add(this_X, this_y, this_sigma_y, this_acq, method=method)
-            merged_pool = self._merge_pools(n_points, gpr, method=method)
+            merged_pool = self._merge_pools(n_points, gpr, method=merge_method)
         return merged_pool
 
     def _gather_pools(self):
@@ -1095,7 +1102,7 @@ class RankedPool():
     def __str__(self):
         return self.str_pool(include_last=False)
 
-    def add(self, X, y=None, sigma=None, acq=None, method="auto"):
+    def add(self, X, y=None, sigma=None, acq=None, method="single sort acq"):
         """
         Adds points to the pool.
 
@@ -1113,11 +1120,9 @@ class RankedPool():
         acq: np.ndarray (1 dimension fewer than X) or float, optional
             Acquisition function values (unconditioned). Will be computed if not passed.
 
-        method: {"auto", "single", "single sort acq", "single sort y", "bulk"}
+        method: {"single", "single sort acq", "single sort y", "bulk"}
             Uses the one-by-one algorithm ("single", with pre-sorting accorting to X if
-            "single sort X"), or the bulk algorithm. "auto" selects bulk addition for
-            dimensionalities 4 and smaller, where it is expected to be faster, and
-            "single sort acq" for larger dimensionalities.
+            "single sort X"), or the bulk algorithm.
         """
         if len(X.shape) < 2:
             self.add(X, y, sigma, method=method)
@@ -1132,8 +1137,6 @@ class RankedPool():
             sigma = self._gpr.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
-        if method.lower() == "auto":
-            method = "bulk" if self._gpr.d <= 4 else "single sort acq"
         if method.lower() == "bulk":
             self.add_bulk(X, y, sigma, acq)
         elif method.lower().startswith("single"):
