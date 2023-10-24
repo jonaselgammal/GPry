@@ -629,6 +629,7 @@ class NORA(GenericGPAcquisition):
                  zeta=None,
                  zeta_scaling=None,
                  # Class-specific:
+                 sampler="polychord",
                  mc_every="1d",
                  use_prior_sample=False,
                  nlive_per_training=3,
@@ -660,6 +661,7 @@ class NORA(GenericGPAcquisition):
         self.i = 0
         self.acq_func_y_sigma = None
         # Configure nested sampler
+        self.sampler = sampler
         self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
         # Don't write unnecessary files: take lots of space and waste time
         self.polychord_settings.read_resume = False
@@ -722,7 +724,7 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
-    def get_MC_sample(self, gpr, random_state=None, sampler="polychord"):
+    def get_MC_sample(self, gpr, random_state=None, sampler=None):
         """
 
         Returns
@@ -730,10 +732,14 @@ class NORA(GenericGPAcquisition):
         X, y, sigma_y
             May return None for any of y, sigma_y
         """
+        if sampler is None:
+            sampler = self.sampler
         if sampler.lower() == "uniform":
             return self._get_MC_sample_uniform(gpr, random_state)
         if sampler.lower() == "polychord":
             return self._get_MC_sample_polychord(gpr, random_state)
+        if sampler.lower() == "ultranest":
+            return self._get_MC_sample_ultranest(gpr, random_state)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     def _get_MC_sample_uniform(self, gpr, random_state):
@@ -793,6 +799,55 @@ class NORA(GenericGPAcquisition):
             return X, y, None
         return None, None, None
 
+    def _get_MC_sample_ultranest(self, gpr, random_state):
+
+        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
+        def logp(X):
+            """
+            Returns the predicted value at a given point (-inf if prior=0).
+            """
+            return gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
+
+        def uniform_prior_transform(quantiles):
+            return quantiles * (self.bounds[:, 1] - self.bounds[:, 0]) + self.bounds[:, 0]
+
+        import ultranest
+        # Update PolyChord precision settings
+        self.update_NS_precision(gpr)
+        if mpi.is_main_process:
+            if self.tmpdir is None:
+                # TODO: add to checkpoint folder?
+                tmpdir = tempfile.TemporaryDirectory().name
+            else:
+                tmpdir = f"{self.tmpdir}/{self.i}"
+                self.i += 1
+            # ALT: persistent folder:
+            # tmpdir = tempfile.mkdtemp()
+            self.polychord_settings.base_dir = tmpdir
+            self.polychord_settings.file_root = "test"
+        mpi.share_attr(self, "polychord_settings")
+        sampler = ultranest.ReactiveNestedSampler(
+            [f"x_{i}" for i in range(gpr.d)],
+            logp, uniform_prior_transform, log_dir=self.polychord_settings.base_dir,
+            resume="overwrite",
+            vectorized=True,
+        )
+        with NumpyErrorHandling(all="ignore") as _:
+            result = sampler.run(
+                min_num_live_points=self.polychord_settings.nlive,
+                frac_remain=self.polychord_settings.precision_criterion,
+                viz_callback=False, show_status=False,
+            )
+        if mpi.is_main_process:
+            X = result["weighted_samples"]["points"]
+            y = result["weighted_samples"]["logl"]
+            if self.use_prior_sample:
+                raise NotImplementedError
+            # Delete products from tmp folder
+            shutil.rmtree(self.polychord_settings.base_dir)
+            return X, y, None
+        return None, None, None
+
     def multi_add(self, gpr, n_points=1, random_state=None):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
@@ -845,7 +900,7 @@ class NORA(GenericGPAcquisition):
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every)
         if mc_sample_this_time:
             self.X, self.y, self.sigma_y = self.get_MC_sample(
-                gpr, random_state, sampler="polychord")
+                gpr, random_state)
         else:  # reuse
             self.X, self.y, self.sigma_y = self.X, None, None
         self.mc_every_i += 1
