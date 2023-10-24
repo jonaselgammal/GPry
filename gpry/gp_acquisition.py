@@ -753,7 +753,7 @@ class NORA(GenericGPAcquisition):
             """
             Returns the predicted value at a given point (-inf if prior=0).
             """
-            return gpr.predict(np.atleast_2d(X), return_std=False, validate=False)[0], []
+            return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
         # Update PolyChord precision settings
         self.update_NS_precision(gpr)
