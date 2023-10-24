@@ -4,6 +4,7 @@ true function.
 """
 
 import sys
+import shutil
 import warnings
 import inspect
 import tempfile
@@ -663,7 +664,7 @@ class NORA(GenericGPAcquisition):
         self.polychord_settings.write_resume = False
         self.polychord_settings.write_live = False
         self.polychord_settings.write_dead = True
-        self.polychord_settings.write_prior = True
+        self.polychord_settings.write_prior = self.use_prior_sample
         self.polychord_settings.feedback = verbose - 3
         # 0: print header and result; not very useful: turn it to -1 if that's the case
         if self.polychord_settings.feedback == 0:
@@ -785,6 +786,8 @@ class NORA(GenericGPAcquisition):
                 y_prior = - prior_T[1] / 2  # this one is stored as chi2
                 X = np.concatenate([X_prior, X])
                 y = np.concatenate([y_prior, y])
+            # Delete products from tmp folder
+            shutil.rmtree(self.polychord_settings.base_dir)
             return X, y, None
         return None, None, None
 
