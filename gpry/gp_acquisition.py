@@ -629,12 +629,12 @@ class NORA(GenericGPAcquisition):
                  zeta=None,
                  zeta_scaling=None,
                  # Class-specific:
-                 mc_every=1,
+                 mc_every="1d",
                  use_prior_sample=False,
                  nlive_per_training=3,
                  nlive_per_dim_max=25,
                  num_repeats_per_dim=5,
-                 precision_criterion_target=0.005,
+                 precision_criterion_target=0.01,
                  nprior_per_nlive=10,
                  tmpdir=None,
                  ):
@@ -649,6 +649,8 @@ class NORA(GenericGPAcquisition):
             raise ImportError(
                 "PolyChord needs to be installed to use this acquirer.") from excpt
         if "d" in str(mc_every):
+            if mc_every == "d":
+                mc_every = "1d"
             self.mc_every = int(mc_every.rstrip("d")) * self.n_d
         else:
             self.mc_every = int(mc_every)
@@ -1048,6 +1050,8 @@ class RankedPool():
         self.acq = np.zeros((size + 1))
         # Cached conditioned GPR's
         self.reset_cache()
+        # Counter how many models have been cached, for efficieny checks
+        self.cache_counter = 0
 
     def __len__(self):
         return len(self.y) - 1
@@ -1154,13 +1158,23 @@ class RankedPool():
         else:
             ValueError(f"Algorithm '{method}' not known.")
 
-    def add_bulk(self, X, y, sigma, acq,
-                 #sigma=None, acq=None,
-                 i_start=0):
+    def add_bulk(self, X, y, sigma, acq, i_start=0):
+        """
+        Tries to fill the pull using a batch of points at once:
+
+        1. Compute their acquisition value conditioned to the position above (if any).
+        2. Pick the best and delete infinities (acq cannot grow with more conditioning).
+        3. Place it in the current position, and do a recursive call for the next one.
+
+        The advantage of this method with respect to ``add_one`` is that it can use
+        vectorization to compute the std's, but on the other hand it needs to compute
+        many more of them, so it will be better only up to some dimension and some amount
+        of training, and then ``add_one`` will take over.
+        """
         # Compute acq using the model just above (and cache it if needed)
         if i_start == 0:  # no need to condition
             gpr = self._gpr
-            acq_cond = acq
+            acq_cond = acq if isinstance(acq, np.ndarray) else np.array(acq)
         else:
             gpr = self.cache_model(i_start - 1)
             sigma_cond = gpr.predict_std(X, validate=False)
@@ -1331,14 +1345,29 @@ class RankedPool():
 
         Stores and returns the conditioned gpr (or the original one if ``i=-1``).
         """
+        # This function accounts for ~50% of the ranking time in add_one() (the rest is
+        # mostly predict_std()).
+        # Taking dim=8 as reference, deepcopy is ~1/3 and append_to_data ~2/3 of the cost.
+        # Possible optimization strategies:
+        # - Disable SVM in cached models (no need to copy, fit, or evaluate), assuming all
+        #   passed points are finite [tested to improve <10% overall in add_one{}]
+        # - Copy model above instead of original one, and fit to single new point only
+        #   [tested: no appreciable gain]
+        # - Keep a single cached model, adding points to it when going down the list.
+        #   If there are very few inversions, we save the cost of copying [potentially
+        #   ~30% this function, 15% overall in add_one()]
+        # - Disable the copying of stuff not needed to compute std.
+        # - At append_to_data, compute only what is strictly needed for std (I think the
+        #   kernel gradient is the only such thing.
+        # - Create model anew with fixed given kernel and no SVM, and fit all points.
+        # In any case, the cost is now very low compared to nested sampling and hyperparam
+        # fitting.
         if i < 0:
             return self._gpr
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
         self.gpr_cond[i] = deepcopy(self._gpr)
-        # NB: old code contains a loop to increasingly add noise during this "fit"
-        #     if needed (doesn't matter too much in an augmented model)
-        self.gpr_cond[i].append_to_data(
-            self.X[:i + 1], self.y[:i + 1], fit=False)
+        self.gpr_cond[i].append_to_data(self.X[:i + 1], self.y[:i + 1], fit=False)
+        self.cache_counter += 1
         return self.gpr_cond[i]
 
     def reset_cache(self):

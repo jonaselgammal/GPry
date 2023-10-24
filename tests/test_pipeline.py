@@ -13,7 +13,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
                    mc_sampler="mcmc", desired_kl=0.05, mean=None, cov=None):
     # Sets up a runner, calls run and mc and checks whether it converged within reason.
     bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
-    # gp_acquisition = {"NORA": {"mc_every": model.prior.d()}}
+    # gp_acquisition = {"NORA": {}}
     options["n_points_per_acq"] = model.prior.d()
     runner = Runner(model, gpr=gpr, gp_acquisition=gp_acquisition,
                     convergence_criterion=convergence_criterion, callback=callback,
