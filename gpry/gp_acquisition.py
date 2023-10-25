@@ -48,8 +48,8 @@ class GenericGPAcquisition():
                  zeta=None,
                  zeta_scaling=None,
                  ):
-        self.bounds = bounds
-        self.n_d = np.shape(bounds)[0]
+        self.bounds = np.array(bounds)
+        self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
         self.verbose = verbose
         self.random_state = random_state
@@ -552,7 +552,7 @@ class NORA(GenericGPAcquisition):
     Acquistion).
 
     Uses kriging believer while it samples the acquisition function using nested
-    sampling (with PolyChord).
+    sampling (with PolyChord or UltraNest).
 
     Parameters
     ----------
@@ -581,8 +581,8 @@ class NORA(GenericGPAcquisition):
         Specifies the value of the zeta parameter directly.
 
     use_prior_sample: bool
-        Whether to use the initial prior sample from PolyChord for the ranking. Can be
-        large in high dimension. Default: False.
+        Whether to use the initial prior sample from Nested Sampling for the ranking.
+        Can be a large number of them in high dimension. Default: False.
 
     nlive_per_training: int
         live points per sample in the current training set.
@@ -595,7 +595,7 @@ class NORA(GenericGPAcquisition):
         length of slice-chains times dimension.
 
     precision_criterion_target: float
-        Cap on precision criterion of PolyChord.
+        Cap on precision criterion of Nested Sampling
 
     nprior_per_nlive: int
         Number of initial samples times dimension.
@@ -629,7 +629,7 @@ class NORA(GenericGPAcquisition):
                  zeta=None,
                  zeta_scaling=None,
                  # Class-specific:
-                 sampler="polychord",
+                 sampler="ultranest",
                  mc_every="1d",
                  use_prior_sample=False,
                  nlive_per_training=3,
@@ -642,13 +642,6 @@ class NORA(GenericGPAcquisition):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
             verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
-        try:
-            # pylint: disable=import-outside-toplevel
-            from pypolychord.settings import PolyChordSettings
-            from pypolychord.priors import UniformPrior
-        except ImportError as excpt:
-            raise ImportError(
-                "PolyChord needs to be installed to use this acquirer.") from excpt
         if "d" in str(mc_every):
             if mc_every == "d":
                 mc_every = "1d"
@@ -662,17 +655,38 @@ class NORA(GenericGPAcquisition):
         self.acq_func_y_sigma = None
         # Configure nested sampler
         self.sampler = sampler
-        self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
-        # Don't write unnecessary files: take lots of space and waste time
-        self.polychord_settings.read_resume = False
-        self.polychord_settings.write_resume = False
-        self.polychord_settings.write_live = False
-        self.polychord_settings.write_dead = True
-        self.polychord_settings.write_prior = self.use_prior_sample
-        self.polychord_settings.feedback = verbose - 3
-        # 0: print header and result; not very useful: turn it to -1 if that's the case
-        if self.polychord_settings.feedback == 0:
-            self.polychord_settings.feedback = -1
+        if self.sampler.lower() == "polychord":
+            try:
+                # pylint: disable=import-outside-toplevel
+                from pypolychord.settings import PolyChordSettings
+                from pypolychord.priors import UniformPrior
+            except ImportError as excpt:
+                raise ImportError(
+                    "Please install PolyChord or select an alternative nested sampler "
+                    "(e.g. UltraNest)."
+                ) from excpt
+            self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
+            # Don't write unnecessary files: take lots of space and waste time
+            self.polychord_settings.read_resume = False
+            self.polychord_settings.write_resume = False
+            self.polychord_settings.write_live = False
+            self.polychord_settings.write_dead = True
+            self.polychord_settings.write_prior = self.use_prior_sample
+            self.polychord_settings.feedback = verbose - 3
+            # 0: print header and result; not very useful: turn it to -1 if that's the case
+            if self.polychord_settings.feedback == 0:
+                self.polychord_settings.feedback = -1
+            self.prior = UniformPrior(*self.bounds.T)
+            self.last_polychord_output = None
+        elif self.sampler.lower() == "ultranest":
+            try:
+                # pylint: disable=import-outside-toplevel
+                import ultranest
+            except ImportError as excpt:
+                raise ImportError(
+                    "Please install UltraNest or select an alternative nested sampler "
+                    "(e.g. PolyChord)."
+                ) from excpt
         # TODO: fix this!
         # # Using rng state as seed for PolyChord
         # if self.random_state is not None:
@@ -684,10 +698,8 @@ class NORA(GenericGPAcquisition):
         self.num_repeats_per_dim = num_repeats_per_dim
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
-        self.prior = UniformPrior(*self.bounds.T)
         # Pool for storing intermediate results during parallelised acquisition
         self.pool = None
-        self.last_polychord_output = None
         self.X, self.y, self.sigma_y, self.acq_value = None, None, None, None
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
 
@@ -700,7 +712,7 @@ class NORA(GenericGPAcquisition):
 
     def update_NS_precision(self, gpr):
         """
-        Updates NS (PolyChord) precision parameters:
+        Updates NS precision parameters:
         - num_repeats: constant for now
         - nlive: `nlive_per_training` times the size of the training set, capped at
             `nlive_per_dim_cap` (typically 25) times the dimension.
@@ -708,13 +720,12 @@ class NORA(GenericGPAcquisition):
             (log_max_preccrit, max_logKL) and some (log_min_preccrit, min_logKL)
             and interpolates for the exponential running mean of the logKL's
         """
-        self.polychord_settings.nlive = min(
-            self.nlive_per_training * gpr.n,
-            self.nlive_per_dim_max * self.n_d)
-        self.polychord_settings.num_repeats = self.num_repeats_per_dim * self.n_d
-        self.polychord_settings.precision_criterion = self.precision_criterion_target
-        self.polychord_settings.nprior = \
-            int(self.nprior_per_nlive * self.polychord_settings.nlive)
+        nlive = min(self.nlive_per_training * gpr.n, self.nlive_per_dim_max * self.n_d)
+        return {"nlive": nlive,
+                "num_repeats": self.num_repeats_per_dim * self.n_d,
+                "precision_criterion": self.precision_criterion_target,
+                "nprior": int(self.nprior_per_nlive * nlive),
+        }
 
     def log(self, msg, level=None):
         """
@@ -762,7 +773,9 @@ class NORA(GenericGPAcquisition):
             return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
         # Update PolyChord precision settings
-        self.update_NS_precision(gpr)
+        new_prec = self.update_NS_precision(gpr)
+        for k, v in new_prec.items():
+            setattr(self.polychord_settings, k, v)
         from pypolychord import run_polychord  # pylint: disable=import-outside-toplevel
         if mpi.is_main_process:
             if self.tmpdir is None:
@@ -800,6 +813,8 @@ class NORA(GenericGPAcquisition):
         return None, None, None
 
     def _get_MC_sample_ultranest(self, gpr, random_state):
+        widths = self.bounds[:, 1] - self.bounds[:, 0]
+        lowers = self.bounds[:, 0]
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
@@ -809,11 +824,11 @@ class NORA(GenericGPAcquisition):
             return gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
 
         def uniform_prior_transform(quantiles):
-            return quantiles * (self.bounds[:, 1] - self.bounds[:, 0]) + self.bounds[:, 0]
+            return quantiles * widths + lowers
 
-        import ultranest
-        # Update PolyChord precision settings
-        self.update_NS_precision(gpr)
+        # Update precision settings
+        updated_settings = self.update_NS_precision(gpr)
+        tmpdir = None
         if mpi.is_main_process:
             if self.tmpdir is None:
                 # TODO: add to checkpoint folder?
@@ -823,28 +838,29 @@ class NORA(GenericGPAcquisition):
                 self.i += 1
             # ALT: persistent folder:
             # tmpdir = tempfile.mkdtemp()
-            self.polychord_settings.base_dir = tmpdir
-            self.polychord_settings.file_root = "test"
-        mpi.share_attr(self, "polychord_settings")
-        sampler = ultranest.ReactiveNestedSampler(
-            [f"x_{i}" for i in range(gpr.d)],
-            logp, uniform_prior_transform, log_dir=self.polychord_settings.base_dir,
+        tmpdir = mpi.comm.bcast(tmpdir)
+        updated_settings["log_dir"] = tmpdir
+        from ultranest import ReactiveNestedSampler
+        sampler = ReactiveNestedSampler(
+            [f"x_{i + 1}" for i in range(gpr.d)],
+            logp,
+            uniform_prior_transform, log_dir=updated_settings["log_dir"],
             resume="overwrite",
             vectorized=True,
         )
         with NumpyErrorHandling(all="ignore") as _:
             result = sampler.run(
-                min_num_live_points=self.polychord_settings.nlive,
-                frac_remain=self.polychord_settings.precision_criterion,
+                min_num_live_points=updated_settings["nlive"],
+                frac_remain=updated_settings["precision_criterion"],
                 viz_callback=False, show_status=False,
             )
         if mpi.is_main_process:
             X = result["weighted_samples"]["points"]
             y = result["weighted_samples"]["logl"]
             if self.use_prior_sample:
-                raise NotImplementedError
+                raise NotImplementedError("use_prior not implemented yet for UltraNest.")
             # Delete products from tmp folder
-            shutil.rmtree(self.polychord_settings.base_dir)
+            shutil.rmtree(updated_settings["log_dir"])
             return X, y, None
         return None, None, None
 
@@ -856,7 +872,7 @@ class NORA(GenericGPAcquisition):
         the :math:`f(x)\sim \mu(x)` strategy and and not changing the
         hyperparameters of the model.
 
-        It runs PolyChord on the mean of the GP model, tracking the value
+        It runs NS on the mean of the GP model, tracking the value
         of the acquisition function at every evaluation, and keeping a
         pool of candidates which is re-sorted whenever a new good candidate
         is found.
