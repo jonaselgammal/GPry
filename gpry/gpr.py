@@ -207,17 +207,14 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  verbose=1):
         self.newly_appended = 0
         self.newly_appended_for_inv = 0
-
         self.preprocessing_X = preprocessing_X
         self.preprocessing_y = preprocessing_y
-
         self.noise_level = noise_level
-
         self.n_eval = 0
         self.n_eval_loglike = 0
-
         self.verbose = verbose
-
+        self.minus_inf_value = -np.inf
+        self.inf_value = np.inf
         self._fitted = False
         # Initialize SVM if given
         if account_for_inf == "SVM":
@@ -292,7 +289,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     @property
     def y_max(self):
         """The max. posterior value in the training set."""
-        return np.max(getattr(self, "y_train", [-np.inf]))
+        return np.max(getattr(self, "y_train", [self.minus_inf_value]))
 
     @property
     def n(self):
@@ -927,13 +924,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # If all values are infinite there's no point in running the
             # prediction through the GP
             if np.all(~finite):
-                y_mean = y_mean_full * -np.inf
+                y_mean = y_mean_full * self.minus_inf_value
                 if return_std:
                     y_std = np.zeros(n_samples)
                     if not return_mean_grad and not return_std_grad:
                         return y_mean, y_std
                 if return_mean_grad:
-                    grad_mean = np.ones((n_samples, n_dims)) * np.inf
+                    grad_mean = np.ones((n_samples, n_dims)) * self.inf_value
                     if return_std:
                         if return_std_grad:
                             grad_std = np.zeros((n_samples, n_dims))
@@ -944,8 +941,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                         return y_mean, grad_mean
                 return y_mean
 
-            y_mean_full[~finite] = -np.inf  # Set infinite values
-            grad_mean_full[~finite] = np.inf  # the grad of inf values is +inf
+            y_mean_full[~finite] = self.minus_inf_value  # Set infinite values
+            grad_mean_full[~finite] = self.inf_value  # the grad of inf values is +inf
             X = X[finite]  # only predict the finite samples
 
         if self.preprocessing_X is not None:

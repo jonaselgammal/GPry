@@ -103,6 +103,8 @@ class Runner():
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try decreasing the volume of your prior (default: max_total).
+            * fit_full_every : The GP hyperparameters will be fit every ``fit_full_every``
+              iterations (default : 2 * sqrt(number of dimensions), at least 1)
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and

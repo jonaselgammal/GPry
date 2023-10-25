@@ -813,6 +813,9 @@ class NORA(GenericGPAcquisition):
         return None, None, None
 
     def _get_MC_sample_ultranest(self, gpr, random_state):
+        # Ultranest cannot deal with -np.inf
+        old_minus_inf_value = gpr.minus_inf_value
+        gpr.minus_inf_value = -1e300
         widths = self.bounds[:, 1] - self.bounds[:, 0]
         lowers = self.bounds[:, 0]
 
@@ -854,6 +857,7 @@ class NORA(GenericGPAcquisition):
                 frac_remain=updated_settings["precision_criterion"],
                 viz_callback=False, show_status=False,
             )
+        gpr.minus_inf_value = old_minus_inf_value
         if mpi.is_main_process:
             X = result["weighted_samples"]["points"]
             y = result["weighted_samples"]["logl"]
