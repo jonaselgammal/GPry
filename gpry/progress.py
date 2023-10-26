@@ -159,22 +159,31 @@ class Progress:
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
         bottom = np.zeros(len(self.data.index))
-        for col, label in {
-                "time_acquire": "Acquisition",
-                "time_truth": "Truth",
-                "time_fit": "GP fit",
-                "time_convergence": "Convergence crit."}.items():
-            if not truth and col == "time_truth":
-                continue
-            dtype = self._dtypes[col]
-            ax.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
-            bottom += self.data[col].to_numpy(dtype=dtype)
+        cols_labels = {
+            "time_acquire": "Acquisition",
+            "time_truth": "Truth",
+            "time_fit": "GP fit",
+            "time_convergence": "Convergence crit."}
+        if not truth:
+            cols_labels.pop("time_truth")
+        cols_data = {
+            col: self.data[col].to_numpy(dtype=self._dtypes[col]) for col in cols_labels
+        }
+        cols_totals = {col: sum(data) for col, data in cols_data.items()}
+        total = sum(cols_totals.values())
+        for col, label in cols_labels.items():
+            legend_label = (
+                label + f" (${(cols_totals[col]):.2f}$ sec, "
+                f"${(100 * cols_totals[col] / total):.2f}\%$)"
+            )
+            ax.bar(iters, cols_data[col], label=legend_label, bottom=bottom)
+            bottom += cols_data[col]
         plt.xlabel("Iteration")
         plt.draw()
         self._x_ticks_for_bar_plot(fig, ax)
         multiprocess_str = " (max over processes)" if mpi.multiple_processes else ""
         plt.ylabel("Time (s)" + multiprocess_str)
-        plt.legend()
+        plt.legend(loc="upper left")
         if save:
             plt.savefig(save)
         if show:
@@ -207,7 +216,7 @@ class Progress:
         self._x_ticks_for_bar_plot(fig, ax)
         multiprocess_str = " (summed over processes)" if mpi.multiple_processes else ""
         plt.ylabel("Number of evaluations" + multiprocess_str)
-        plt.legend()
+        plt.legend(loc="upper left")
         if save:
             plt.savefig(save)
         if show:
