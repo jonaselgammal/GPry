@@ -30,9 +30,10 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
         return
 
     # Call the MC sampler on the GP
-    surr_info, sampler = runner.generate_mc_sample(sampler=mc_sampler)
-    runner.plot_mc(surr_info, sampler)
-
+    mc_sample = runner.generate_mc_sample(sampler=mc_sampler)
+    if mpi.is_main_process:
+        runner.plot_mc()  # plots last obtained mc samples
+        runner.plot_distance_distribution()  # plots last obtained mc samples
     if mean is not None and mpi.is_main_process:
         import os
         from getdist.mcsamples import MCSamplesFromCobaya
@@ -40,17 +41,17 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
         from getdist.gaussian_mixtures import GaussianND
-        gdsamples_gp = MCSamplesFromCobaya(surr_info, sampler.products()["sample"])
+        gdsamples_gp = mc_sample.to_getdist()
         gdplot = gdplt.get_subplot_plotter(width_inch=5)
-        to_plot = [gdsamples_gp, GaussianND(mean, cov, names=sampler.products()["sample"].sampled_params)]
-        gdplot.triangle_plot(
-            to_plot, model.parameterization.sampled_params(), filled=True)
+        to_plot = [gdsamples_gp, GaussianND(
+            mean, cov, names=mc_sample.sampled_params, label="Ground truth")]
+        gdplot.triangle_plot(to_plot, mc_sample.sampled_params, filled=True)
         plt.savefig(os.path.join(runner.plots_path, "Surrogate_triangle_truth.png"),
-                        dpi=300)
+                    dpi=300)
 
     # Compare with the true function to get the KL divergence
     if mpi.is_main_process:
-        s = sampler.products()["sample"]
+        s = mc_sample
         x_values = s.data[s.sampled_params]
         logp = s['minuslogpost']
         logp = -logp

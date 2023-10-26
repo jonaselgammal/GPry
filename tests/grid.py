@@ -99,11 +99,11 @@ def callback(runner):
     true_mean = likelihood_generator.mean
     true_cov = likelihood_generator.cov
     paramnames = list(runner.model.parameterization.sampled_params())
-    surr_info, sampler = runner.generate_mc_sample(
+    mc_sample = runner.generate_mc_sample(
         sampler="mcmc", add_options={"covmat": true_cov, "covmat_params": paramnames},
         output=False)
-    mc_mean = sampler.products()["sample"].mean()
-    mc_cov = sampler.products()["sample"].cov()
+    mc_mean = mc_sample.mean()
+    mc_cov = mc_sample.cov()
     # Compute KL_truth and save it to progress table (hacky!)
     kl = max(kl_norm(true_mean, true_cov, mc_mean, mc_cov),
              kl_norm(mc_mean, mc_cov, true_mean, true_cov))
@@ -115,7 +115,7 @@ def callback(runner):
         print(runner.progress)
         from getdist.gaussian_mixtures import MixtureND
         true_dist = MixtureND([true_mean], [true_cov], names=paramnames)
-        runner.plot_mc(surr_info, sampler, add_samples={"Truth": true_dist})
+        runner.plot_mc(add_samples={"Truth": true_dist})
         import matplotlib.pyplot as plt
         plt.show()
 

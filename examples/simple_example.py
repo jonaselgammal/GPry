@@ -71,11 +71,11 @@ runner = Runner(model, checkpoint=checkpoint, load_checkpoint="overwrite")
 runner.run()
 
 # Run the MCMC and extract samples
-updated_info, sampler = runner.generate_mc_sample()
+samples_gp = runner.generate_mc_sample()
 
 # Plotting
-runner.plot_mc(updated_info, sampler)
-runner.plot_distance_distribution(updated_info, sampler)
+runner.plot_mc()
+runner.plot_distance_distribution()
 
 # Validation
 if is_main_process:
@@ -84,7 +84,7 @@ if is_main_process:
     import getdist.plots as gdplt
     from gpry.plots import getdist_add_training
     gpr = runner.gpr
-    gdsamples_gp = MCSamplesFromCobaya(updated_info, sampler.products()["sample"])
+    gdsamples_gp = samples_gp.to_getdist(label="Surrogate MC samples")
     gdsamples_truth = GaussianND(mean, cov, names=list(info["params"]))
     gdplot = gdplt.get_subplot_plotter(width_inch=5)
     gdplot.triangle_plot([gdsamples_truth, gdsamples_gp], list(info["params"]),

@@ -6,6 +6,7 @@ from typing import Mapping
 import numpy as np
 
 from cobaya.model import Model
+from cobaya.collection import SampleCollection
 
 import gpry.mpi as mpi
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
@@ -19,7 +20,7 @@ from gpry.preprocessing import Normalize_bounds, Normalize_y
 import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
-from gpry.mc import mc_sample_from_gp
+from gpry.mc import mc_sample_from_gp, process_gdsamples
 from gpry.plots import plot_convergence, plot_distance_distribution
 from gpry.tools import create_cobaya_model
 
@@ -359,6 +360,8 @@ class Runner():
         self.has_converged = False
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
         self.mean, self.cov = None, None
+        self.last_mc_surr_info, self.last_mc_sampler = None, None
+        self.last_mc_samples = None
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -902,7 +905,10 @@ class Runner():
         Creates some progress plots and saves them at path (assumes path exists).
         """
         if not mpi.is_main_process:
-            return
+            warnings.warn(
+                "Running plotting function from non-root MPI process. "
+                "May create duplicated plots."
+            )
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
@@ -938,24 +944,30 @@ class Runner():
 
         Returns
         -------
-        surr_info : dict
-            The dictionary that was used to run (or initialized) the sampler,
-            corresponding to the surrogate model, and populated with the sampler input
-            specification.
+        mc_samples : :class:`cobaya.collection.SampleCollection`
+            The resulting MC samples.
 
-        sampler : Sampler instance
-            The sampler instance that has been run (or just initialised). The sampler
-            products can be retrieved with the `Sampler.products()` method.
+        Notes
+        -----
+        The last computed samples are saved as an attribute `last_mc_samples` (defined as
+        None it no MC samples have been generated yet).
         """
         if not self.gpr.fitted:
             raise Exception("You have to have added points to the GPR "
                             "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
-        return mc_sample_from_gp(self.gpr, true_model=self.model, sampler=sampler,
-                                 convergence=self.convergence, output=output,
-                                 add_options=add_options, resume=resume,
-                                 verbose=self.verbose)
+        self.last_mc_surr_info, self.last_mc_sampler = mc_sample_from_gp(
+            self.gpr, true_model=self.model, sampler=sampler,
+            convergence=self.convergence, output=output, add_options=add_options,
+            resume=resume, verbose=self.verbose)
+        sampler_name = sampler if isinstance(sampler, str) else list(sampler)[0]
+        self.last_mc_samples = self.last_mc_sampler.samples(
+            combined=True,
+            skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0
+        )
+        mpi.share_attr(self, "last_mc_samples")
+        return self.last_mc_samples
 
     def diagnose(self):
         if mpi.is_main_process:
@@ -988,55 +1000,65 @@ class Runner():
                 self.log("...done.")
 
     # pylint: disable=import-outside-toplevel
-    def plot_mc(self, surr_info_or_sample_folder, sampler=None, add_training=True,
+    def plot_mc(self, samples_or_samples_folder=None, add_training=True,
                 add_samples=None, output=None):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.
 
-        .. warning::
-            This method requires GetDist to be installed. It is neither a requirement
-            for GPry nor Cobaya so you might have to install it manually if you want to
-            use it (highly encouraged).
-
         Parameters
         ----------
-        surr_info, sampler : dict, Cobaya.sampler
-            Return values of method :func:`generate_mc_sample`
+        samples_or_samples_folder : cobaya.SampleCollection, getdist.MCSamples, str
+            MC samples returned by a call to the :func:`Runner.generate_mc_sample`
+            method, the output path where they were written, or a getdist.MCSamples
+            instance. If not specified (default) it will try to use the last set of
+            samples generated.
 
         add_training : bool, optional (default=True)
             Whether the training locations are plotted on top of the contours.
 
-        add_samples : dict(label, getdist.MCSamples), optional (default=None)
-            Extra getdist.MCSamples objects to be added to the plot.
+        add_samples : dict(label, (cobaya.SampleCollection, getdist.MCSamples, str))
+            Extra MC samples to be added to the plot, specified as dict with labels as
+            keys, and the same type as ``samples_or_samples_folder`` as values.
+            Default: None.
 
         output : str or os.path, optional (default=None)
             The location to save the generated plot in. If ``None`` it will be saved in
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
         """
-        self.ensure_paths(plots=True)
-        if not isinstance(surr_info_or_sample_folder, str): # passed surr_info, sampler
-            # This call is MPI-aware, so it needs to be done before skipping for non-root
-            gdsamples_gp = sampler.products(
-                to_getdist=True, combined=True, skip_samples=0.33)["sample"]
-        else:
-            root = os.path.abspath(surr_info_or_sample_folder)
-            if os.path.isdir(root):
-                root += "/"  # to force GetDist to treat it as folder, not prefix
-            from getdist.mcsamples import loadMCSamples
-            gdsamples_gp = loadMCSamples(root)
         if not mpi.is_main_process:
-            return None
+            warnings.warn(
+                "Running plotting function from non-root MPI process. "
+                "May create duplicated plots."
+            )
+        base_label = "MC samples"
+        if samples_or_samples_folder is None:
+            if self.last_mc_samples is None:
+                raise ValueError(
+                    "No MC samples have been obtained for this Runner. You need to run "
+                    "the generate_mc_sample() method first, or pass samples or a path "
+                    "to them as first argument."
+                )
+            gdsamples_dict = {base_label: self.last_mc_samples}
+        else:
+            gdsamples_dict = {base_label: samples_or_samples_folder}
+        if add_samples is None:
+            add_samples = {}
+        elif not isinstance(add_samples, Mapping):
+            add_samples = {"Add. samples": add_samples}
+        gdsamples_dict.update(add_samples)
+        gdsamples_dict = process_gdsamples(gdsamples_dict)
         import getdist.plots as gdplt
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
+        self.ensure_paths(plots=True)
         gdplot = gdplt.get_subplot_plotter(width_inch=5)
-        to_plot = [gdsamples_gp]
-        if add_samples:
-            to_plot += list(add_samples.values())
+        gdplot.settings.line_styles = 'tab10'
+        gdplot.settings.solid_colors='tab10'
         gdplot.triangle_plot(
-            to_plot, self.model.parameterization.sampled_params(), filled=True)
+            list(gdsamples_dict.values()), self.model.parameterization.sampled_params(),
+            filled=True, legend_labels=list(gdsamples_dict))
         if add_training and self.d > 1:
             getdist_add_training(gdplot, self.model, self.gpr)
         if output is None:
@@ -1047,29 +1069,50 @@ class Runner():
         return gdplot
 
     def plot_distance_distribution(
-            self, surr_info, sampler, show_added=True, output=None):
+            self, samples_or_samples_folder=None, show_added=True, output=None):
         """
-        Creates a triangle plot of an MC sample of the surrogate model, and optionally
-        shows some evaluation locations.
+        Plots the distance distribution of the training points with respect to the
+        confidence ellipsoids (in a Gaussian approx) derived from an MC sample of the
+        surrogate model.
 
         Parameters
         ----------
-        surr_info, sampler : dict, Cobaya.sampler
-            Return values of method :func:`generate_mc_sample`
+        samples_or_samples_folder : cobaya.SampleCollection, getdist.MCSamples, str
+            MC samples returned by a call to the :func:`Runner.generate_mc_sample`
+            method, the output path where they were written, or a getdist.MCSamples
+            instance. If not specified (default) it will try to use the last set of
+            samples generated.
+
         show_added: bool (default True)
             Colours the stacks depending on how early or late the corresponding points
             were added (bluer stacks represent newer points).
+
         output : str or os.path, optional (default=None)
             The location to save the generated plot in. If ``None`` it will be saved in
             ``.png`` format at ``checkpoint_path/images/``, or ``./images/`` if
             ``checkpoint_path`` was ``None``.
         """
         if not mpi.is_main_process:
-            return
+            warnings.warn(
+                "Running plotting function from non-root MPI process. "
+                "May create duplicated plots."
+            )
+        if samples_or_samples_folder is None:
+            if self.last_mc_samples is None:
+                raise ValueError(
+                    "No MC samples have been obtained for this Runner. You need to run "
+                    "the generate_mc_sample() method first, or pass samples or a path "
+                    "to them as first argument."
+                )
+            gdsample = self.last_mc_samples.to_getdist()
+        else:
+            gdsample = \
+                list(process_gdsamples({None: samples_or_samples_folder}).values())[0]
+        n_params = len(self.model.parameterization.sampled_params())
+        mean = gdsample.getMeans()[:n_params]
+        covmat = gdsample.getCovMat().matrix[:n_params, :n_params]
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
-        mean = sampler.products()["sample"].mean()
-        covmat = sampler.products()["sample"].cov()
         fig, ax = plot_distance_distribution(
             self.gpr, mean, covmat, density=False, show_added=show_added)
         if output is None:

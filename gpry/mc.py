@@ -8,6 +8,8 @@ from gpry.tools import generic_params_names, is_valid_covmat
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
+from cobaya.collection import SampleCollection
+from getdist.mcsamples import MCSamples, loadMCSamples
 
 
 def get_cobaya_log_level(verbose):
@@ -288,6 +290,29 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         surr_info["sampler"] = {sampler_name: sampler.info()}
         return surr_info, sampler
     sampler.run()
-    # TODO: share chains MPI!!!
     surr_info["sampler"] = {sampler_name: sampler.info()}
     return surr_info, sampler
+
+
+def process_gdsamples(gdsamples_dict):
+    """
+    Returns a dict with values as getdist.MCSamples, transforming/loading the original
+    dict values as appropriate.
+    """
+    return_dict = {}
+    for k, v in gdsamples_dict.items():
+        if isinstance(v, str):
+            root = os.path.abspath(v)
+            if os.path.isdir(root):
+                root += "/"  # to force GetDist to treat it as folder, not prefix
+            return_dict[k] = loadMCSamples(root)
+        elif isinstance(v, SampleCollection):
+            return_dict[k] = v.to_getdist(label=k)
+        elif isinstance(v, MCSamples):
+            return_dict[k] = v
+        else:
+            raise ValueError(
+                f"I don't know how to transform object of type {type(v)} "
+                "into getdist.MCSamples."
+            )
+    return return_dict
