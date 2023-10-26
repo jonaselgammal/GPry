@@ -480,9 +480,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
-                    X_opt = self.preprocessing_X.inverse_transform(X_opt,
-                                                                   copy=True)
-
+                    X_opt = self.preprocessing_X.inverse_transform(X_opt, copy=True)
                 # Get the value of the acquisition function at the optimum value
                 acq_val = -1 * acq_X_main[max_pos]
                 X_opt = np.array([X_opt])
@@ -700,7 +698,7 @@ class NORA(GenericGPAcquisition):
         self.nprior_per_nlive = nprior_per_nlive
         # Pool for storing intermediate results during parallelised acquisition
         self.pool = None
-        self.X, self.y, self.sigma_y, self.acq_value = None, None, None, None
+        self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc = None, None, None, None
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
 
     @property
@@ -919,10 +917,10 @@ class NORA(GenericGPAcquisition):
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every)
         if mc_sample_this_time:
-            self.X, self.y, self.sigma_y = self.get_MC_sample(
+            self.X_mc, self.y_mc, self.sigma_y_mc = self.get_MC_sample(
                 gpr, random_state)
         else:  # reuse
-            self.X, self.y, self.sigma_y = self.X, None, None
+            self.X_mc, self.y_mc, self.sigma_y_mc = self.X_mc, None, None
         self.mc_every_i += 1
         # Compute acq functions and missing quantities.
         self.acq_func_y_sigma = partial(
@@ -936,25 +934,15 @@ class NORA(GenericGPAcquisition):
                            else "Re-evaluated previous MC sample")
             self.log(
                 f"({(time()-start_sample):.2g} sec) {what_we_did}")
-        # Rank to get best points.
+        # Rank to get best points:
+        mpi.sync_processes()
         if mpi.is_main_process:
             start_rank = time()
-        # TESTS UNDERWAY -- DO NOT CHANGE BETWEEN THESE COMMENTS -------------------------
-        # mpi.sync_processes()
-        # s = time()
+        # TODO: still testing in realistic scenarios whether it is faster to rank in
+        #       parallel (doesn't matter a lot, since it's way faster than NS anyway)
+        # merged_pool = self._rank(n_points, gpr)
         merged_pool = self._parallel_rank_and_merge(
             this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method="auto")
-        # if mpi.is_main_process:
-        #     PARA = time() - s
-        #     # print(merged_pool)
-        # mpi.sync_processes()
-        # s = time()
-        # merged_pool = self._rank(n_points, gpr)
-        # if mpi.is_main_process:
-        #     NOPA = time() - s
-        #     # print(merged_pool)
-        # print(f"Diff parallel: {NOPA - PARA} (<0 is better w/o parallelisation)")
-        # --------------------------------------------------------------------------------
         with np.errstate(divide='ignore'):
             merged_pool_acq = self.acq_func_y_sigma(
                 merged_pool.y[:n_points], merged_pool.sigma[:n_points])
@@ -976,15 +964,15 @@ class NORA(GenericGPAcquisition):
 
         Parallelises the computation if possible (returns split arrays per process).
         """
-        X = mpi.comm.bcast(self.X)
+        X = mpi.comm.bcast(self.X_mc)
         # We don't use mpi.split_number_for_parallel_processes because for the ranking
         # it is good to have similar y scaling in all MPI processes. But if we use that
         # function, some processes get the top of the dist, and others the bottom, and
         # the bottom one's scaling does not perform well with the add_one method, even
         # after sorting, and the slowest MPI process sets the global speed
         this_X = X[mpi.RANK::mpi.SIZE]
-        y = mpi.comm.bcast(self.y)
-        sigma_y = mpi.comm.bcast(self.sigma_y)
+        y = mpi.comm.bcast(self.y_mc)
+        sigma_y = mpi.comm.bcast(self.sigma_y_mc)
         if y is None:  # assume sigma_y is also None
             if len(this_X) > 0:
                 this_y, this_sigma_y = gpr.predict(
@@ -992,38 +980,49 @@ class NORA(GenericGPAcquisition):
             else:
                 this_y = np.array([], dtype=float)
                 this_sigma_y = np.array([], dtype=float)
-            self.y, self.sigma_y = mpi.multi_gather_array([this_y, this_sigma_y])
-            mpi.share_attr(self, "y")
-            mpi.share_attr(self, "sigma_y")
+            self._undo_step_splitting(this_y, "y_mc")
+            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
         elif sigma_y is None:
             this_y = y[mpi.RANK::mpi.SIZE]
             if len(this_y) > 0:
                 this_sigma_y = gpr.predict_std(this_X, validate=False)
             else:
                 this_sigma_y = np.array([], dtype=float)
-            self.sigma_y = mpi.multi_gather_array(this_sigma_y)[0]
-            mpi.share_attr(self, "sigma_y")
+            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
         else:  # both y and sigma_y are known
             this_y = y[mpi.RANK::mpi.SIZE]
             this_sigma_y = sigma_y[mpi.RANK::mpi.SIZE]
         with np.errstate(divide='ignore'):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
-        self.acq_value = mpi.multi_gather_array(this_acq)[0]
-        mpi.share_attr(self, "acq_value")
+        self._undo_step_splitting(this_acq, "acq_mc")
         return this_X, this_y, this_sigma_y, this_acq
 
+    def _undo_step_splitting(self, values, attr_name):
+        """
+        Gather and undoes the ::mpi.SIZE process splitting and sets the corresponding
+        attribute at the rank=0 process.
+        """
+        values_step = mpi.comm.gather(values)
+        if mpi.is_main_process:
+            attr_value = np.zeros(len(self.X_mc))
+            for i, v in enumerate(values_step):
+                attr_value[i::mpi.SIZE] = v
+            setattr(self, attr_name, attr_value)
+
+    # Non-parallel version of the ranking of the MC points
     def _rank(self, n_points, gpr):
         if mpi.is_main_process:
             self.pool = RankedPool(
                 n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
                 verbose=self.verbose - 3)
             with np.errstate(divide='ignore'):
-                for i in range(len(self.X) - 1, -1, -1):
-                    self.pool.add_one(
-                        self.X[i], self.y[i], self.sigma_y[i], self.acq_value[i])
+                self.pool.add(
+                    self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc,
+                    method="single sort acq")
         mpi.share_attr(self, "pool")
         return self.pool
 
+    # Parallel version of the ranking of the MC points
     def _parallel_rank_and_merge(
             self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None):
         # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
@@ -1226,7 +1225,7 @@ class RankedPool():
             if "sort" in method.lower():
                 i_sort = np.argsort(
                     {"acq": acq, "y": y}[method.lower().split()[-1]])[::-1]
-            # Descending order of unconditioned acq:
+            # Descending order of unconditioned acq or unconditional mean prediction:
             # minimizes the number of swaps: model caches + calculation of acq_cond
             for i in (i_sort if i_sort is not None else range(len(X))):
                 self.add_one(X[i], y[i], sigma[i], acq[i])
@@ -1254,6 +1253,12 @@ class RankedPool():
             gpr = self.cache_model(i_start - 1)
             sigma_cond = gpr.predict_std(X, validate=False)
             acq_cond = self._acq_func(y, sigma_cond)
+        if acq_cond.size == 0:
+            self.log(
+                level=4,
+                msg=f"No finite acq points to fill the pool from [{i_start}] down."
+            )
+            return
         # Find best
         i_max = np.argmax(acq_cond)
         acq_cond_max = acq_cond[i_max]
