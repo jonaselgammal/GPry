@@ -41,16 +41,18 @@ convergence_criterion: CorrectCounter
 # Options regarding the bayesian optimization loop.
 options: {}
     # Number of inite initial truth evaluations before starting the acq loop.
-    ## "n_initial": None,  # default: 3 times the dimensionality.
+    ## "n_initial": None  # default: 3 times the dimensionality.
     # Maximum number of truth evaluations at initialization. If it
     # is reached before `n_initial` finite points have been found, the run will fail.
-    ##"max_initial": None,  # default: 10 times the dimensionality times n_initial
+    ##"max_initial": None  # default: 10 times the dimensionality times n_initial
     # Number of points aquired with Kriging believer at every acquisition step
-    ##"n_points_per_acq": None,  # default: number of parallel MPI processes
+    ##"n_points_per_acq": None  # default: number of parallel MPI processes
     # Maximum number of attempted sampling points before the run fails.
-    ##"max_total": None,  # default: 70 times the dimentionality ^1.5
+    ##"max_total": None  # default: 70 times the dimentionality ^1.5
     # Maximum number of points accepted into the GP training set before the run fails.
-    ##"max_finite": None,  # default: value of max_total
+    ##"max_finite": None  # default: value of max_total
+    # Number of iterations between comprehensive GP hyperparameter fits
+    ##"fit_full_every": None  # default : 2 * sqrt(dimensionality), at least 1
 
 # Cobaya sampler used to generate the final sample from the surrogate model
 mc_sampler: mcmc  # default: mcmc with Cobaya defaults

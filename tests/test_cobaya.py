@@ -5,6 +5,7 @@ Simple test for the Cobaya interface.
 import numpy as np
 from scipy import stats
 
+import gpry.mpi as mpi
 
 def gauss_ring_logp(x, y, mean_radius=1, std=0.02):
     """
@@ -29,15 +30,28 @@ def get_theta(x, y):
     return np.arctan(y / x)
 
 
+def callback(runner):
+    print(
+        f" --- Hi, I am the callback function at rank {mpi.RANK}! "
+        f"I have a runner: {runner}"
+    )
+
+
 info["params"]["r"] = {"derived": get_r}
 info["params"]["theta"] = {"derived": get_theta,
                            "latex": r"\theta", "min": 0, "max": np.pi/2}
 
-info["sampler"] = {"gpry.CobayaSampler": {}}
+info["sampler"] = {"gpry.CobayaSampler": {
+    # "gp_acquisition": "NORA",
+    # "mc_sampler": "polychord",
+    "plots": True,
+    "callback": callback,
+}}
 
 info["output"] = "chains/coba"
+#info["debug"] = True
+#info["resume"] = True
 info["force"] = True
-info["debug"] = False
 
 def test_cobaya():
     from cobaya.run import run

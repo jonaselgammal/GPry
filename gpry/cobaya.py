@@ -17,7 +17,7 @@ from inspect import cleandoc
 from cobaya.sampler import Sampler
 from cobaya.component import get_component_class
 from cobaya.log import LoggedError
-from cobaya.output import get_output
+from cobaya.output import get_output, OutputReadOnly
 
 from gpry.run import Runner
 
@@ -95,6 +95,9 @@ class CobayaSampler(Sampler):
                 str(excpt)
             )
         self.log.info("MC-sampling finished successfully!")
+        if self.plots:
+            self.log.info("Doing some plots...")
+            self.do_plots()
 
     def do_surrogate_sample(self, resume=False, prefix=None):
         """
@@ -111,8 +114,8 @@ class CobayaSampler(Sampler):
             An alternative path where to save the sample. If not given, the sample will
             use the default one with suffix ``(_)gpr``.
 
-        Resume
-        ------
+        Returns
+        -------
         surr_info : dict
             The dictionary that was used to run (or initialized) the sampler,
             corresponding to the surrogate model, and populated with the sampler input
@@ -124,9 +127,17 @@ class CobayaSampler(Sampler):
         """
         if prefix is None:
             prefix = self.surrogate_prefix
-        return self.gpry_runner.generate_mc_sample(
+        self.gpry_runner.generate_mc_sample(
             sampler=self.mc_sampler, output=prefix, resume=resume
         )
+        return self.gpry_runner.last_mc_surr_info, self.gpry_runner.last_mc_surr_info
+
+    @property
+    def is_mc_sampled(self):
+        """
+        Returns True if the MC sampling of the surrogate process has run and converged.
+        """
+        return self.mc_sampler_instance is None
 
     def products(
         self,
@@ -151,8 +162,8 @@ class CobayaSampler(Sampler):
     def get_checkpoint_dir_and_surr_prefix(cls, output=None):
         """
         Folder where the checkpoint output of GPry is going to be saved, and prefix for
-        the output object of the MC sample of the surrogate model.given a Cobaya
-        ``Output`` instance.
+        the output object of the MC sample of the surrogate model, given a Cobaya
+        ``OutputReadOnly`` instance.
 
         These two are wrapped into a single classmethod in order to use the same temp
         folder if called with dummy output.
