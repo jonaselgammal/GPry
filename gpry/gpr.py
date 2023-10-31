@@ -599,7 +599,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return super().log_marginal_likelihood(*args, **kwargs)
 
     def fit(self, X=None, y=None, noise_level=None, simplified=False,
-            hyperparameter_bounds=None):
+            hyperparameter_bounds=None, n_restarts=None, start_from_current=True):
         r"""Optimizes the hyperparameters :math:`\theta` for the training data
         given. The algorithm used to perform the optimization is very similar
         to the one provided by Scikit-learn. The only major difference is, that
@@ -623,7 +623,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         simplified : bool, default: False
             If True, runs the optimiser only from the last optimum of the hyperparameters
             (otherwise, a number of optimisation processes are also started from samples
-            of the hyperparameters' priors).
+            of the hyperparameters' priors). Equivalent to ``n_restarts=0``.
+
+        n_restarts : int, default None
+            Number of restarts of the optimizer. If not defined, uses the one set at
+            instantiation.
+
+        start_from_current : bool, default: True
+            Starts the fitting by optimizing from the current hyperparameters. This
+            initial optimization does not count towards ``n_restarts``.
 
         Returns
         -------
@@ -716,32 +724,33 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 else:
                     return -self.log_marginal_likelihood(theta,
                                                          clone_kernel=False)
-            # First optimize starting from theta specified in kernel
             if hyperparameter_bounds is None:
                 hyperparameter_bounds = self.kernel_.bounds
-            optima = [(self._constrained_optimization(obj_func,
-                                                      self.kernel_.theta,
-                                                      hyperparameter_bounds))]
-
+            optima = []
+            # First optimize starting from theta specified in kernel
+            if start_from_current:
+                optima = [(self._constrained_optimization(obj_func,
+                                                          self.kernel_.theta,
+                                                          hyperparameter_bounds))]
             # Additional runs are performed from log-uniform chosen initial theta
-            if self.n_restarts_optimizer > 0 and not simplified:
+            if n_restarts is None:
+                n_restarts = self.n_restarts_optimizer
+            if n_restarts > 0 and not simplified:
                 if not np.isfinite(self.kernel_.bounds).all():
                     raise ValueError(
                         "Multiple optimizer restarts (n_restarts_optimizer>0) "
                         "requires that all bounds are finite.")
-                for iteration in range(self.n_restarts_optimizer):
+                for iteration in range(n_restarts):
                     theta_initial = \
                         self._rng.uniform(hyperparameter_bounds[:, 0],
                                           hyperparameter_bounds[:, 1])
                     optima.append(
                         self._constrained_optimization(obj_func, theta_initial,
                                                        hyperparameter_bounds))
-            # Select result from run with minimal (negative) log-marginal
-            # likelihood
+            # Select result from run with minimal (negative) log-marginal likelihood
             lml_values = list(map(itemgetter(1), optima))
             self.kernel_.theta = optima[np.argmin(lml_values)][0]
             # self.kernel_._check_bounds_params()
-
             self.log_marginal_likelihood_value_ = -np.min(lml_values)
         else:
             self.log_marginal_likelihood_value_ = \
@@ -1183,7 +1192,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     self.optimizer(obj_func, initial_theta, bounds=bounds)
             else:
                 raise ValueError("Unknown optimizer %s." % self.optimizer)
-
         return theta_opt, func_min
 
     def _kernel_inverse(self, kernel):
