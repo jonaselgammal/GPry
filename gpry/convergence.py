@@ -453,7 +453,7 @@ class CorrectCounter(ConvergenceCriterion):
         abstol = params.get("abstol", "0.01s")
         if isinstance(abstol, str):
             try:
-                assert (abstol[-1] == "l" or abstol[-1] == "s" or reltol[-1] == "r")
+                assert (abstol[-1] == "l" or abstol[-1] == "s" or abstol[-1] == "r")
                 if abstol[-1] == "l":
                     abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d)
                 elif abstol[-1] == "s":

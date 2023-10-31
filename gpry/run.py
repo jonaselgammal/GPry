@@ -922,18 +922,22 @@ class Runner():
                 )
             mpi.share_attr(self, "gpr")
         else:
-            self.gpr.fit(
-                start_from_current=(mpi.RANK == 0),
-                n_restarts=(
+            start_from_current = mpi.RANK == 0
+            n_restarts = (
                     (self.gpr.n_restarts_optimizer + 1) // mpi.SIZE +
                     (-1 if mpi.RANK == 0 else 0)
-                ),
-                hyperparameter_bounds=hyperparams_bounds,
             )
+            if start_from_current or n_restarts:
+                self.gpr.fit(
+                    start_from_current=start_from_current,
+                    n_restarts=n_restarts,
+                    hyperparameter_bounds=hyperparams_bounds,
+                )
+                lml = self.gpr.log_marginal_likelihood_value_
+            else:
+                lml = -np.inf
             # Pick best and share it
-            lmls = mpi.comm.allgather(
-                (mpi.RANK, self.gpr.log_marginal_likelihood_value_)
-            )
+            lmls = mpi.comm.allgather((mpi.RANK, lml))
             best_i = lmls[np.argmax([l for i, l in lmls])][0]
             if mpi.is_main_process:
                 print(f"OPT best accross processes was {best_i} with value {lmls[best_i][1]}")

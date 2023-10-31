@@ -73,7 +73,8 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
         return
     # Create colormap with appropriate limits
     matplotlib.cm.get_cmap(colormap)
-    norm = matplotlib.colors.Normalize(vmin=min(ys_finite), vmax=max(ys_finite))
+    if len(Xs_finite):
+        norm = matplotlib.colors.Normalize(vmin=min(ys_finite), vmax=max(ys_finite))
     # Add points
     for (i, j), ax in ax_dict.items():
         if len(Xs_finite):
