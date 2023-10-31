@@ -209,3 +209,28 @@ class NumpyErrorHandling():
         np.seterr(**self.error_handler)
         if error_type is not None:
             raise
+
+
+def get_dnumber(value, d, dtype=int, varname=None):
+    """
+    Reads a value out of a d-number, e.g.: "5d" as 5 times the dimensionality.
+    """
+    if not isinstance(dtype, type):
+        raise ValueError(f"'dtype' arg must be a type, not {type(dtype)}.")
+    if value == "d":
+        value = "1d"
+    if isinstance(value, str) and value.endswith("d"):
+        num_value = value.rstrip("d")
+        d_factor = d
+    else:
+        num_value = value
+        d_factor = 1
+    try:
+        return dtype(dtype(num_value) * d_factor)
+    except (ValueError, TypeError) as excpt:
+        pre = f"Error setting variable '{varname}': " if varname else ""
+        raise ValueError(
+            pre + f"Could not convert {value} of type {type(value)} into type "
+            f"{dtype.__name__}. Pass either a string ending in 'd' or a valid "
+            f"{dtype.__name__} value."
+        ) from excpt

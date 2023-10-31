@@ -22,7 +22,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
 from gpry.plots import plot_convergence, plot_distance_distribution
-from gpry.tools import create_cobaya_model
+from gpry.tools import create_cobaya_model, get_dnumber
 
 
 _plots_path = "images"
@@ -296,8 +296,12 @@ class Runner():
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", min(mpi.SIZE, self.d))
-            self.fit_full_every = options.get(
-                "fit_full_every", max(int(2 * np.sqrt(self.d)), 1))
+            if options.get("fit_full_every"):
+                self.fit_full_every = get_dnumber(
+                    options.get("fit_full_every"), self.d, int, "fit_full_every"
+                )
+            else:
+                self.fit_full_every = max(int(2 * np.sqrt(self.d)), 1)
             if self.n_points_per_acq > self.d:
                 self.log("Warning: The number kriging believer samples per "
                          "acquisition step is larger than the number of dimensions of "
@@ -383,6 +387,9 @@ class Runner():
             for k, default_value in gpr_defaults.items():
                 if gpr.get(k) is None:
                     gpr[k] = default_value
+            gpr["n_restarts_optimizer"] = get_dnumber(
+                gpr["n_restarts_optimizer"], self.d, int, "n_restarts_optimizer"
+            )
             # If running with MPI, round down the #restarts of hyperparam optimizer to
             # a multiple of the MPI size (taking into account the run from the optimum)
             if (gpr["n_restarts_optimizer"] + 1) % mpi.SIZE:

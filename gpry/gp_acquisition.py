@@ -18,8 +18,8 @@ from sklearn.base import is_regressor
 
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
-import gpry.mpi as mpi
-from gpry.tools import NumpyErrorHandling
+from gpry import mpi
+from gpry.tools import NumpyErrorHandling, get_dnumber
 
 
 # TODO: inconsistent use of random_state: passed at init, and also at acquisition time
@@ -276,10 +276,9 @@ class BatchOptimizer(GenericGPAcquisition):
                                  "got {0}".format(acq_optimizer))
         else:
             self.acq_optimizer = acq_optimizer
-        if "d" in str(n_restarts_optimizer):
-            self.n_restarts_optimizer = int(n_restarts_optimizer.rstrip("d")) * self.n_d
-        else:
-            self.n_restarts_optimizer = int(n_restarts_optimizer)
+        self.n_restarts_optimizer = get_dnumber(
+            n_restarts_optimizer, self.n_d, int, "n_restarts_optimizer"
+        )
         self.n_repeats_propose = n_repeats_propose
         self.mean_ = None
         self.cov = None
@@ -640,12 +639,7 @@ class NORA(GenericGPAcquisition):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
             verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
-        if "d" in str(mc_every):
-            if mc_every == "d":
-                mc_every = "1d"
-            self.mc_every = int(mc_every.rstrip("d")) * self.n_d
-        else:
-            self.mc_every = int(mc_every)
+        self.mc_every = get_dnumber(mc_every, self.n_d, int, "mc_every")
         self.mc_every_i = 0
         self.use_prior_sample = use_prior_sample
         self.tmpdir = tmpdir
