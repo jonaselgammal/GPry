@@ -18,7 +18,8 @@ from cobaya.sampler import Sampler
 from cobaya.component import get_component_class
 from cobaya.log import LoggedError
 from cobaya.output import get_output, OutputReadOnly
-
+from cobaya.tools import get_external_function
+from gpry import mpi
 from gpry.run import Runner
 
 
@@ -60,7 +61,7 @@ class CobayaSampler(Sampler):
                 initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
                 options=self.options,
-                callback=self.callback,
+                callback=get_external_function(self.callback),
                 callback_is_MPI_aware=self.callback_is_MPI_aware,
                 checkpoint=self.path_checkpoint,
                 load_checkpoint=self.output_strategy,
@@ -78,13 +79,15 @@ class CobayaSampler(Sampler):
         """
         Gets the initial training points and starts the acquistion loop.
         """
-        self.log.info("Starting learning stage...")
+        if mpi.is_main_process:
+            self.log.info("Starting learning stage...")
         try:
             self.gpry_runner.run()
         except Exception as excpt:
             raise LoggedError(self.log, "GPry failed during learning: %s", str(excpt))
-        self.log.info("Learning stage finished successfully!")
-        self.log.info("Starting MC-sampling stage...")
+        if mpi.is_main_process:
+            self.log.info("Learning stage finished successfully!")
+            self.log.info("Starting MC-sampling stage...")
         try:
             self.mc_sampler_upd_info, self.mc_sampler_instance = \
                 self.do_surrogate_sample(resume=self.output.is_resuming())
@@ -93,11 +96,12 @@ class CobayaSampler(Sampler):
                 self.log,
                 "GPry failed during MC sampling of the surrogate model: %s",
                 str(excpt)
-            )
-        self.log.info("MC-sampling finished successfully!")
-        if self.plots:
-            self.log.info("Doing some plots...")
-            self.do_plots()
+            ) from excpt
+        if mpi.is_main_process:
+            self.log.info("MC-sampling finished successfully!")
+            if self.plots:
+                self.log.info("Doing some plots...")
+                self.do_plots()
 
     def do_surrogate_sample(self, resume=False, prefix=None):
         """
@@ -130,15 +134,23 @@ class CobayaSampler(Sampler):
         self.gpry_runner.generate_mc_sample(
             sampler=self.mc_sampler, output=prefix, resume=resume
         )
-        return self.gpry_runner.last_mc_surr_info, self.gpry_runner.last_mc_surr_info
+        return self.gpry_runner.last_mc_surr_info, self.gpry_runner.last_mc_sampler
 
     @property
     def is_mc_sampled(self):
         """
         Returns True if the MC sampling of the surrogate process has run and converged.
         """
-        return self.mc_sampler_instance is None
+        return self.mc_sampler_instance is not None
 
+    def do_plots(self):
+        """
+        Produces some results and diagnosis plots.
+        """
+        self.gpry_runner.plot_progress()
+        self.gpry_runner.plot_distance_distribution()
+        if self.is_mc_sampled:
+            self.gpry_runner.plot_mc()
     def products(
         self,
         combined: bool = False,
@@ -219,18 +231,22 @@ class CobayaSampler(Sampler):
             for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
         ]
         # MC sample from surrogate -- more precise if we know the sampler
-        surr_mc_output = get_output(prefix=surrogate_prefix)
+        # Using OutputReadOnly and not Output here bc it's sometimes called just from rank 0,
+        # and it's never used except as an aux object to get correct surrogate MC prefixes
+        surr_mc_output = OutputReadOnly(prefix=surrogate_prefix)
+        from cobaya.output import split_prefix
+        surr_mc_folder, _ = split_prefix(surrogate_prefix)
         surr_mc_sampler = (info or {}).get("mc_sampler")
         if surr_mc_sampler:
             sampler = get_component_class(surr_mc_sampler, kind="sampler")
             regexps_tuples += [
-                (regexp[0], os.path.join(surr_mc_output.folder, regexp[1] or ""))
-                 for regexp in sampler.output_files_regexps(
-                         output=surr_mc_output, minimal=minimal)
+                (regexp[0], os.path.join(surr_mc_folder, regexp[1] or ""))
+                for regexp in sampler.output_files_regexps(
+                        output=surr_mc_output, minimal=minimal)
             ]
         else:
             regexps_tuples += \
-                [(surr_mc_output.collection_regexp(name=None), surr_mc_output.folder)]
+                [(surr_mc_output.collection_regexp(name=None), surr_mc_folder)]
         return regexps_tuples
 
     @staticmethod

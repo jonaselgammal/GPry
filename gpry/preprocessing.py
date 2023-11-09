@@ -73,6 +73,7 @@ class Pipeline_X:
 
     def __init__(self, preprocessors):
         self.preprocessors = preprocessors
+        self.fitted = False
 
     def transform_bounds(self, bounds):
         transformed_bounds = bounds
@@ -90,6 +91,7 @@ class Pipeline_X:
         for preprocessor in self.preprocessors:
             preprocessor.fit(X_transformed, y)
             X_transformed = preprocessor.transform(X_transformed)
+        self.fitted = True
         return self
 
     def transform(self, X, copy=True):
@@ -249,6 +251,7 @@ class Normalize_bounds:
 
     def __init__(self, bounds):
         _ = self.transform_bounds(bounds)
+        self.fitted = True  # only needs fitting at init
 
     def transform_bounds(self, bounds):
         bounds = np.asarray(bounds)
@@ -374,6 +377,7 @@ class Pipeline_y:
 
     def __init__(self, preprocessors):
         self.preprocessors = preprocessors
+        self.fitted = False
 
     def fit(self, X, y):
         """
@@ -384,6 +388,7 @@ class Pipeline_y:
         for preprocessor in self.preprocessors:
             preprocessor.fit(X, y_transformed)
             y_transformed = preprocessor.transform(y_transformed)
+        self.fitted = True
         return self
 
     def transform_noise_level(self, noise_level):
@@ -455,6 +460,14 @@ class Normalize_y:
         self.mean_ = None
         self.std_ = None
 
+    @property
+    def is_linear(self):
+        return True
+
+    @property
+    def fitted(self):
+        return self.mean_ is not None and self.std_ is not None
+
     def fit(self, X, y):
         """
         Calculates the mean and standard deviation of y
@@ -470,13 +483,13 @@ class Normalize_y:
         self.std_ = np.std(y)
 
     def transform_noise_level(self, noise_level, copy=True):
-        if self.mean_ is None or self.std_ is None:
+        if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
         noise_level = np.copy(noise_level) if copy else noise_level
         return noise_level / self.std_  # Divide by the standard deviation
 
     def inverse_transform_noise_level(self, noise_level, copy=True):
-        if self.mean_ is None or self.std_ is None:
+        if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
         noise_level = np.copy(noise_level) if copy else noise_level
         return noise_level * self.std_  # Multiply by the standard deviation
@@ -497,7 +510,7 @@ class Normalize_y:
         y_transformed : array-like, shape = (n_samples,)
             Transformed y-values
         """
-        if self.mean_ is None or self.std_ is None:
+        if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
         y = np.copy(y) if copy else y
         return (y - self.mean_) / self.std_
@@ -518,7 +531,7 @@ class Normalize_y:
         y : array-like, shape = (n_samples,)
             Original y-values.
         """
-        if self.mean_ is None or self.std_ is None:
+        if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
         y = np.copy(y_transformed) if copy else y_transformed
         return (y * self.std_) + self.mean_

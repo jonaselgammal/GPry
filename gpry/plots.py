@@ -199,7 +199,7 @@ def plot_distance_distribution(
             )
     ax.set_ylabel(f"{num_or_dens} of points")
     ax.set_xlabel("Number of standard deviations")
-    ax.legend()
+    ax.legend(loc="upper right")
     return (fig, ax)
 
 

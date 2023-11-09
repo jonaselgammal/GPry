@@ -35,9 +35,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
         runner.plot_distance_distribution()  # plots last obtained mc samples
         if mean is not None:
             import os
-            from getdist.mcsamples import MCSamplesFromCobaya
             import getdist.plots as gdplt
-            from gpry.plots import getdist_add_training
             import matplotlib.pyplot as plt
             from getdist.gaussian_mixtures import GaussianND
             gdsamples_gp = mc_sample.to_getdist()

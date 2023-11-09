@@ -211,26 +211,31 @@ class NumpyErrorHandling():
             raise
 
 
-def get_dnumber(value, d, dtype=int, varname=None):
+def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
     """
-    Reads a value out of a d-number, e.g.: "5d" as 5 times the dimensionality.
+    Reads a value out of an X-number, e.g.: "5X" as 5 times the value of X.
+
+    If ``X_value`` is not defined, returns a tuple ``(value, value.endswith(X))``.
     """
     if not isinstance(dtype, type):
         raise ValueError(f"'dtype' arg must be a type, not {type(dtype)}.")
-    if value == "d":
-        value = "1d"
-    if isinstance(value, str) and value.endswith("d"):
-        num_value = value.rstrip("d")
-        d_factor = d
+    if value == X_letter:
+        value = "1" + X_letter
+    if isinstance(value, str) and value.endswith(X_letter):
+        num_value = value.rstrip(X_letter)
+        has_X = True
     else:
         num_value = value
-        d_factor = 1
+        has_X = False
     try:
-        return dtype(dtype(num_value) * d_factor)
+        num_value = dtype(num_value)
+        if X_value is None:
+            return (num_value, has_X)
+        return dtype(num_value * (1 if not has_X else X_value))
     except (ValueError, TypeError) as excpt:
         pre = f"Error setting variable '{varname}': " if varname else ""
         raise ValueError(
             pre + f"Could not convert {value} of type {type(value)} into type "
-            f"{dtype.__name__}. Pass either a string ending in 'd' or a valid "
+            f"{dtype.__name__}. Pass either a string ending in '{X_letter}' or a valid "
             f"{dtype.__name__} value."
         ) from excpt

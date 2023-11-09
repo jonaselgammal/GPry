@@ -11,42 +11,34 @@ shrinks the prior to a region where the model thinks that all values of the
 log-posterior distribution are finite.
 """
 
+import warnings
 import numpy as np
 from sklearn.svm import SVC
-from gpry.tools import nstd_of_1d_nstd
+from gpry.tools import check_random_state
 
 
 class SVM(SVC):
-    r"""Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_. Implements the same
-    "append_to_data" function as the GP Regressor and is designed to be passed
-    to a GP regressor. This is done to classify the data into a "finite" group
-    (values with a finite log-likelihood) and an "infinite" group. That way the
-    GP can correctly recover the log-likelihood or log-posterior even if has
-    regions where it returns :math:`-\infty` or very low log-likelihood values.
-    The threshold for what is considered infinite is either set by the
-    ``threshold_sigma`` parameter or by the ``threshold`` parameter. This is to
-    account for the fact that the log-likelihood can take very low values far
-    away from the mode which can confuse the GP.
-    Also saves the training data internally and has a function to return all
-    non-infinite values. Therefore it is supposed to be used inside of a GP
-    Regressor.
-    Furthermore this accounts for the fact that all values in the SVM might be
-    finite and therefore the SVM can be ignored.
+    r"""
+    Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_.
 
+    Classifies points as finite of non-finite, in order to exclude the latter from the
+    training set of a parent GPR. It keeps track of the full training set, including
+    classified-infinite points.
+
+    The classification is performed using a threshold understood as a positive difference
+    against the current maximum ``y`` in the training set. The threshold is passed at
+    fitting time and not at initialisation, in case the classifier is defined in a
+    transformed coordinate space, with a transformation that changes through the training
+    of the parent GPR. (NB: passing the threshold every time is a compromise that allows
+    to keep the full training set stored in this object with non-reduced ``y`` values
+    while avoiding preprocessing overhead.)
+
+    Also in case there is a coordinate transformation, the training set of this object
+    should not be obtained directly, but via properties of the parent GP instead that will
+    undo the transformation. The same applying to calling any method directly.
 
     Parameters
     ----------
-    threshold_sigma : float or None, default=10
-        Distance to the mode which shall be considered finite in :math:`\sigma`
-        using a :math:`\chi^2` distribution. Either this or ``threshold`` have
-        to be specified while ``threshold_sigma`` it is overwritten by the
-        ``threshold`` parameter
-    threshold : float or None, default=None
-        threshold value for the posterior to be considered infinite. Any value
-        below this will be in the infinite category. Overwrites the
-        ``threshold_sigma`` parameter if specified. If you want to consider all
-        samples where the posterior returns a finite value set this to
-        ``-np.inf``.
     C : float, default=1e7
         Regularization parameter. The strength of the regularization is
         inversely proportional to C. Must be strictly positive. The penalty
@@ -68,12 +60,6 @@ class SVM(SVC):
           1 / (n_features * X.var()) as value of gamma,
         * if 'auto', uses 1 / n_features.
 
-    preprocessing_X : X-preprocessor or pipeline, optional (default=None)
-        The transformation in X-direction (parameter space of the posterior)
-        that shall be used to preprocess the data before fitting to the SVM.
-    preprocessing_y : y-preprocessor or pipeline, optional (default=None)
-        The transformation in y-direction (posterior value) that shall be used
-        before fitting to the SVM.
     coef0 : float, default=0.0
         Independent term in kernel function.
         It is only significant in 'poly' and 'sigmoid'.
@@ -166,173 +152,145 @@ class SVM(SVC):
         where ``probA_`` and ``probB_`` are learned from the dataset..
     shape_fit_ : tuple of int of shape (n_dimensions_of_X,)
         Array dimensions of training vector ``X``.
-
-
     """
 
-    def __init__(self, threshold_sigma=20, threshold=None, C=1e7, kernel='rbf',
-                 degree=3, gamma='scale', preprocessing_X=None, preprocessing_y=None,
-                 coef0=0.0, shrinking=True, probability=False, tol=0.001,
-                 cache_size=200, class_weight=None, verbose=False, max_iter=-1,
-                 decision_function_shape='ovr', break_ties=False, random_state=None):
-
-        self.threshold_sigma = threshold_sigma
-        self.init_threshold = threshold
-        # Current threshold (and preprocessed one ending in "_")
-        self._threshold = None
-        self._threshold_ = None
-
-        self.preprocessing_X = preprocessing_X
-        self.preprocessing_y = preprocessing_y
+    def __init__(
+        self,
+        C=1e7,
+        kernel="rbf",
+        degree=3,
+        gamma="scale",
+        coef0=0.0,
+        shrinking=True,
+        probability=False,
+        tol=0.001,
+        cache_size=200,
+        class_weight=None,
+        verbose=False,
+        max_iter=-1,
+        decision_function_shape="ovr",
+        break_ties=False,
+        random_state=None,
+    ):
+        self.X_train = None
+        self.y_train = None
+        self.y_finite = None
+        self.at_least_one_finite = False
         self.all_finite = False
-        self.newly_appended = 0
-
+        self.abs_threshold = None
         # In the SVM, since we have not wrapper the calls to the RNG,
         # (as we have for the GPR), we need to repackage the new numpy Generator
         # as a RandomState, which is achieved by gpry.tools.check_random_state
-        from gpry.tools import check_random_state
         random_state = check_random_state(random_state, convert_to_random_state=True)
-
-        super().__init__(C=C, kernel=kernel, degree=degree, gamma=gamma,
-                         coef0=coef0, shrinking=shrinking, probability=probability,
-                         tol=tol, cache_size=cache_size, class_weight=class_weight,
-                         verbose=verbose, max_iter=max_iter,
-                         decision_function_shape=decision_function_shape,
-                         break_ties=break_ties, random_state=random_state)
+        super().__init__(
+            C=C,
+            kernel=kernel,
+            degree=degree,
+            gamma=gamma,
+            coef0=coef0,
+            shrinking=shrinking,
+            probability=probability,
+            tol=tol,
+            cache_size=cache_size,
+            class_weight=class_weight,
+            verbose=verbose,
+            max_iter=max_iter,
+            decision_function_shape=decision_function_shape,
+            break_ties=break_ties,
+            random_state=random_state,
+        )
 
     @property
     def d(self):
         """Dimension of the feature space."""
-        try:
-            return self.X_train.shape[1]
-        except AttributeError:
+        if self.X_train is None:
             raise ValueError(
-                "You need to add some data before determining its dimension.")
+                "You need to add some data before determining its dimension."
+            )
+        return self.X_train.shape[1]
 
     @property
     def n(self):
         """Number of training points."""
-        return len(getattr(self, "y_train", []))
+        if self.y_train is None:
+            return 0
+        return len(self.y_train)
 
-    @property
-    def last_appended(self):
-        """Returns a copy of the last appended training points, as (X, y in [0, 1])."""
-        return (np.copy(self.X_train[-self.newly_appended:]),
-                np.copy(self.y_train[-self.newly_appended:]))
-
-    def append_to_data(self, X, y, fit_preprocessors=True):
-        """
-        This method works similarly to the GP regressor's
-        :meth:`append_to_data <gpr.GaussianProcessRegressor.append_to_data>` method.
-        This means that it adds samples and internally calls the fit method of the SVM.
-        It furthermore provides the option to fit the preprocessor(s) (if they need
-        fitting).
-
-        Parameters
-        ----------
-        X : array-like, shape = (n_samples, n_features)
-            Training data to append to the model.
-
-        y : array-like, shape = (n_samples, [n_output_dims])
-            Target values to append to the data
-
-        fit_preprocessors : bool, optional (default: True)
-            Whether the preprocessors are to be refit. This only applies if
-            the transformation of at least one of the preprocessors depends on
-            the samples.
-
-        Returns
-        -------
-        self
-        """
-        # Copy stuff
-        X = np.copy(X)
-        y = np.copy(y)
-        self.newly_appended = len(y)
-
-        # Check if X_train and y_train exist to see if a model
-        # has previously been fit to the data
-        if (hasattr(self, "X_train_") and hasattr(self, "y_train_")):
-            X_train = np.append(self.X_train, X, axis=0)
-            y_train = np.append(self.y_train, y)
-        else:
-            X_train = X
-            y_train = y
-        # Fit SVM
-        self.fit(X_train, y_train, fit_preprocessors=fit_preprocessors)
-
-        return self.finite[-self.newly_appended:]
-
-    def fit(self, X, y, fit_preprocessors=True):
+    def fit(self, X, y, diff_threshold):
         r"""
-        Wrapper for the fit value of the sklearn SVM which fits the SVM with
-        two categorial classes:
+        Fits the SVM with two categorial classes:
 
-        * :math:`\\tilde{y}=1` Finite points
-        * :math:`\\tilde{y}=0` Infinite points
+        * :math:`\tilde{y}=True` Finite points
+        * :math:`\tilde{y}=False` Infinite points
 
-        where :math:`\\tilde{y}` is produced by the fit method after
-        preprocessing the sampling locations and posterior values.
+        where :math:`\tilde{y}` is produced after checking the input ``y``'s against
+        an internal threshold value, which may also be adjusted at this step.
 
         Parameters
         ----------
         X : array-like, shape = (n_samples, n_features)
-            Training data to append to the model.
+            Training data.
 
         y : array-like, shape = (n_samples, [n_output_dims])
-            Target values to append to the data
-
-        fit_preprocessors : bool, optional (default: True)
-            Whether the preprocessors are to be refit. This only applies if
-            the transformation of at least one of the preprocessors depends on
-            the samples.
+            Target values.
 
         Returns
         -------
-        self
+        y_finite : array-like bool
+            Classification of current points.
         """
-        # Copy X_train and y_train to be able to reproduce stuff
         self.X_train = np.copy(X)
         self.y_train = np.copy(y)
-
-        # Preprocess if neccessary
-        if self.preprocessing_X is not None:
-            if fit_preprocessors:
-                self.preprocessing_X.fit(X, y)
-            self.X_train_ = self.preprocessing_X.transform(X)
-        else:
-            self.X_train_ = X
-        if self.preprocessing_y is not None:
-            if fit_preprocessors:
-                self.preprocessing_y.fit(X, y)
-            self.y_train_ = self.preprocessing_y.transform(y)
-        else:
-            self.y_train_ = y
-
+        # Corner case: only -inf points being trained on: nothing to do.
+        if np.all(self.y_train == -np.inf):
+            self.at_least_one_finite = False
+            self.y_finite = np.full(len(X), False)
+            return self.y_finite
+        self.at_least_one_finite = True
         # Update threshold value
-        self.update_threshold(self.d)
-
-        # Turn into categorial values (1 for finite and 0 for infinite)
-        self.finite = self.is_finite(self.y_train_)
-
-        # Check if all values belong to one class, in that case do not fit the
-        # SVM but rather save this.
-        if np.all(self.finite):
+        self.abs_threshold = max(self.y_train) - diff_threshold
+        # Turn into boolean categorial values
+        self.y_finite = self.is_finite()
+        # If no value below the threshold, nothing to do. Save test for faster checks.
+        if np.all(self.y_finite):
             self.all_finite = True
-        elif np.all(~self.finite):
-            raise ValueError("All values that have been passed are infinite. "
-                             "This cannot be tolerated as it breaks the GP.")
-        else:
-            self.all_finite = False
-            super().fit(self.X_train_, self.finite)
-        return self.finite
+            return self.y_finite
+        self.all_finite = False
+        super().fit(self.X_train, self.y_finite)
+        return self.y_finite
 
-    def is_finite(self, y, y_is_preprocessed=True):
+    def is_finite(self, y=None):
         """
         Returns True for finite values above the current threshold, and False otherwise.
+
+        Notes
+        -----
+        This is not a predictor method, but a simple threshold check, i.e. it does not
+        predict whether the value at some particular location is expected to be finite.
+        For that purpose, use the ``predict`` method.
         """
-        threshold = self.threshold_preprocessed if y_is_preprocessed else self.threshold
-        return np.logical_and(np.isfinite(y), y - np.max(y) > threshold)
+        if y is None:
+            y = self.y_train
+        else:
+            warnings.warn(
+                "Calling '.is_finite_()' with an argument: its result is only consistent "
+                "when calling with the training set or a subset of it, but not when "
+                "calling with points not yet in the training set, since they may change "
+                "the threshold after addition."
+            )
+        if self.y_train is None:
+            raise ValueError(
+                "The SVM has not been trained yet, so no check can be performed, "
+                "since classifying thresholds are defined as a difference with the "
+                "maximum."
+            )
+        if not self.at_least_one_finite:
+            raise ValueError(
+                "The SVM has not received any finite training points yet, so no check can"
+                " be performed, since classifying thresholds are defined as a difference "
+                "with a finite maximum."
+            )
+        return np.atleast_1d(y) > self.abs_threshold
 
     def predict(self, X, validate=True):
         """
@@ -357,59 +315,20 @@ class SVM(SVC):
            May be raised if ``validate`` is False. Call ``numpy.ascontiguousarray()`` on
            the input before the call.
         """
-        # Check if all training values were finite, then just return one for
-        # every value
+        if self.y_train is None:
+            raise ValueError("The SVM has not been trained yet.")
+        if validate:
+            X = np.atleast_2d(X)
         if self.all_finite:
-            return np.ones(X.shape[0], dtype=bool)
-        # preprocess to the right dimensions if neccessary
-        if self.preprocessing_X is not None:
-            X = self.preprocessing_X.transform(X)
+            return np.full(len(X), True)
+        if not self.at_least_one_finite:
+            warnings.warn(
+                "Only -inf points added to the classifier so far. "
+                "Returning False unconditionally."
+            )
+            return np.full(len(X), False)
         if validate:
             return super().predict(X)
         else:  # valid for our use only (dense, 2 classes), when input is guaranteed valid
             y = self._dense_predict(X)
             return self.classes_.take(np.asarray(y, dtype=np.intp))
-
-    @property
-    def threshold(self):
-        """
-        Returns the threshold value which is used to determine whether a value
-        is considered to be -inf.
-        """
-        return self._threshold
-
-    @property
-    def threshold_preprocessed(self):
-        """
-        Returns the threshold value which is used to determine whether a value
-        is considered to be -inf, that threshold having been preprocessed.
-        """
-        return self._threshold_
-
-    def update_threshold(self, dimension=None):
-        """
-        Sets the threshold value threshold for un-transformed y's.
-        """
-        dimension = dimension or self.d
-        # if self._threshold is None:
-        if self.init_threshold is None:
-            if self.threshold_sigma is None:
-                raise ValueError(
-                    "You either need to specify threshold or threshold_sigma.")
-            self._threshold = \
-                self.compute_threshold_given_sigma(self.threshold_sigma, dimension)
-        else:
-            self._threshold = self.init_threshold
-        # Update threshold for preprocessed data
-        if self.preprocessing_y is not None:
-            self._threshold_ = self.preprocessing_y.transform(self._threshold)
-        else:
-            self._threshold_ = self._threshold
-
-    @staticmethod
-    def compute_threshold_given_sigma(n_sigma, n_dimensions):
-        r"""
-        Computes threshold value given a number of :math:`\sigma` away from the maximum,
-        assuming a :math:`\chi^2` distribution.
-        """
-        return -0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions)**2

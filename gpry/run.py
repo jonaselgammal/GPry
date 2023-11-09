@@ -22,7 +22,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
 from gpry.plots import plot_convergence, plot_distance_distribution
-from gpry.tools import create_cobaya_model, get_dnumber
+from gpry.tools import create_cobaya_model, get_Xnumber
 
 
 _plots_path = "images"
@@ -297,8 +297,8 @@ class Runner():
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", min(mpi.SIZE, self.d))
             if options.get("fit_full_every"):
-                self.fit_full_every = get_dnumber(
-                    options.get("fit_full_every"), self.d, int, "fit_full_every"
+                self.fit_full_every = get_Xnumber(
+                    options.get("fit_full_every"), "d", self.d, int, "fit_full_every"
                 )
             else:
                 self.fit_full_every = max(int(2 * np.sqrt(self.d)), 1)
@@ -387,8 +387,8 @@ class Runner():
             for k, default_value in gpr_defaults.items():
                 if gpr.get(k) is None:
                     gpr[k] = default_value
-            gpr["n_restarts_optimizer"] = get_dnumber(
-                gpr["n_restarts_optimizer"], self.d, int, "n_restarts_optimizer"
+            gpr["n_restarts_optimizer"] = get_Xnumber(
+                gpr["n_restarts_optimizer"], "d", self.d, int, "n_restarts_optimizer"
             )
             # If running with MPI, round down the #restarts of hyperparam optimizer to
             # a multiple of the MPI size (taking into account the run from the optimum)
@@ -810,13 +810,11 @@ class Runner():
         self.progress.add_convergence(0, 0, np.nan)
         # Check if there's an SVM and if so read out it's threshold value
         # We will compare it against y - max(y)
-        if isinstance(self.gpr.account_for_inf, SVM):
-            # Grab the threshold from the internal SVM (the non-preprocessed one)
-            self.gpr.account_for_inf.update_threshold(dimension=self.d)
-            is_finite = lambda y: self.gpr.account_for_inf.is_finite(
-                y, y_is_preprocessed=False)
+        if isinstance(self.gpr.infinities_classifier, SVM):
+            # Check by hand against the threshold (in the non-transformed space)
+            is_finite = lambda ymax_minus_y: ymax_minus_y < self.gpr.diff_threshold
         else:
-            is_finite = lambda y: np.isfinite(y)
+            is_finite = np.isfinite
         if mpi.is_main_process:
             # Check if the GP already contains points. If so they are reused.
             pretrained = 0
@@ -863,8 +861,10 @@ class Runner():
                 if mpi.is_main_process:
                     X_init = np.concatenate([X_init, np.concatenate(all_points)])
                     y_init = np.concatenate([y_init, np.concatenate(all_posts)])
-                    # Only finite values contributes to the number of initial samples
-                    n_finite_new = sum(is_finite(y_init - max(y_init)))
+                    # Only finite values contribute to the number of initial samples
+                    n_finite_new = sum(is_finite(max(y_init) - y_init))
+                    for i in range(len(y_init)):
+                        print(max(y_init), y_init[i], self.gpr.diff_threshold, is_finite(max(y_init) - y_init)[i])
                     # Break loop if the desired number of initial samples is reached
                     finished = n_finite_new >= n_still_needed
                 if mpi.multiple_processes:
@@ -879,8 +879,7 @@ class Runner():
         if mpi.is_main_process:
             self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) "
                      f"Evaluated the true model at {len(X_init)} location(s)"
-                     f", of which {sum(is_finite(y_init - max(y_init)))} returned a "
-                     f"finite value." +
+                     f", of which {n_finite_new} returned a finite value." +
                      (" Each MPI process evaluated at most "
                       f"{max(len(p) for p in all_points)} locations."
                       if mpi.multiple_processes else ""), level=3)
@@ -975,7 +974,7 @@ class Runner():
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
-            truth=False, save=os.path.join(self.plots_path, "timing.svg"))
+            truth=True, save=os.path.join(self.plots_path, "timing.svg"))
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
         fig, ax = plot_convergence(self.convergence)
         fig.savefig(os.path.join(self.plots_path, "convergence.svg"))
@@ -1167,10 +1166,10 @@ class Runner():
                     "the generate_mc_sample() method first, or pass samples or a path "
                     "to them as first argument."
                 )
-            gdsample = self.last_mc_samples.to_getdist()
+            gdsample = self.last_mc_samples
         else:
-            gdsample = \
-                list(process_gdsamples({None: samples_or_samples_folder}).values())[0]
+            gdsample = samples_or_samples_folder
+        gdsample = list(process_gdsamples({None: gdsample}).values())[0]
         n_params = len(self.model.parameterization.sampled_params())
         mean = gdsample.getMeans()[:n_params]
         covmat = gdsample.getCovMat().matrix[:n_params, :n_params]

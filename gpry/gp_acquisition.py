@@ -19,7 +19,7 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_dnumber
+from gpry.tools import NumpyErrorHandling, get_Xnumber
 
 
 # TODO: inconsistent use of random_state: passed at init, and also at acquisition time
@@ -276,8 +276,8 @@ class BatchOptimizer(GenericGPAcquisition):
                                  "got {0}".format(acq_optimizer))
         else:
             self.acq_optimizer = acq_optimizer
-        self.n_restarts_optimizer = get_dnumber(
-            n_restarts_optimizer, self.n_d, int, "n_restarts_optimizer"
+        self.n_restarts_optimizer = get_Xnumber(
+            n_restarts_optimizer, "d", self.n_d, int, "n_restarts_optimizer"
         )
         self.n_repeats_propose = n_repeats_propose
         self.mean_ = None
@@ -639,7 +639,7 @@ class NORA(GenericGPAcquisition):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
             verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
-        self.mc_every = get_dnumber(mc_every, self.n_d, int, "mc_every")
+        self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
         self.use_prior_sample = use_prior_sample
         self.tmpdir = tmpdir
@@ -658,6 +658,8 @@ class NORA(GenericGPAcquisition):
                     "(e.g. UltraNest)."
                 ) from excpt
             self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
+            # More efficient for const-eval-speed GP's (not very significant)
+            self.polychord_settings.synchronous = False
             # Don't write unnecessary files: take lots of space and waste time
             self.polychord_settings.read_resume = False
             self.polychord_settings.write_resume = False
@@ -937,6 +939,8 @@ class NORA(GenericGPAcquisition):
         # merged_pool = self._rank(n_points, gpr)
         merged_pool = self._parallel_rank_and_merge(
             this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method="auto")
+        # In case the pool is not full (not enough "good" points added), drop empty slots
+        merged_pool = merged_pool.copy(drop_empty=True)
         with np.errstate(divide='ignore'):
             merged_pool_acq = self.acq_func_y_sigma(
                 merged_pool.y[:n_points], merged_pool.sigma[:n_points])
@@ -1461,6 +1465,29 @@ class RankedPool():
         new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items()
                         if k not in attrs_ignore_at_copy}
         return new
+
+    def copy(self, drop_empty=False):
+        """
+        Returns a copy of the pool, missing references to external objects.
+
+        If ``drop_empty=True`` (default: ``False``), the returned copy has its size
+        reduced to contain just the final set of finite conditioned acquisition points.
+        """
+        copy_ = deepcopy(self)
+        if drop_empty:
+            try:
+                i_first_empty = next(
+                    i for i, acq in enumerate(copy_.acq_cond[:-1]) if acq == -np.inf
+                )
+            except StopIteration:
+                return copy_
+            copy_.X = copy_.X[:i_first_empty]
+            copy_.y = copy_.y[:i_first_empty]
+            copy_.acq_cond = copy_.acq_cond[:i_first_empty]
+            copy_.sigma = copy_.sigma[:i_first_empty]
+            copy_.acq = copy_.acq[:i_first_empty]
+            return copy_
+        return copy_
 
     def sort(self, i_start=0):
         """
