@@ -140,21 +140,48 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     Attributes
     ----------
+    n : int
+        Number of points/features in the training set of the GPR.
+
+    d : int
+        Dimensionality of the training data.
+
     X_train : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values in training data. Intended to be
-        used when one wants to access the training data for any purpose.
+        Original (untransformed) feature values in training data of the GPR. Intended to
+        be used when one wants to access the training data for any purpose.
 
     y_train : array-like, shape = (n_samples, [n_output_dims])
-        Original (untransformed) target values in training data. Intended to be
+        Original (untransformed) target values in training data of the GPR. Intended to be
         used when one wants to access the training data for any purpose.
 
     X_train_ : array-like, shape = (n_samples, n_features)
-        (Possibly transformed) feature values in training data
-        (also required for prediction). Mostly intended for internal use.
+        (Possibly transformed) feature values in training data of the GPR (also required
+        for prediction). Mostly intended for internal use.
 
     y_train_ : array-like, shape = (n_samples, [n_output_dims])
-        (Possibly transformed) target values in training data
-        (also required for prediction). Mostly intended for internal use.
+        (Possibly transformed) target values in training data of the GPR (also required
+        for prediction). Mostly intended for internal use.
+
+    n_total : int
+        Number of points/features in the training set of the model, including points with
+        target values classified as infinite.
+
+    X_train_all : array-like, shape = (n_samples, n_features)
+        Original (untransformed) feature values in training data of the model, including
+        points with target values classified as infinite, and thus not part of the
+        training set of the GPR.
+
+    y_train_all : array-like, shape = (n_samples, [n_output_dims])
+        Original (untransformed) target values in training data of the model, including
+        values classified as infinite, and thus not part of the training set of the GPR.
+
+    X_train_all_ : array-like, shape = (n_samples, n_features)
+        (Possibly transformed) feature values in training data of the model, including
+        points with target values classified as infinite.
+
+    y_train_all_ : array-like, shape = (n_samples, [n_output_dims])
+        (Possibly transformed) target values in training data of the GPR model, including
+        points with target values classified as infinite.
 
     noise_level : array-like, shape = (n_samples, [n_output_dims]) or scalar
         The noise level (square-root of the variance) of the uncorrelated
@@ -219,6 +246,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self._fitted = False
         self.bounds = bounds
         # Initialize SVM if necessary
+        self.inf_threshold = inf_threshold
         if account_for_inf == "SVM":
             self.infinities_classifier = SVM(random_state=random_state)
         else:
@@ -234,12 +262,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     "needs to be linear (declare an attr ``is_linear=True``). This may "
                     "lead to errors further in the pipeline."
                 )
-            if inf_threshold is None:
+            if self.inf_threshold is None:
                 raise ValueError(
                     "Specify 'inf_threshold' if using infinities classifier."
                 )
             value, sigma_units = get_Xnumber(
-                inf_threshold, "s", None, dtype=float, varname="inf_threshold"
+                self.inf_threshold, "s", None, dtype=float, varname="inf_threshold"
             )
             if sigma_units:  # sigma units
                 self.diff_threshold = self.compute_threshold_given_sigma(value, self.d)
