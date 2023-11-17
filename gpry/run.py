@@ -742,7 +742,8 @@ class Runner():
                     try:
                         with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                             self.has_converged = self.convergence.is_converged(
-                                self.gpr, self.old_gpr, new_X, new_y, y_pred)
+                                self.gpr, self.old_gpr,
+                                new_X, new_y, y_pred, self.acquisition)
                         self.progress.add_convergence(
                             timer_convergence.time, timer_convergence.evals,
                             self.convergence.last_value)
@@ -757,7 +758,8 @@ class Runner():
                 try:
                     with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                         self.has_converged = self.convergence.is_converged(
-                            self.gpr, self.old_gpr, new_X, new_y, y_pred)
+                            self.gpr, self.old_gpr,
+                            new_X, new_y, y_pred, self.acquisition)
                     self.progress.add_convergence(
                         timer_convergence.time, timer_convergence.evals,
                         self.convergence.last_value)
@@ -771,7 +773,7 @@ class Runner():
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
                          "Evaluated convergence criterion to "
                          f"{self.convergence.last_value:.2g} (limit "
-                         f"{self.convergence.thres[-1]:.2g}).", level=3)
+                         f"{self.convergence.limit:.2g}).", level=3)
             mpi.sync_processes()
             # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
             # self.update_mean_cov()

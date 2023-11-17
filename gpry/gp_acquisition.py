@@ -734,8 +734,8 @@ class NORA(GenericGPAcquisition):
 
         Returns
         -------
-        X, y, sigma_y
-            May return None for any of y, sigma_y
+        X, y, sigma_y, weights
+            May return None for any of y, sigma_y, weights
         """
         if sampler is None:
             sampler = self.sampler
@@ -755,7 +755,7 @@ class NORA(GenericGPAcquisition):
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
-        return X, None, None
+        return X, None, None, None
 
     def _get_MC_sample_polychord(self, gpr, random_state):
 
@@ -792,19 +792,24 @@ class NORA(GenericGPAcquisition):
         if mpi.is_main_process:
             dummy_paramnames = [tuple(2 * [f"x_{i + 1}"]) for i in range(gpr.d)]
             self.last_polychord_output.make_paramnames_files(dummy_paramnames)
-            dead_T = np.loadtxt(self.last_polychord_output.root + "_dead.txt").T
-            X = dead_T[1:].T
-            y = dead_T[0]  # this one stores logp
+            samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
+            X = samples_T[2:].T
+            y = -0.5 * samples_T[1]  # this one stores chi2
+            w = samples_T[0]
             if self.use_prior_sample:
-                prior_T = np.loadtxt(self.last_polychord_output.root + "_prior.txt").T
-                X_prior = prior_T[2:].T
-                y_prior = - prior_T[1] / 2  # this one is stored as chi2
-                X = np.concatenate([X_prior, X])
-                y = np.concatenate([y_prior, y])
+                raise ValueError("For now use_prior_sample is disabled.")
+                # Old code, for reference.
+                # They do not have weights, so should be stored in a different list
+                # TODO: check if this improves multimodality tests!
+                # prior_T = np.loadtxt(self.last_polychord_output.root + "_prior.txt").T
+                # X_prior = prior_T[2:].T
+                # y_prior = - prior_T[1] / 2  # this one is stored as chi2
+                # X = np.concatenate([X_prior, X])
+                # y = np.concatenate([y_prior, y])
             # Delete products from tmp folder
             shutil.rmtree(self.polychord_settings.base_dir)
-            return X, y, None
-        return None, None, None
+            return X, y, None, w
+        return None, None, None, None
 
     def _get_MC_sample_ultranest(self, gpr, random_state):
         # Ultranest cannot deal with -np.inf
@@ -853,14 +858,15 @@ class NORA(GenericGPAcquisition):
             )
         gpr.minus_inf_value = old_minus_inf_value
         if mpi.is_main_process:
+            w = result['weighted_samples']['weights']
             X = result["weighted_samples"]["points"]
             y = result["weighted_samples"]["logl"]
             if self.use_prior_sample:
                 raise NotImplementedError("use_prior not implemented yet for UltraNest.")
             # Delete products from tmp folder
             shutil.rmtree(updated_settings["log_dir"])
-            return X, y, None
-        return None, None, None
+            return X, y, None, w
+        return None, None, None, None
 
     def multi_add(self, gpr, n_points=1, random_state=None):
         r"""Method to query multiple points where the objective function
@@ -913,8 +919,13 @@ class NORA(GenericGPAcquisition):
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every)
         if mc_sample_this_time:
-            self.X_mc, self.y_mc, self.sigma_y_mc = self.get_MC_sample(
-                gpr, random_state)
+            self.X_mc, self.y_mc, self.sigma_y_mc, self.w_mc = self.get_MC_sample(
+                gpr, random_state
+            )
+            # Save the necessary values for reweighting
+            self.y_mc_last_sampled = np.copy(self.y_mc)
+            if self.w_mc is not None:
+                self.w_mc_last_sampled = np.copy(self.w_mc)
         else:  # reuse
             self.X_mc, self.y_mc, self.sigma_y_mc = self.X_mc, None, None
         self.mc_every_i += 1
@@ -924,6 +935,14 @@ class NORA(GenericGPAcquisition):
             noise_level=gpr.noise_level, zeta=self.acq_func.zeta)
         this_X, this_y, this_sigma_y, this_acq = \
             self._compute_acq_and_missing_y_sigma(gpr=gpr)
+        # Reweight the last acquired samples to the new gp
+        if mpi.is_main_process:
+            if not mc_sample_this_time:
+                reweight_factor = np.exp(self.y_mc - self.y_mc_last_sampled)
+                self.w_mc = (
+                    self.w_mc_last_sampled if self.w_mc_last_sampled is not None else 1
+                ) * reweight_factor
+                self.w_mc /= max(self.w_mc)
         mpi.sync_processes()
         if mpi.is_main_process:
             what_we_did = ("Obtained new MC sample" if mc_sample_this_time
