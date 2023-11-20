@@ -1,4 +1,6 @@
 import warnings
+from typing import Sequence
+
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -108,20 +110,29 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     -------
     The plot convergence criterion vs. number of training points
     """
-    values, n_posterior_evals, n_accepted_evals = convergence_criterion.get_history()
+    if not isinstance(convergence_criterion, Sequence):
+        convergence_criterion = [convergence_criterion]
     fig, ax = plt.subplots()
-    if evaluations == "total":
-        ax.plot(n_posterior_evals, values, marker=marker)
-    elif evaluations == "accepted":
-        ax.plot(n_accepted_evals, values, marker=marker)
-    else:
-        raise ValueError("'evaluations' must be either 'total' or 'accepted'.")
-    if hasattr(convergence_criterion, "limit"):
-        ax.axhline(convergence_criterion.limit, ls="--", lw="0.5", c="0.5")
+    for i, cc in enumerate(convergence_criterion):
+        color = plt.rcParams['axes.prop_cycle'].by_key()['color'][i]
+        values, n_posterior_evals, n_accepted_evals = cc.get_history()
+        name = cc.__class__.__name__
+        try:
+            ax.plot({
+                "total": n_posterior_evals,
+                "accepted": n_accepted_evals
+            }[evaluations], values, marker=marker, color=color, label=name)
+        except KeyError as excpt:
+            raise ValueError(
+                "'evaluations' must be either 'total' or 'accepted'."
+            ) from excpt
+        if hasattr(cc, "limit"):
+            ax.axhline(cc.limit, ls="--", lw="0.5", c=color)
     ax.set_xlabel(f"{evaluations} number of posterior evaluations")
     ax.set_ylabel("Value of convergence criterion")
     ax.set_yscale("log")
     ax.grid()
+    ax.legend(loc="upper right")
     return fig, ax
 
 

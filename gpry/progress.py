@@ -106,7 +106,7 @@ class Progress:
         self.bcast_sum("evals_fit")
         self.bcast_last_max("time_convergence")
         self.bcast_sum("evals_convergence")
-        self.bcast_last_max("convergence_crit_value")  # prob not needed
+        self.bcast_last_max("convergence_crit_value")
         mpi.sync_processes()
 
     def bcast_last_max(self, column):

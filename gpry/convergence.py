@@ -133,6 +133,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """
         mpi.sync_processes()  # for timing
         failed = False
+        has_converged = None
         err_msg = None
         if self.is_MPI_aware or mpi.is_main_process:
             try:
@@ -143,10 +144,30 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         if any(mpi.comm.allgather(failed)):
             # Take lowest-rank non-null error message
             err_msg = [msg for msg in mpi.comm.allgather(err_msg) if msg is not None][0]
-            mpi.sync_processes()  # for timing
             raise ConvergenceCheckError(err_msg)
-        mpi.sync_processes()  # for timing
-        return has_converged
+        return mpi.comm.bcast(has_converged)
+
+
+class DummyMPIConvergeCriterion(ConvergenceCriterion):
+    """
+    Class to be held by non-0 rank MPI processes if the corresponding criterion is not
+    MPI-aware, in order to simplify the code.
+    """
+
+    def __init__(self):
+        pass
+
+    def criterion_value(self, *args, **kwargs):
+        raise TypeError("This method should not be called for this class.")
+
+    def is_converged(self, *args, **kwargs):
+        raise TypeError("This method should not be called for this class.")
+
+    @property
+    def last_value(self):
+        """Last value of the convergence criterion."""
+        return np.nan
+
 
 class DontConverge(ConvergenceCriterion):
     """
@@ -404,15 +425,19 @@ class GaussianKL(ConvergenceCriterion):
         # Compute the KL divergence (gaussian approx) with the previous iteration
         try:
             kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
-        except Exception as excpt:
-            kl = np.nan
-            raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
-        finally:  # whether failed or not
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
             self.n_posterior_evals.append(gp.n_total)
             self.n_accepted_evals.append(gp.n)
+        except Exception as excpt:
+            kl = np.nan
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
         return kl
 
     def is_converged(

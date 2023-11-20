@@ -628,7 +628,7 @@ class Runner():
             mpi_awareness = None
         mpi_awareness = mpi.comm.bcast(mpi_awareness)
         if not mpi.is_main_process:
-            self.convergence = [None] * len(mpi_awareness)
+            self.convergence = [gpryconv.DummyMPIConvergeCriterion()] * len(mpi_awareness)
         for i, (cc, is_MPI) in enumerate(zip(self.convergence, mpi_awareness)):
             if is_MPI:
                 self.convergence[i] = mpi.comm.bcast(cc)
@@ -759,25 +759,26 @@ class Runner():
                                  "the callback function.", level=3)
                 mpi.sync_processes()
             # Calculate convergence and break if the run has converged
+            mpi.sync_processes()
             with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
-               try:
-                   self.has_converged = all(
-                       cc.is_converged_MPIwrapped(
-                           self.gpr, self.old_gpr, new_X, new_y, y_pred, self.acquisition
-                       ) for cc in self.convergence
-                   )
-               except gpryconv.ConvergenceCheckError:
-                   self.progress.add_convergence(
-                       timer_convergence.time, timer_convergence.evals, np.nan)
-                   self.has_converged = False
-               else:
-                   self.progress.add_convergence(
-                       timer_convergence.time, timer_convergence.evals,
-                       [cc.last_value for cc in self.convergence])
+                has_converged = []
+                for cc in self.convergence:
+                    try:
+                        has_converged.append(cc.is_converged_MPIwrapped(
+                            self.gpr, self.old_gpr,
+                            new_X, new_y, y_pred, self.acquisition))
+                    except gpryconv.ConvergenceCheckError:
+                        has_converged.append(False)
+                self.has_converged = all(has_converged)
+                mpi.sync_processes()
+            self.progress.add_convergence(
+                timer_convergence.time, timer_convergence.evals,
+                [cc.last_value for cc in self.convergence]
+            )
             mpi.share_attr(self, "has_converged")
             if mpi.is_main_process:
                 last_values = ", ".join(
-                    f"{cc.last_value:.2g} (limit {cc.limit:.2g})."
+                    f"{cc.last_value:.2g} (limit {cc.limit:.2g})"
                     for cc in self.convergence
                 )
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
@@ -817,7 +818,7 @@ class Runner():
         self.progress.add_iteration()
         self.progress.add_current_n_truth(0, 0)
         self.progress.add_acquisition(0, 0)
-        self.progress.add_convergence(0, 0, np.nan)
+        self.progress.add_convergence(0, 0, [np.nan] * len(self.convergence))
         # Check if there's an SVM and if so read out it's threshold value
         # We will compare it against y - max(y)
         if isinstance(self.gpr.infinities_classifier, SVM):
