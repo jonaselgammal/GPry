@@ -519,7 +519,7 @@ class CorrectCounter(ConvergenceCriterion):
             prior_bounds = prior_bounds.bounds()
         # END OF DEPRECATION BLOCK
         d = len(prior_bounds)
-        self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5*d)))
+        self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5 * d)))
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:

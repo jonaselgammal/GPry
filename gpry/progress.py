@@ -106,8 +106,14 @@ class Progress:
         self.bcast_sum("evals_fit")
         self.bcast_last_max("time_convergence")
         self.bcast_sum("evals_convergence")
-        self.bcast_last_max("convergence_crit_value")
+        self.bcast_root("convergence_crit_value")
         mpi.sync_processes()
+
+    def bcast_root(self, column):
+        """
+        Sets the last row value of a column to the value of the root process.
+        """
+        self._bcast_operation(column, "root")
 
     def bcast_last_max(self, column):
         """
@@ -126,9 +132,13 @@ class Progress:
         self._bcast_operation(column, "sum")
 
     def _bcast_operation(self, column, operation):
-        f = {"max": max, "sum": sum}[operation.lower()]
+        f = {"root": None, "max": max, "sum": sum}[operation.lower()]
         all_values = np.array(mpi.comm.gather(
             self.data.iloc[-1, self.data.columns.get_loc(column)]))
+        if f is None:
+            self.data.iloc[-1, self.data.columns.get_loc(column)] = \
+                mpi.comm.bcast(all_values[0] if mpi.is_main_process else None)
+            return
         max_value = None
         if mpi.is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]

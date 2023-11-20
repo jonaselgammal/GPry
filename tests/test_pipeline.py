@@ -7,7 +7,7 @@ import numpy as np
 
 
 def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
-                   convergence_criterion="CorrectCounter", callback=None,
+                   convergence_criterion=None, callback=None,
                    callback_is_MPI_aware=False, options={},
                    checkpoint="files", load_checkpoint="overwrite", verbose=3,
                    mc_sampler="mcmc", desired_kl=0.05, mean=None, cov=None):
@@ -39,10 +39,23 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
             import matplotlib.pyplot as plt
             from getdist.gaussian_mixtures import GaussianND
             gdsamples_gp = mc_sample.to_getdist()
-            gdplot = gdplt.get_subplot_plotter(width_inch=5)
             to_plot = [gdsamples_gp, GaussianND(
                 mean, cov, names=mc_sample.sampled_params, label="Ground truth")]
-            gdplot.triangle_plot(to_plot, mc_sample.sampled_params, filled=True)
+            filled = [True, True]
+            # If NORA, add last nested sample
+            from gpry.gp_acquisition import NORA
+            if isinstance(runner.acquisition, NORA):
+                from getdist import MCSamples
+                mcsamples_nora = MCSamples(
+                    samples=runner.acquisition.X_mc,
+                    weights=runner.acquisition.w_mc,
+                    names=mc_sample.sampled_params,
+                    label="NORA (last)",
+                )
+                to_plot += [mcsamples_nora]
+                filled += [False]
+            gdplot = gdplt.get_subplot_plotter(width_inch=5)
+            gdplot.triangle_plot(to_plot, mc_sample.sampled_params, filled=filled)
             plt.savefig(os.path.join(runner.plots_path, "Surrogate_triangle_truth.png"),
                         dpi=300)
 

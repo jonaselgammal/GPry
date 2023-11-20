@@ -77,7 +77,7 @@ class Runner():
         dict with the proposer name as single key, the values will be passed as kwargs to
         the proposer.
 
-    convergence_criterion : ConvergenceCriterion, str, dict, False, optional (default="CorrectCounter")
+    convergence_criterion : ConvergenceCriterion, str, dict, False, optional (default=None)
         The convergence criterion. If None is given the default criterion is used:
         CorrectCounter for BatchOptimizer with adaptive thresholds, and a combination of
         a less stringent CorrectCounter and a GaussianKL for NORA. Can be specified as a
@@ -176,7 +176,7 @@ class Runner():
                  gpr="RBF",
                  gp_acquisition="LogExp",
                  initial_proposer="reference",
-                 convergence_criterion="CorrectCounter",
+                 convergence_criterion=None,
                  callback=None,
                  callback_is_MPI_aware=False,
                  options=None,
@@ -283,7 +283,10 @@ class Runner():
             self._construct_gpr(gpr)
             self._construct_gp_acquisition(gp_acquisition)
             self._construct_initial_proposer(initial_proposer)
-            self._construct_convergence_criterion(convergence_criterion)
+            self._construct_convergence_criterion(
+                convergence_criterion,
+                acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
+            )
 
 
 
@@ -486,12 +489,17 @@ class Runner():
                 f" Got {initial_proposer}"
             )
 
-    def _construct_convergence_criterion(self, convergence_criterion):
+    def _construct_convergence_criterion(self, convergence_criterion, acq_has_mc=False):
         """Constructs or passes the convergence criterion."""
         # Special case: False = DontConverge
         if convergence_criterion is False:
             self.convergence = [gpryconv.DontConverge()]
             return
+        if convergence_criterion is None:
+            # Use defaults
+            convergence_criterion = ["CorrectCounter"]
+            if acq_has_mc:
+                convergence_criterion += ["GaussianKL"]
         # Make sure it is a list or a dict
         if (
                 (not isinstance(convergence_criterion, Sequence) and
