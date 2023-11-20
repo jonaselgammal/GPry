@@ -140,12 +140,6 @@ def save_checkpoint(path, model, gpr, acquisition, convergence, options, progres
         with open(os.path.join(path, _checkpoint_filenames["acquisition"]), 'wb') as f:
             pickle.dump(acquisition, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["convergence"]), 'wb') as f:
-            # TODO: maybe convergence should just not keep the prior!
-            # Need to delete the prior object in convergence so it doesn't
-            # do weird stuff while pickling
-            from copy import deepcopy
-            convergence = deepcopy(convergence)
-            convergence.prior = None
             pickle.dump(convergence, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["options"]), 'wb') as f:
             pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)

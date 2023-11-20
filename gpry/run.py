@@ -2,13 +2,13 @@ import os
 import warnings
 from copy import deepcopy
 from inspect import getfullargspec
-from typing import Mapping
+from typing import Mapping, Sequence
 import numpy as np
 
 from cobaya.model import Model
 from cobaya.collection import SampleCollection
 
-import gpry.mpi as mpi
+from gpry import mpi
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
     UniformProposer
 from gpry.gpr import GaussianProcessRegressor
@@ -78,11 +78,13 @@ class Runner():
         the proposer.
 
     convergence_criterion : ConvergenceCriterion, str, dict, False, optional (default="CorrectCounter")
-        The convergence criterion. If None is given the Correct counter convergence
-        criterion is used with adaptive relative and absoluter thresholds. Can be
-        specified as a dict to initialize a ConvergenceCriterion class with some
-        arguments, or directly as an instance of ConvergenceCriterion. If False, no
-        convergence criterion is used, and the process runs until the budget is exhausted.
+        The convergence criterion. If None is given the default criterion is used:
+        CorrectCounter for BatchOptimizer with adaptive thresholds, and a combination of
+        a less stringent CorrectCounter and a GaussianKL for NORA. Can be specified as a
+        dict to initialize one or more ConvergenceCriterion classes with some arguments,
+        or directly as an instance or class name of some ConvergenceCriterion. If False,
+        no convergence criterion is used, and the process runs until the budget is
+        exhausted.
 
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
@@ -339,16 +341,11 @@ class Runner():
         if mpi.multiple_processes:
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "fit_full_every", "options", "acquisition",
-                         "convergence_is_MPI_aware", "callback_is_MPI_aware",
-                         "loaded_from_checkpoint", "initial_proposer", "progress",
-                         "diagnosis"):
+                         "callback_is_MPI_aware", "loaded_from_checkpoint",
+                         "initial_proposer", "progress", "diagnosis"):
                 mpi.share_attr(self, attr)
             self._share_gpr_from_main()
-            # Only broadcast non-MPI-aware objects if necessary, to save trouble+memory
-            if self.convergence_is_MPI_aware:
-                mpi.share_attr(self, "convergence")
-            elif not mpi.is_main_process:
-                self.convergence = None
+            self._share_convergence_from_main()
             if self.callback_is_MPI_aware:
                 mpi.share_attr(self, "callback")
             else:  # for check of whether to call it
@@ -493,38 +490,45 @@ class Runner():
         """Constructs or passes the convergence criterion."""
         # Special case: False = DontConverge
         if convergence_criterion is False:
-            convergence_criterion = "DontConverge"
-        if isinstance(convergence_criterion, gpryconv.ConvergenceCriterion):
-            self.convergence = convergence_criterion
-        elif isinstance(convergence_criterion, (Mapping, str)):
-            if isinstance(convergence_criterion, str):
-                convergence_criterion = {convergence_criterion: {}}
-            convergence_name = list(convergence_criterion)[0]
-            convergence_args = convergence_criterion[convergence_name] or {}
+            self.convergence = [gpryconv.DontConverge()]
+            return
+        # Make sure it is a list or a dict
+        if (
+                (not isinstance(convergence_criterion, Sequence) and
+                 not isinstance(convergence_criterion, Mapping)) or
+                isinstance(convergence_criterion, str)
+        ):
+            convergence_criterion = [convergence_criterion]
+        self.convergence = []
+        for cc in convergence_criterion:
+            if isinstance(cc, gpryconv.ConvergenceCriterion):
+                self.convergence.append(convergence_criterion)
+                continue
+            if not isinstance(cc, str):
+                raise TypeError(
+                    "'convergence_criterion' should be a ConvergenceCriterion instance, "
+                    "or a dict or string specification for one or more of "
+                    f"{gpryconv.builtin_names()}. Got {cc}"
+                )
             try:
-                convergence_class = getattr(gpryconv, convergence_name)
+                convergence_class = getattr(gpryconv, cc)
             except AttributeError as excpt:
                 raise ValueError(
-                    f"Unknown convergence criterion {convergence_name}. "
+                    f"Unknown convergence criterion {cc}. "
                     f"Available convergence criteria: {gpryconv.builtin_names()}"
                 ) from excpt
+            args = (
+                convergence_criterion[cc] or {}
+                if isinstance(convergence_criterion, Mapping) else {}
+            )
             try:
-                self.convergence = convergence_class(
-                    self.model.prior, convergence_args)
+                self.convergence.append(convergence_class(self.prior_bounds, args))
             except Exception as excpt:
                 raise ValueError(
                     "Error when initialising the convergence criterion "
-                    f"{convergence_name} with arguments {convergence_args}: "
+                    f"{cc} with arguments {args}: "
                     f"{str(excpt)}"
                 ) from excpt
-        else:
-            raise TypeError(
-                "'convergence_criterion' should be a ConvergenceCriterion instance, "
-                "or a dict or string specification for one of "
-                f"{gpryconv.builtin_names()}. Got {convergence_criterion}"
-            )
-        # This attr allows *not* to have to share the convergence criterion
-        self.convergence_is_MPI_aware = self.convergence.is_MPI_aware
 
     @property
     def d(self):
@@ -611,6 +615,24 @@ class Runner():
         mpi.share_attr(self, "gpr")
         self.gpr.set_random_state(self.random_state)
 
+    def _share_convergence_from_main(self):
+        """
+        Shares the convergence criterion from the main process, aware of whether any of
+        the criteria handles MPI by itself.
+        """
+        if not mpi.multiple_processes:
+            return
+        if mpi.is_main_process:
+            mpi_awareness = [cc.is_MPI_aware for cc in self.convergence]
+        else:
+            mpi_awareness = None
+        mpi_awareness = mpi.comm.bcast(mpi_awareness)
+        if not mpi.is_main_process:
+            self.convergence = [None] * len(mpi_awareness)
+        for i, (cc, is_MPI) in enumerate(zip(self.convergence, mpi_awareness)):
+            if is_MPI:
+                self.convergence[i] = mpi.comm.bcast(cc)
+
     def run(self):
         r"""
         Runs the acquisition-training-convergence loop until either convergence or
@@ -636,7 +658,7 @@ class Runner():
         if mpi.is_main_process:
             maybe_stop_before_max_total = (
                 (self.max_finite < self.max_total) or
-                not isinstance(self.convergence, gpryconv.DontConverge))
+                not isinstance(self.convergence[0], gpryconv.DontConverge))
             at_most_str = "at most " if maybe_stop_before_max_total else ""
         while (self.n_total_left > 0 and self.n_finite_left > 0 and
                not self.has_converged):
@@ -737,43 +759,29 @@ class Runner():
                                  "the callback function.", level=3)
                 mpi.sync_processes()
             # Calculate convergence and break if the run has converged
-            if not self.convergence_is_MPI_aware:
-                if mpi.is_main_process:
-                    try:
-                        with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
-                            self.has_converged = self.convergence.is_converged(
-                                self.gpr, self.old_gpr,
-                                new_X, new_y, y_pred, self.acquisition)
-                        self.progress.add_convergence(
-                            timer_convergence.time, timer_convergence.evals,
-                            self.convergence.last_value)
-                    except gpryconv.ConvergenceCheckError:
-                        self.progress.add_convergence(
-                            timer_convergence.time, timer_convergence.evals,
-                            np.nan)
-                        self.has_converged = False
-            else:  # run by all processes
-                # NB: this assumes that when the criterion fails,
-                #     ALL processes raise ConvergenceCheckerror, not just rank 0
-                try:
-                    with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
-                        self.has_converged = self.convergence.is_converged(
-                            self.gpr, self.old_gpr,
-                            new_X, new_y, y_pred, self.acquisition)
-                    self.progress.add_convergence(
-                        timer_convergence.time, timer_convergence.evals,
-                        self.convergence.last_value)
-                except gpryconv.ConvergenceCheckError:
-                    self.progress.add_convergence(
-                        timer_convergence.time, timer_convergence.evals,
-                        np.nan)
-                    self.has_converged = False
+            with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
+               try:
+                   self.has_converged = all(
+                       cc.is_converged_MPIwrapped(
+                           self.gpr, self.old_gpr, new_X, new_y, y_pred, self.acquisition
+                       ) for cc in self.convergence
+                   )
+               except gpryconv.ConvergenceCheckError:
+                   self.progress.add_convergence(
+                       timer_convergence.time, timer_convergence.evals, np.nan)
+                   self.has_converged = False
+               else:
+                   self.progress.add_convergence(
+                       timer_convergence.time, timer_convergence.evals,
+                       [cc.last_value for cc in self.convergence])
             mpi.share_attr(self, "has_converged")
             if mpi.is_main_process:
+                last_values = ", ".join(
+                    f"{cc.last_value:.2g} (limit {cc.limit:.2g})."
+                    for cc in self.convergence
+                )
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
-                         "Evaluated convergence criterion to "
-                         f"{self.convergence.last_value:.2g} (limit "
-                         f"{self.convergence.limit:.2g}).", level=3)
+                         "Evaluated convergence criterion to " + last_values, level=3)
             mpi.sync_processes()
             # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
             # self.update_mean_cov()

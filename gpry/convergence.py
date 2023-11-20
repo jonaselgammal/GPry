@@ -48,12 +48,9 @@ class ConvergenceCriterion(metaclass=ABCMeta):
 
         from gpry.convergence import ConvergenceCriterion
         class Custom_convergence_criterion(ConvergenceCriterion):
-            def __init__(self, prior, params):
-                # prior should be a prior object and contain the prior for all
-                # parameters
-                # params is to be passed as a dictionary. The init should
-                # then set the parameters which are needed later accordingly.
-                # as a minimal requirement this method should set a number
+            def __init__(self, prior_bounds, params):
+                # prior_bounds should be a list of prior bounds for all parameters.
+                # As a minimal requirement this method should set a number
                 # at which the algorithm is considered to have converged.
                 # Furthermore this method should initialize empty lists in
                 # which we can write the values of the convergence criterion
@@ -94,7 +91,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         return values, n_posterior_evals, n_accepted_evals
 
     @abstractmethod
-    def __init__(self, prior, params):
+    def __init__(self, prior_bounds, params):
         """Sets all relevant initial parameters from the 'params' dict."""
 
     @abstractmethod
@@ -126,6 +123,30 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """
         return False
 
+    def is_converged_MPIwrapped(self, *args, **kwargs):
+        """
+        MPI-aware wrapper for calling is_converged inside the runner.
+
+        Returns convergence criterion value for process 0.
+
+        If fails, raises ConvergenceCheckError in all processes.
+        """
+        mpi.sync_processes()  # for timing
+        failed = False
+        err_msg = None
+        if self.is_MPI_aware or mpi.is_main_process:
+            try:
+                has_converged = self.is_converged(*args, **kwargs)
+            except ConvergenceCheckError as excpt:
+                failed = True
+                err_msg = str(excpt)
+        if any(mpi.comm.allgather(failed)):
+            # Take lowest-rank non-null error message
+            err_msg = [msg for msg in mpi.comm.allgather(err_msg) if msg is not None][0]
+            mpi.sync_processes()  # for timing
+            raise ConvergenceCheckError(err_msg)
+        mpi.sync_processes()  # for timing
+        return has_converged
 
 class DontConverge(ConvergenceCriterion):
     """
@@ -135,12 +156,12 @@ class DontConverge(ConvergenceCriterion):
     the BO loop at a set number of iterations.
     """
 
-    def __init__(self, prior, params):
+    def __init__(self, prior_bounds=None, params=None):
         self.values = []
         self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
-        self.prior = prior
+        self.prior_bounds = prior_bounds
 
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
@@ -170,9 +191,8 @@ class GaussianKL(ConvergenceCriterion):
 
     Parameters
     ----------
-    prior : model prior instance
-        The prior of the model used. This is not needed in this specific
-        convergence criterion so you may pass anything here.
+    prior_bounds : list
+        List of prior bounds.
 
     params : dict
         Dict with the following keys:
@@ -193,8 +213,8 @@ class GaussianKL(ConvergenceCriterion):
     def is_MPI_aware(self):
         return True
 
-    def __init__(self, prior, params):
-        self.prior = prior
+    def __init__(self, prior_bounds, params):
+        self.prior_bounds = prior_bounds
         self.mean = None
         self.cov = None
         self.limit = params.get("limit", 1e-2)
@@ -216,8 +236,7 @@ class GaussianKL(ConvergenceCriterion):
         # We'll some hight MCMC temperature, to get the tails right
         self.temperature = 2
         # Prepare Cobaya's input
-        self.bounds = self.prior.bounds(confidence_for_unbounded=0.99995)
-        self.paramnames = self.prior.params
+        self.paramnames = [f"x_{i + 1}" for i in range(len(self.prior_bounds))]
         self.cobaya_input = None
         # Save last sample
         self._last_info = {}
@@ -326,7 +345,8 @@ class GaussianKL(ConvergenceCriterion):
         from cobaya.sampler import get_sampler
         from cobaya.log import LoggedError
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
-        self.cobaya_input = cobaya_generate_gp_model_input(gpr, self.bounds, self.paramnames)
+        self.cobaya_input = cobaya_generate_gp_model_input(
+            gpr, self.prior_bounds, self.paramnames)
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
@@ -440,9 +460,8 @@ class CorrectCounter(ConvergenceCriterion):
 
     Parameters
     ----------
-    prior : model prior instance
-        The prior of the model used. This is not needed in this specific
-        convergence criterion so you may pass anything here.
+    prior_bounds : list
+        List of prior bounds.
 
     params : dict
         Dict with the following keys:
@@ -463,8 +482,18 @@ class CorrectCounter(ConvergenceCriterion):
 
     """
 
-    def __init__(self, prior, params):
-        d = prior.d()
+    def __init__(self, prior_bounds, params):
+        # DEPRECATED ON 19-11-2023:
+        from cobaya.prior import Prior  # pylint: disable=import-outside-toplevel
+        if isinstance(prior_bounds, Prior):
+            warn(
+                "The first argument at initialization should now be a list of bounds, "
+                "not a Cobaya Prior (to reduce Cobaya dependence). "
+                "This will fail in the future."
+            )
+            prior_bounds = prior_bounds.bounds()
+        # END OF DEPRECATION BLOCK
+        d = len(prior_bounds)
         self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5*d)))
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
