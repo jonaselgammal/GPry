@@ -383,6 +383,8 @@ class Runner():
                 "bounds": self.prior_bounds,
                 "random_state": self.random_state,
                 "verbose": self.verbose,
+                "account_for_inf": "SVM",
+                "inf_threshold": "20s"
             }
             for k, default_value in gpr_defaults.items():
                 if gpr.get(k) is None:
