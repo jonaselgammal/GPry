@@ -719,6 +719,7 @@ class NORA(GenericGPAcquisition):
                 "num_repeats": self.num_repeats_per_dim * self.n_d,
                 "precision_criterion": self.precision_criterion_target,
                 "nprior": int(self.nprior_per_nlive * nlive),
+                "max_ncalls": int(1e4*self.n_d**1.7)
         }
 
     def log(self, msg, level=None):
@@ -853,6 +854,7 @@ class NORA(GenericGPAcquisition):
         with NumpyErrorHandling(all="ignore") as _:
             result = sampler.run(
                 min_num_live_points=updated_settings["nlive"],
+                max_ncalls=updated_settings["max_ncalls"],
                 frac_remain=updated_settings["precision_criterion"],
                 viz_callback=False, show_status=False,
             )

@@ -25,6 +25,7 @@ from gpry.plots import plot_convergence, plot_distance_distribution
 from gpry.tools import create_cobaya_model, get_Xnumber
 
 
+global _plots_path
 _plots_path = "images"
 
 
