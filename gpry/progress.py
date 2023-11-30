@@ -220,7 +220,7 @@ class Progress:
                 "evals_fit": "GP fit",
                 "evals_convergence": "Convergence crit."}.items():
             dtype = self._dtypes[col]
-            ax.bar(iters, self.data[col].astype(dtype), label=label, bottom=bottom)
+            ax.bar(iters, self.data[col].astype(dtype, errors='ignore'), label=label, bottom=bottom)
             bottom += self.data[col].to_numpy(dtype=dtype)
         ax.set_xlabel("Iteration")
         self._x_ticks_for_bar_plot(fig, ax)

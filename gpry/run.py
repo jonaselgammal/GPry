@@ -22,7 +22,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
 from gpry.plots import plot_convergence, plot_distance_distribution
-from gpry.tools import create_cobaya_model, get_Xnumber
+from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates
 
 
 global _plots_path
@@ -302,6 +302,9 @@ class Runner():
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
             self.n_points_per_acq = options.get("n_points_per_acq", min(mpi.SIZE, self.d))
+            self.n_resamples_before_giveup = options.get(
+                "n_resamples_before_giveup", 2)
+            self.resamples = 0
             if options.get("fit_full_every"):
                 self.fit_full_every = get_Xnumber(
                     options.get("fit_full_every"), "d", self.d, int, "fit_full_every"
@@ -688,8 +691,27 @@ class Runner():
             # Acquire new points in parallel
             mpi.sync_processes()  # to sync the timer
             with TimerCounter(self.gpr) as timer_acq:
+                force_resample = self.resamples > 0
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
-                    self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state)
+                    self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state,
+                    force_resample=force_resample)
+                # Check whether any of the points in new_X are either already in the
+                # training set or exit multiple times in new_X
+                if len(y_pred) > 0:
+                    in_training_set, duplicates = check_candidates(self.gpr, new_X)
+                    if mpi.is_main_process:
+                        if np.any(in_training_set):
+                            self.log(f"{np.sum(in_training_set)} of the proposed points are already "
+                                    "in the training set. Skipping them.", level=2)
+                        if np.any(duplicates):
+                            self.log(f"{np.sum(duplicates)} of the proposed points appear multiple "
+                                    "times. Skipping them.", level=2)
+                    # make boolean mask of points to keep
+                    keep = np.logical_not(np.logical_or(in_training_set, duplicates))
+                    # remove points that are not to be kept from new_X, y_pred, acq_vals
+                    new_X = new_X[keep]
+                    y_pred = y_pred[keep]
+                    acq_vals = acq_vals[keep]
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if mpi.is_main_process:
                 self.log(f"[ACQUISITION] ({timer_acq.time:.2g} sec) Proposed {len(new_X)}"
@@ -697,7 +719,24 @@ class Runner():
                 self.log("New location(s) proposed, as [X, logp_gp(X), acq(X)]:", level=4)
                 for X, y, acq in zip(new_X, y_pred, acq_vals):
                     self.log(f"   {X} {y} {acq}", level=4)
-            # Get logposterior value(s) for the acquired points (in parallel)
+            # Checks how many candidates have been returned and if it's
+            # less than half of the number requested (or less than 2 if only 2 requested),
+            # force the acquisition to re-sample until either getting more points or
+            # breaking if n_resamples_before_giveup is reached.
+            if len(y_pred) < self.n_points_per_acq // 2:
+                self.resamples += 1
+                if self.resamples > self.n_resamples_before_giveup:
+                    if mpi.is_main_process:
+                        self.log(f"Acquisition returning no values after {self.resamples-1} "
+                                "re-tries. Giving up.", level=1)
+                        break
+                if mpi.is_main_process:
+                    self.log("Acquisition returned less than half of the requested "
+                                "points. Re-sampling ("
+                                f"{self.n_resamples_before_giveup- self.resamples} "
+                                "tries remaining)", level=2)
+                continue
+            self.resamples = 0
             new_X_this_process = new_X[
                 i_evals_this_process: i_evals_this_process + n_evals_this_process]
             new_y_this_process = np.empty(0)
@@ -730,6 +769,8 @@ class Runner():
                          f", of which {sum(np.isfinite(new_y))} returned a finite value.",
                          level=3)
             mpi.sync_processes()
+            if mpi.is_main_process:
+                self.log(f"Maximum log-posterior value found so far: {self.gpr.y_max}", level=3)
             # Add the newly evaluated truths to the GPR, and maybe refit hyperparameters.
             with TimerCounter(self.gpr) as timer_fit:
                 do_simplified_fit_only = (
@@ -800,7 +841,11 @@ class Runner():
             self.progress.mpi_sync()
             self.save_checkpoint()
             if mpi.is_main_process and self.plots:
-                self.plot_progress()
+                try:
+                    self.plot_progress()
+                except:
+                    self.log("Failed to plot progress.", level=2)
+                    pass
         else:  # check "while" ending condition
             mpi.sync_processes()
             if mpi.is_main_process:
@@ -813,6 +858,11 @@ class Runner():
                 if self.max_finite < self.max_total and self.n_finite_left <= 0:
                     lines += ("- The maximum number of finite truth evaluations "
                               f"({self.max_finite}) has been reached.")
+                if self.resamples > self.n_resamples_before_giveup:
+                    lines += (
+                        f"- Gave up up after {self.resamples-1} resamples "
+                        f"(max. {self.n_resamples_before_giveup})."
+                    )
                 self.banner(lines)
             if self.diagnosis:
                 self.diagnose()

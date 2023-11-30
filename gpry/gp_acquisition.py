@@ -103,25 +103,6 @@ class GenericGPAcquisition():
         shall be evaluated.
         """
 
-    def _has_already_been_sampled(self, gpr, new_X):
-        """
-        Method for determining whether points which have been found by the
-        acquisition algorithm are already in the GP. This is called from the
-        optimize_acq_func method to determine whether points may have been
-        sampled multiple times which could break the GP.
-        This is meant to be used for a **single** point new_X.
-        """
-        X_train = np.copy(gpr.X_train)
-
-        for i, xi in enumerate(X_train):
-            if np.allclose(new_X, xi):
-                if self.verbose > 1:
-                    warnings.warn("A point has been sampled multiple times. "
-                                  "Excluding this.")
-                return True
-        return False
-
-
 class BatchOptimizer(GenericGPAcquisition):
     """
     Run Gaussian Process acquisition.
@@ -399,7 +380,7 @@ class BatchOptimizer(GenericGPAcquisition):
                     x0 = self.preprocessing_X.transform(x0)
                 return x0, -1 * value
 
-    def multi_add(self, gpr, n_points=1, random_state=None):
+    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
         r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
@@ -634,6 +615,7 @@ class NORA(GenericGPAcquisition):
                  num_repeats_per_dim=5,
                  precision_criterion_target=0.01,
                  nprior_per_nlive=10,
+                 max_ncalls=None,
                  tmpdir=None,
                  ):
         super().__init__(
@@ -692,6 +674,7 @@ class NORA(GenericGPAcquisition):
         self.num_repeats_per_dim = num_repeats_per_dim
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
+        self.max_ncalls = max_ncalls
         # Pool for storing intermediate results during parallelised acquisition
         self.pool = None
         self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc = None, None, None, None
@@ -719,7 +702,7 @@ class NORA(GenericGPAcquisition):
                 "num_repeats": self.num_repeats_per_dim * self.n_d,
                 "precision_criterion": self.precision_criterion_target,
                 "nprior": int(self.nprior_per_nlive * nlive),
-                "max_ncalls": int(1e4*self.n_d**1.7)
+                "max_ncalls": self.max_ncalls
         }
 
     def log(self, msg, level=None):
@@ -870,7 +853,7 @@ class NORA(GenericGPAcquisition):
             return X, y, None, w
         return None, None, None, None
 
-    def multi_add(self, gpr, n_points=1, random_state=None):
+    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
 
@@ -919,7 +902,7 @@ class NORA(GenericGPAcquisition):
         # Gather an MC sample
         if mpi.is_main_process:
             start_sample = time()
-        mc_sample_this_time = not bool(self.mc_every_i % self.mc_every)
+        mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
         if mc_sample_this_time:
             self.X_mc, self.y_mc, self.sigma_y_mc, self.w_mc = self.get_MC_sample(
                 gpr, random_state

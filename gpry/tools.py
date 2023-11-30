@@ -239,3 +239,26 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
             f"{dtype.__name__}. Pass either a string ending in '{X_letter}' or a valid "
             f"{dtype.__name__} value."
         ) from excpt
+    
+def check_candidates(gpr, new_X, tol=1e-8):
+    """
+    Method for determining whether points which have been found by the
+    acquisition algorithm are already in the GP or appear multiple times
+    so that they can be removed.
+    Returns two boolean arrays, the first one indicating whether the point
+    is already in the GP and the second one indicating whether the point
+    appears multiple times.
+    """
+    if gpr.preprocessing_X is not None:
+        new_X = gpr.preprocessing_X.transform(np.copy(new_X))
+    X_train = np.copy(gpr.X_train_)
+
+    new_X_r = np.round(new_X, decimals=int(-np.log10(tol)))
+    X_train_r = np.round(X_train, decimals=int(-np.log10(tol)))
+    in_training_set = np.any(np.all(X_train_r[:, None, :] == new_X_r, axis=2), axis=0)
+
+    unique_rows, indices, counts = np.unique(new_X_r, axis=0, return_index=True, return_counts=True)
+    is_duplicate = counts > 1
+    duplicates = np.isin(new_X_r, unique_rows[is_duplicate]).all(axis=1)
+    duplicates[indices[is_duplicate]] = False
+    return in_training_set, duplicates
