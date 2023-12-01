@@ -221,7 +221,7 @@ class Progress:
                 "evals_convergence": "Convergence crit."}.items():
             dtype = self._dtypes[col]
             ax.bar(iters, self.data[col].astype(dtype, errors='ignore'), label=label, bottom=bottom)
-            bottom += self.data[col].to_numpy(dtype=dtype)
+            bottom += self.data[col].astype(float).to_numpy(dtype=dtype, na_value=np.nan)
         ax.set_xlabel("Iteration")
         self._x_ticks_for_bar_plot(fig, ax)
         multiprocess_str = " (summed over processes)" if mpi.multiple_processes else ""

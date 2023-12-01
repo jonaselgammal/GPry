@@ -123,6 +123,16 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """
         return False
 
+    @property
+    def get_convergence_policy(self):
+        """
+        Returns a string describing the convergence policy.
+        """
+        mpi.sync_processes()
+        if self.is_MPI_aware or mpi.is_main_process:
+            convergence_policy = self.convergence_policy
+        return mpi.comm.bcast(convergence_policy)
+
     def is_converged_MPIwrapped(self, *args, **kwargs):
         """
         MPI-aware wrapper for calling is_converged inside the runner.
@@ -177,12 +187,13 @@ class DontConverge(ConvergenceCriterion):
     the BO loop at a set number of iterations.
     """
 
-    def __init__(self, prior_bounds=None, params=None):
+    def __init__(self, prior_bounds=None, params={}):
         self.values = []
         self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         self.prior_bounds = prior_bounds
+        self.convergence_policy = params.get("policy", "and")
 
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
@@ -240,6 +251,7 @@ class GaussianKL(ConvergenceCriterion):
         self.cov = None
         self.limit = params.get("limit", 1e-2)
         self.limit_times = params.get("limit_times", 2)
+        self.convergence_policy = params.get("policy", "and")
         self.values = []
         self.thres = []
         self.n_posterior_evals = []
@@ -549,6 +561,7 @@ class CorrectCounter(ConvergenceCriterion):
                     f"or a string with a number followed by 'l' or 's'. Got {abstol}")
         self.abstol = abstol
         self.verbose = params.get("verbose", 0)
+        self.convergence_policy = params.get("policy", "and")
         self.values = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []

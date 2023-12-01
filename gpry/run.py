@@ -518,7 +518,7 @@ class Runner():
             if isinstance(cc, gpryconv.ConvergenceCriterion):
                 self.convergence.append(convergence_criterion)
                 continue
-            if not isinstance(cc, str):
+            if not isinstance(cc, str) and not isinstance(cc, dict):
                 raise TypeError(
                     "'convergence_criterion' should be a ConvergenceCriterion instance, "
                     "or a dict or string specification for one or more of "
@@ -821,7 +821,14 @@ class Runner():
                             new_X, new_y, y_pred, self.acquisition))
                     except gpryconv.ConvergenceCheckError:
                         has_converged.append(False)
-                self.has_converged = all(has_converged)
+                convergence_policy = [cc.get_convergence_policy for cc in self.convergence]
+                self.has_converged = has_converged[0]
+                for i in range(1, len(has_converged)):
+                    self.has_converged = self.has_converged and has_converged[i] \
+                        if convergence_policy[i] == "and" else self.has_converged or has_converged[i]
+                if mpi.is_main_process:
+                    print(f"has_converged = {self.has_converged}, {has_converged}")
+                    print(f"convergence_policy = {convergence_policy}")
                 mpi.sync_processes()
             self.progress.add_convergence(
                 timer_convergence.time, timer_convergence.evals,

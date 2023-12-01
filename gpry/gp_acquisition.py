@@ -19,7 +19,7 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber
+from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names
 
 
 # TODO: inconsistent use of random_state: passed at init, and also at acquisition time
@@ -663,6 +663,17 @@ class NORA(GenericGPAcquisition):
                     "Please install UltraNest or select an alternative nested sampler "
                     "(e.g. PolyChord)."
                 ) from excpt
+        elif self.sampler.lower() == "nessai":
+            try:
+                # pylint: disable=import-outside-toplevel
+                import nessai
+                import nessai.model
+                from nessai.flowsampler import FlowSampler
+            except ImportError as excpt:
+                raise ImportError(
+                    "Please install nessai or select an alternative nested sampler "
+                    "(e.g. PolyChord)."
+                ) from excpt
         # TODO: fix this!
         # # Using rng state as seed for PolyChord
         # if self.random_state is not None:
@@ -729,6 +740,8 @@ class NORA(GenericGPAcquisition):
             return self._get_MC_sample_polychord(gpr, random_state)
         if sampler.lower() == "ultranest":
             return self._get_MC_sample_ultranest(gpr, random_state)
+        if sampler.lower() == "nessai":
+            return self._get_MC_sample_nessai(gpr, random_state)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     def _get_MC_sample_uniform(self, gpr, random_state):
@@ -740,6 +753,85 @@ class NORA(GenericGPAcquisition):
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
         return X, None, None, None
+    
+    def _get_MC_sample_nessai(self, gpr, random_state):
+        # write a code to sample from nessai
+        import nessai
+        import nessai.model
+        from nessai.flowsampler import FlowSampler
+        class Nessai_model(nessai.model.Model):
+            """
+            Translates the GP to a nessai model
+            """
+            def __init__(self, gpr, bounds):
+                self.gpr = gpr
+                # Routine to generate tighter bounds which only capture the finite part of the GP.
+                X_train_finite = self.gpr.X_train
+                n_d = self.gpr.d
+                self.gpry_bounds = bounds
+                modified_bounds = np.empty((n_d, 2))
+                for d in range(n_d):
+                    modified_bounds[d, 0] = np.min(X_train_finite[:, d])
+                    modified_bounds[d, 1] = np.max(X_train_finite[:, d])
+                self.names = generic_params_names(n_d)
+                self.modified_bounds = modified_bounds # self.gpry_model.prior.bounds(confidence_for_unbounded=0.99995)
+                
+                self.log_prior_volume = np.sum(np.log(self.gpry_bounds[:,1] - self.gpry_bounds[:,0]))
+                
+                self.bounds = {}
+                for i in range(len(self.names)):
+                    self.bounds[self.names[i]] = self.modified_bounds[i]
+            
+            def gpry_log_likelihood(self, point):
+                return self.gpr.predict(point) + self.log_prior_volume
+
+            def log_likelihood(self, livepoint):
+                if livepoint.ndim == 0:
+                    point = np.array([livepoint[p] for p in self.names])
+                    point = np.atleast_2d(point)
+                    ll = self.gpry_log_likelihood(point)
+                else:
+                    points = np.array([[livepoint[i][p] for p in self.names] for i in range(livepoint.size)])
+                    ll = self.gpry_log_likelihood(points)
+                        
+                return ll
+
+            def log_prior(self, livepoint):
+                if not self.in_bounds(livepoint).any():
+                    return -np.inf
+                lp = np.single(0.)
+                return lp
+        nessai_model = Nessai_model(gpr, self.bounds)
+        updated_settings = self.update_NS_precision(gpr)
+
+        if self.tmpdir is None:
+            # TODO: add to checkpoint folder?
+            tmpdir = tempfile.TemporaryDirectory().name
+        else:
+            tmpdir = f"{self.tmpdir}/{self.i}"
+            self.i += 1
+        # TODO: add more options for nessai
+        sampler = FlowSampler(nessai_model, output=tmpdir,
+                              nlive=updated_settings['nlive'],
+                              plot=False, resume=False)
+        sampler.run(plot=False, save=False)
+        result = sampler.ns.get_result_dictionary()
+        X = result['nested_samples']
+        x = sampler.posterior_samples
+
+        # Copy the data from the structured array to the float array
+        dtype_new = np.dtype({'names': x.dtype.names, 'formats': tuple([np.float64]*len(x.dtype.names))})
+        x = x.astype(dtype_new)
+        posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
+
+        X = posterior_samples[:, :-3]
+        y = posterior_samples[:, -2]
+
+        return X, y, None, None
+        
+        
+
+
 
     def _get_MC_sample_polychord(self, gpr, random_state):
 
@@ -911,6 +1003,8 @@ class NORA(GenericGPAcquisition):
             self.y_mc_last_sampled = np.copy(self.y_mc)
             if self.w_mc is not None:
                 self.w_mc_last_sampled = np.copy(self.w_mc)
+            else:
+                self.w_mc_last_sampled = None
         else:  # reuse
             self.X_mc, self.y_mc, self.sigma_y_mc = self.X_mc, None, None
         self.mc_every_i += 1
