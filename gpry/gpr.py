@@ -534,21 +534,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.X_train_all = np.append(self.X_train_all, X, axis=0)
         self.y_train_all = np.append(self.y_train_all, y)
         if self.preprocessing_X is None:
-            X_ = X
-            self.X_train_all_ = self.X_train_all
+            X_ = np.copy(X)
+            self.X_train_all_ = np.copy(self.X_train_all)
         else:
             X_ = self.preprocessing_X.transform(X)
             self.X_train_all_ = np.append(self.X_train_all_, X_, axis=0)
         if self.preprocessing_y is None:
-            y_ = y
-            self.y_train_all_ = self.y_train_all
+            y_ = np.copy(y)
+            self.y_train_all_ = np.copy(self.y_train_all)
         else:
             y_ = self.preprocessing_y.transform(y)
             self.y_train_all_ = np.append(self.y_train_all_, y_, axis=0)
         # Re-fit the SVM with the new data and select only finite points for GPR
         if self.infinities_classifier is not None:
             if self.preprocessing_y is None:
-                diff_threshold_ = self.diff_threshold
+                diff_threshold_ = np.copy(self.diff_threshold)
             else:
                 diff_threshold_ = self.preprocessing_y.transform_noise_level(
                     self.diff_threshold
