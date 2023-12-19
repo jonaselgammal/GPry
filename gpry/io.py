@@ -91,7 +91,11 @@ def read_checkpoint(path, model=None):
     with open(os.path.join(path, _checkpoint_filenames["convergence"]), 'rb') as i:
         if checkpoint_files[3]:
             convergence = pickle.load(i)
-            convergence.prior = model.prior
+            if isinstance(convergence, list):
+                for c in convergence:
+                    c.prior = model.prior 
+            else:
+                convergence.prior = model.prior
         else:
             convergence = None
     with open(os.path.join(path, _checkpoint_filenames["options"]), 'rb') as i:

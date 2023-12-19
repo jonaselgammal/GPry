@@ -349,7 +349,8 @@ class Runner():
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
                          "n_points_per_acq", "fit_full_every", "options", "acquisition",
                          "callback_is_MPI_aware", "loaded_from_checkpoint",
-                         "initial_proposer", "progress", "diagnosis"):
+                         "initial_proposer", "progress", "diagnosis",
+                         "n_resamples_before_giveup", "resamples"):
                 mpi.share_attr(self, attr)
             self._share_gpr_from_main()
             self._share_convergence_from_main()
@@ -516,7 +517,7 @@ class Runner():
         self.convergence = []
         for cc in convergence_criterion:
             if isinstance(cc, gpryconv.ConvergenceCriterion):
-                self.convergence.append(convergence_criterion)
+                self.convergence.append(cc)
                 continue
             if not isinstance(cc, str) and not isinstance(cc, dict):
                 raise TypeError(
@@ -815,6 +816,7 @@ class Runner():
             with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                 has_converged = []
                 for cc in self.convergence:
+                    print(cc)
                     try:
                         has_converged.append(cc.is_converged_MPIwrapped(
                             self.gpr, self.old_gpr,
