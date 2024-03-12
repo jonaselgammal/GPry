@@ -9,6 +9,7 @@ import os
 import warnings
 
 import pandas as pd
+import numpy as np
 
 from gpry import mpi
 
@@ -105,6 +106,6 @@ def diagnosis(runner):
                     os.path.join(
                         runner.plots_path,
                         f"NORA_iteration_{runner.current_iteration:03d}.png"))
-            except (ValueError, MCSamplesError):
+            except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError):
                 print("COULD NOT PLOT!!!")
         print("**************************************************")

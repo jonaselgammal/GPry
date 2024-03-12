@@ -724,6 +724,51 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
+    def shrink_priors(self, gpr):
+        from pypolychord.priors import UniformPrior
+        """
+        Adjusts given boundaries based on a cutoff value. Boundaries are only adjusted if the last samples 
+        towards the edges are below the cutoff.
+
+        Parameters:
+        sampling_locations (numpy.ndarray): An (N, d) array of sampling locations.
+        function_values (numpy.ndarray): An N array of function values.
+        parameter_names (list): List of names for each d parameter.
+        threshold_value (float): The threshold value to determine the cutoff.
+
+        Returns:
+        numpy.ndarray, dict: 
+            - A (d, 2) array representing the adjusted boundaries.
+            - A dictionary with parameter names as keys and their [min, max] values as values.
+        """
+        initial_boundaries = self.bounds
+        # Calculate the cutoff value
+
+        sampling_locations = gpr.X_train_all
+        # Find all sampling locations where function values are greater than the cutoff
+        relevant_locations = gpr.X_train
+
+        # Find the minimum and maximum values for each d parameter
+        min_values = relevant_locations.min(axis=0)
+        max_values = relevant_locations.max(axis=0)
+
+        # Initialize adjusted boundaries with initial boundaries
+        adjusted_boundaries = np.array(initial_boundaries)
+
+        # Iterate over each parameter/dimension
+        for i, param in enumerate(initial_boundaries):
+            # Adjust the boundaries if they do not coincide with the overall min/max in this dimension
+            if min_values[i] != sampling_locations[:, i].min():
+                adjusted_boundaries[i, 0] = min_values[i]
+
+            if max_values[i] != sampling_locations[:, i].max():
+                adjusted_boundaries[i, 1] = max_values[i]
+
+
+        self.bounds_array = adjusted_boundaries
+        self.prior = UniformPrior(*adjusted_boundaries.T)
+
+
     def get_MC_sample(self, gpr, random_state=None, sampler=None):
         """
 
@@ -860,6 +905,7 @@ class NORA(GenericGPAcquisition):
             self.polychord_settings.file_root = "test"
         mpi.share_attr(self, "polychord_settings")
         with NumpyErrorHandling(all="ignore") as _:
+            self.shrink_priors(gpr)
             self.last_polychord_output = run_polychord(
                 logp,
                 nDims=self.n_d, nDerived=0,
@@ -871,6 +917,7 @@ class NORA(GenericGPAcquisition):
             samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
             X = samples_T[2:].T
             y = -0.5 * samples_T[1]  # this one stores chi2
+            y = gpr.predict(X, return_std=False, validate=False)
             w = samples_T[0]
             if self.use_prior_sample:
                 raise ValueError("For now use_prior_sample is disabled.")

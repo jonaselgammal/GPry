@@ -661,6 +661,18 @@ class Runner():
             if mpi.is_main_process:
                 self.banner("Drawing initial samples.")
             self.do_initial_training()
+            # Check if any of the points in X_train are close to each other
+            if len(self.gpr.X_train) > 1:
+                distances = np.linalg.norm(
+                    self.gpr.X_train[:, None] - self.gpr.X_train[None, :], axis=-1)
+                if np.any(distances < 1e-10):
+                    self.log("Warning: Some of the initial training points are very close "
+                             "to each other. This may lead to numerical instability in "
+                             "the GP. Consider increasing the number of initial points or "
+                             "decreasing the volume of your prior.", level=1)
+            print("########################################")
+            print(np.sort(self.gpr.X_train, axis=0))
+            print("########################################")
             if mpi.is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
@@ -899,14 +911,16 @@ class Runner():
         if mpi.is_main_process:
             # Check if the GP already contains points. If so they are reused.
             pretrained = 0
-            if hasattr(self.gpr, "y_train"):
-                if len(self.gpr.y_train) > 0:
-                    pretrained = len(self.gpr.y_train)
-            n_still_needed = self.n_initial - pretrained
-            n_to_sample_per_process = int(np.ceil(n_still_needed / mpi.SIZE))
             # Arrays to store the initial sample
             X_init = np.empty((0, self.d))
             y_init = np.empty(0)
+            if hasattr(self.gpr, "y_train"):
+                if len(self.gpr.y_train) > 0:
+                    pretrained = len(self.gpr.y_train)
+                    X_init = self.gpr.X_train
+                    y_init = self.gpr.y_train
+            n_still_needed = np.max([0, self.n_initial - pretrained])
+            n_to_sample_per_process = int(np.ceil(n_still_needed / mpi.SIZE))
         if mpi.multiple_processes:
             n_to_sample_per_process = mpi.comm.bcast(
                 n_to_sample_per_process if mpi.is_main_process else None)
@@ -973,7 +987,7 @@ class Runner():
                                    "volume of the prior")
             # Append the initial samples to the gpr
             with TimerCounter(self.gpr) as timer_fit:
-                self.gpr.append_to_data(X_init, y_init)
+                self.gpr.fit(X_init, y_init)
             self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
                      " points, including GPR hyperparameters. "
@@ -991,13 +1005,13 @@ class Runner():
         self._share_gpr_from_main()
         # Prepare hyperparameter fit
         hyperparams_bounds = None
-        if self.cov is not None:
-            stds = np.sqrt(np.diag(self.cov))
-            prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
-            relative_stds = stds / (prior_bounds[:, 1] - prior_bounds[:, 0])
-            new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
-            hyperparams_bounds = self.gpr.kernel_.bounds.copy()
-            hyperparams_bounds[1:] = np.log(new_bounds)
+        # if self.cov is not None:
+        #     stds = np.sqrt(np.diag(self.cov))
+        #     prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
+        #     relative_stds = stds / (prior_bounds[:, 1] - prior_bounds[:, 0])
+        #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
+        #     hyperparams_bounds = self.gpr.kernel_.bounds.copy()
+        #     hyperparams_bounds[1:] = np.log(new_bounds)
         hyperparams_bounds = mpi.comm.bcast(hyperparams_bounds)
         # Optimize hyperparameters in parallel. Rank 0 strarts one from current.
         if simplified:

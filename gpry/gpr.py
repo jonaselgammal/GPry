@@ -1364,6 +1364,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
         assuming a :math:`\chi^2` distribution.
         """
+        return nstd_of_1d_nstd(n_sigma, n_dimensions)
         return 0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions) ** 2
 
     # TO BE DEPRECATED
