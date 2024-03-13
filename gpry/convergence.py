@@ -131,6 +131,8 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         mpi.sync_processes()
         if self.is_MPI_aware or mpi.is_main_process:
             convergence_policy = self.convergence_policy
+        else:
+            convergence_policy = None
         return mpi.comm.bcast(convergence_policy)
 
     def is_converged_MPIwrapped(self, *args, **kwargs):
