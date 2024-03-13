@@ -89,7 +89,9 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
     return getdist_plot
 
 
-def plot_convergence(convergence_criterion, evaluations="total", marker=""):
+def plot_convergence(
+    convergence_criterion, evaluations="total", marker="", axes=None, ax_labels=True
+):
     """
     Plots the value of the convergence criterion as function of the number of
     (accepted) training points.
@@ -106,34 +108,75 @@ def plot_convergence(convergence_criterion, evaluations="total", marker=""):
     marker : matplotlib marker, optional (default="")
         Marker used for the plot. Will be passed to ``matplotlib.pyplot.plot``.
 
+    axes : matplotlib axes, optional
+        Axes to be used, if passed.
+
+    ax_labels : bool, optional (default: True)
+        Add axes labels.
+
     Returns
     -------
     The plot convergence criterion vs. number of training points
     """
     if not isinstance(convergence_criterion, Sequence):
         convergence_criterion = [convergence_criterion]
-    fig, ax = plt.subplots()
+    if axes is None:
+        fig, axes = plt.subplots()
+    else:
+        fig = axes.get_figure()
     for i, cc in enumerate(convergence_criterion):
-        color = plt.rcParams['axes.prop_cycle'].by_key()['color'][i]
+        color = plt.rcParams["axes.prop_cycle"].by_key()["color"][i]
         values, n_posterior_evals, n_accepted_evals = cc.get_history()
         name = cc.__class__.__name__
+        n_evals = np.array(
+            {"total": n_posterior_evals, "accepted": n_accepted_evals}[evaluations],
+            dtype=int,
+        )
         try:
-            ax.plot({
-                "total": n_posterior_evals,
-                "accepted": n_accepted_evals
-            }[evaluations], values, marker=marker, color=color, label=name)
+            axes.plot(n_evals, values, marker=marker, color=color, label=name)
         except KeyError as excpt:
             raise ValueError(
                 "'evaluations' must be either 'total' or 'accepted'."
             ) from excpt
         if hasattr(cc, "limit"):
-            ax.axhline(cc.limit, ls="--", lw="0.5", c=color)
-    ax.set_xlabel(f"{evaluations} number of posterior evaluations")
-    ax.set_ylabel("Value of convergence criterion")
-    ax.set_yscale("log")
-    ax.grid()
-    ax.legend(loc="upper right")
-    return fig, ax
+            axes.axhline(cc.limit, ls="--", lw="0.5", c=color)
+    if ax_labels:
+        axes.set_xlabel(f"{evaluations} number of posterior evaluations")
+        axes.set_ylabel("Value of convergence criterion")
+    axes.set_yscale("log")
+    axes.grid(axis="y")
+    axes.legend(loc="upper right")
+    return fig, axes
+
+
+def plot_points_distribution(
+        model, gpr, convergence_criterion, progress, colormap="viridis",
+        marker=".", marker_inf="x",
+):
+    X = gpr.X_train_all
+    y = gpr.y_train_all
+    y_finite = gpr.infinities_classifier.y_finite
+    fig, axes = plt.subplots(nrows=1 + model.prior.d(), ncols=1, sharex=True)
+    try:
+        plot_convergence(
+            convergence_criterion, evaluations="total", marker="", axes=axes[0],
+            ax_labels=False)
+    except ValueError:  # no criterion yet
+        pass
+    axes[0].set_ylabel("Conv. crit.")
+    for i, (p, label) in enumerate(model.parameterization.labels().items()):
+        ax = axes[i + 1]
+        ax.scatter(list(range(1, 1 + len(X))), X[:, i], marker=".", c=np.where(y_finite, y, np.inf))
+        ax.scatter(list(range(1, 1 + len(X))), X[:, i], marker="x", c=np.where(y_finite, None, 0.5), cmap="gray", vmin=0, vmax=1, s=20)
+        ax.set_ylabel(label)
+        ax.grid(axis="y")
+    axes[0].set_xlim(0, len(X) + 0.5)
+    axes[-1].set_xlabel("Number of posterior evaluations.")
+    n_train = progress.data["n_total"][1]
+    for ax in axes:
+        ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-99)
+        for n_iteration in progress.data["n_total"][1:]:
+            ax.axvline(n_iteration + 0.5, ls="--", c="0.75")
 
 
 def plot_distance_distribution(

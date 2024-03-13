@@ -28,7 +28,7 @@ def diagnosis(runner):
         points = pd.DataFrame(dict(zip(
             runner.model.parameterization.sampled_params(), runner.gpr.X_train_all.T
         )))
-        points["y"] = runner.gpr.y_train_all
+        points["y_GP"] = runner.gpr.y_train_all
         points["GP"] = [point in runner.gpr.X_train for point in runner.gpr.X_train_all]
         y_finite = runner.gpr.infinities_classifier.y_finite
         print(points)
@@ -38,11 +38,11 @@ def diagnosis(runner):
         # TESTS and other data
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            consistent_is_finite = y_finite == runner.gpr.is_finite(points["y"])
+            consistent_is_finite = y_finite == runner.gpr.is_finite(points["y_GP"])
         consistent_predict = (
             y_finite == runner.gpr.predict_is_finite(runner.gpr.X_train_all)
         )
-        min_finite_y = min(points[points["GP"]]["y"])
+        min_finite_y = min(points[points["GP"]]["y_GP"])
         consistent_threshold = min_finite_y > runner.gpr.abs_threshold_finite
         print(
             f"THRESHOLD: {runner.gpr.abs_threshold_finite}. "
@@ -59,13 +59,13 @@ def diagnosis(runner):
             if not all(consistent_is_finite):
                 bad_i = [i for i, val in enumerate(consistent_is_finite) if not val]
                 print("        Bad points:", bad_i)
-                print("        y values:", points["y"][bad_i].to_numpy(dtype=float))
-                print("        is_finite:", runner.gpr.is_finite(points["y"][bad_i]))
+                print("        y values:", points["y_GP"][bad_i].to_numpy(dtype=float))
+                print("        is_finite:", runner.gpr.is_finite(points["y_GP"][bad_i]))
             print("    SUBTEST: method predict consistent:", all(consistent_predict))
             if not all(consistent_predict):
                 bad_i = [i for i, val in enumerate(consistent_predict) if not val]
                 print("        Bad points:", bad_i)
-                print("        y values:", points["y"][bad_i].to_numpy(dtype=float))
+                print("        y values:", points["y_GP"][bad_i].to_numpy(dtype=float))
                 print(
                     "        predict:",
                     runner.gpr.predict_is_finite(runner.gpr.X_train_all[bad_i])
@@ -84,6 +84,22 @@ def diagnosis(runner):
             print("    SUBTEST: are there more points in GP and finite?", same_length_finite_and_GP)
 
         # PLOTS ##########################################################################
+
+        # Points distribution and convergence criterion
+        from gpry.plots import plot_points_distribution
+        try:
+            plot_points_distribution(runner.model, runner.gpr, runner.convergence,
+                                     runner.progress)
+        except ValueError as e:
+            print(f"Could not plot points distributions (yet). Err msg: {e}")
+        else:
+            import matplotlib.pyplot as plt
+            plt.savefig(
+                os.path.join(
+                    runner.plots_path,
+                    f"points_dist_iteration_{runner.current_iteration:03d}.png"))
+
+        # Current MC sample (if available)
         from gpry.gp_acquisition import NORA
         if isinstance(runner.acquisition, NORA):
             from getdist import MCSamples, plots
