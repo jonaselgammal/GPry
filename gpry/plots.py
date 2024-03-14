@@ -91,7 +91,8 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
 
 
 def plot_convergence(
-    convergence_criterion, evaluations="total", marker="", axes=None, ax_labels=True
+        convergence_criterion, evaluations="total", marker="", axes=None, ax_labels=True,
+        legend_loc="upper right",
 ):
     """
     Plots the value of the convergence criterion as function of the number of
@@ -114,6 +115,9 @@ def plot_convergence(
 
     ax_labels : bool, optional (default: True)
         Add axes labels.
+
+    legend_loc : str (default: "upper right")
+        Location of the legend.
 
     Returns
     -------
@@ -146,7 +150,7 @@ def plot_convergence(
         axes.set_ylabel("Value of convergence criterion")
     axes.set_yscale("log")
     axes.grid(axis="y")
-    axes.legend(loc="upper right")
+    axes.legend(loc=legend_loc)
     return fig, axes
 
 
@@ -230,7 +234,14 @@ def plot_points_distribution(
     y_finite = gpr.infinities_classifier.y_finite
     if reference is not None:
         reference = _prepare_reference(reference, model)
-    fig, axes = plt.subplots(nrows=2 + model.prior.d(), ncols=1, sharex=True)
+    fig, axes = plt.subplots(
+        nrows=2 + model.prior.d(),
+        ncols=1,
+        sharex=True,
+        figsize=(min(4, 0.3 * len(X)), 1.5 * (2 + X.shape[1])),
+        dpi=400,
+    )
+    fig.set_tight_layout(True)
     i_eval = list(range(1, 1 + len(X)))
     # TOP: convergence plot
     try:
@@ -240,12 +251,19 @@ def plot_points_distribution(
             marker="",
             axes=axes[0],
             ax_labels=False,
+            legend_loc="upper left",
         )
     except ValueError:  # no criterion computed yet
         pass
     axes[0].set_ylabel("Conv. crit.")
     # 2nd: posterior plot
-    axes[1].scatter(i_eval, y, marker=".", c=np.where(y_finite, y, np.inf), cmap=colormap)
+    kwargs_accepted = {
+        "marker": ".",
+        "linewidths": 0.1,
+        "edgecolor": "0.1",
+        "cmap": colormap,
+    }
+    axes[1].scatter(i_eval, y, c=np.where(y_finite, y, np.inf), **kwargs_accepted)
     axes[1].set_ylabel("log(p)")
     axes[1].grid(axis="y")
     # NEXT: parameters plots
@@ -254,9 +272,8 @@ def plot_points_distribution(
         ax.scatter(
             i_eval,
             X[:, i],
-            marker=".",
             c=np.where(y_finite, y, np.inf),
-            cmap=colormap,
+            **kwargs_accepted,
         )
         ax.scatter(
             i_eval,
@@ -286,7 +303,7 @@ def plot_points_distribution(
     for ax in axes:
         ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-999)
         for n_iteration in progress.data["n_total"][1:]:
-            ax.axvline(n_iteration + 0.5, ls="--", c="0.75")
+            ax.axvline(n_iteration + 0.5, ls="--", c="0.75", zorder=-9)
 
 
 def plot_distance_distribution(
