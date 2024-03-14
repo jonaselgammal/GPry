@@ -88,8 +88,10 @@ def diagnosis(runner):
         # Points distribution and convergence criterion
         from gpry.plots import plot_points_distribution
         try:
-            plot_points_distribution(runner.model, runner.gpr, runner.convergence,
-                                     runner.progress)
+            plot_points_distribution(
+                runner.model, runner.gpr, runner.convergence,
+                runner.progress,
+                reference=getattr(runner, "reference", None))
         except ValueError as e:
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:

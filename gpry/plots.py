@@ -1,5 +1,6 @@
 import warnings
-from typing import Sequence
+from typing import Sequence, Mapping
+from numbers import Number
 
 import numpy as np
 import matplotlib
@@ -149,32 +150,141 @@ def plot_convergence(
     return fig, axes
 
 
-def plot_points_distribution(
-        model, gpr, convergence_criterion, progress, colormap="viridis",
-        marker=".", marker_inf="x",
+def _prepare_reference(
+    reference,
+    model,
 ):
+    """
+    Turns `reference` into a dict with parameters as keys and a list of 5 numbers as
+    values: two lower bounds, a central value, and two upper bounds, e.g. percentiles
+    5, 25, 50, 75, 95.
+
+    If getdist.MCSamples passed, bounds are by default 68% and 95%, and the central value
+    is the mean.
+    """
+    # Ensure it is a dict
+    try:
+        from getdist import MCSamples
+        if isinstance(reference, MCSamples):
+            means = reference.getMeans()
+            margstats = reference.getMargeStats()
+            bounds = {}
+            for p in model.parameterization.sampled_params():
+                i_p = reference.paramNames.numberOfName(p)
+                # by default lims/contours are [68, 95, 99]
+                lims = margstats.parWithName(p).limits
+                bounds[p] = [
+                    lims[1].lower,
+                    lims[0].lower,
+                    means[i_p],
+                    lims[0].upper,
+                    lims[1].upper,
+                ]
+            reference = bounds
+    except ModuleNotFoundError:  # getdist not installed
+        return None
+    if not isinstance(reference, Mapping):
+        # Assume parameters in order; check right number of them
+        if len(reference) != model.prior.d():
+            raise ValueError(
+                "reference must be a list containing bounds per parameter for all of them"
+                ", or a dict with parameters as keys and these same values."
+            )
+        reference = dict(zip(model.parameterization.sampled_params(), reference))
+    # Ensure it contains all parameters and 5 numbers (or None's) per parameter
+    for p in model.parameterization.sampled_params():
+        if p not in reference:
+            reference[p] = [None] * 5
+        values = reference[p]
+        if isinstance(values, Number):
+            values = [values]
+        if len(values) == 1:
+            reference[p] = [None, None] + list(values) + [None, None]
+        elif len(values) != 5:
+            raise ValueError(
+                "the elements of reference must be either a single central value, or a "
+                "list of 5 elements: [lower_bound_2, lower_bound_1, central_value, "
+                "upper_bound_2, upper_bound_1]."
+            )
+    return reference
+
+
+def plot_points_distribution(
+    model,
+    gpr,
+    convergence_criterion,
+    progress,
+    colormap="viridis",
+    reference=None,
+):
+    """
+    Plots the evolution of the run along true model evaluations, showing evolution of the
+    convergence criterion and the values of the log-posterior and the individual
+    parameters.
+
+    Can take a reference sample or reference bounds (dict with parameters as keys and 5
+    sorted bounds as values, or alternatively just a central value).
+    """
     X = gpr.X_train_all
     y = gpr.y_train_all
     y_finite = gpr.infinities_classifier.y_finite
-    fig, axes = plt.subplots(nrows=1 + model.prior.d(), ncols=1, sharex=True)
+    if reference is not None:
+        reference = _prepare_reference(reference, model)
+    fig, axes = plt.subplots(nrows=2 + model.prior.d(), ncols=1, sharex=True)
+    i_eval = list(range(1, 1 + len(X)))
+    # TOP: convergence plot
     try:
         plot_convergence(
-            convergence_criterion, evaluations="total", marker="", axes=axes[0],
-            ax_labels=False)
-    except ValueError:  # no criterion yet
+            convergence_criterion,
+            evaluations="total",
+            marker="",
+            axes=axes[0],
+            ax_labels=False,
+        )
+    except ValueError:  # no criterion computed yet
         pass
     axes[0].set_ylabel("Conv. crit.")
+    # 2nd: posterior plot
+    axes[1].scatter(i_eval, y, marker=".", c=np.where(y_finite, y, np.inf), cmap=colormap)
+    axes[1].set_ylabel("log(p)")
+    axes[1].grid(axis="y")
+    # NEXT: parameters plots
     for i, (p, label) in enumerate(model.parameterization.labels().items()):
-        ax = axes[i + 1]
-        ax.scatter(list(range(1, 1 + len(X))), X[:, i], marker=".", c=np.where(y_finite, y, np.inf))
-        ax.scatter(list(range(1, 1 + len(X))), X[:, i], marker="x", c=np.where(y_finite, None, 0.5), cmap="gray", vmin=0, vmax=1, s=20)
+        ax = axes[i + 2]
+        ax.scatter(
+            i_eval,
+            X[:, i],
+            marker=".",
+            c=np.where(y_finite, y, np.inf),
+            cmap=colormap,
+        )
+        ax.scatter(
+            i_eval,
+            X[:, i],
+            marker="x",
+            c=np.where(y_finite, None, 0.5),
+            cmap="gray",
+            vmin=0,
+            vmax=1,
+            s=20,
+        )
+        bounds = (reference or {}).get(p)
+        if bounds is not None:
+            if len(bounds) == 5:
+                ax.axhspan(
+                    bounds[0], bounds[4], facecolor="tab:blue", alpha=0.2, zorder=-99
+                )
+                ax.axhspan(
+                    bounds[1], bounds[3], facecolor="tab:blue", alpha=0.2, zorder=-99
+                )
+            ax.axhline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
         ax.set_ylabel(label)
         ax.grid(axis="y")
     axes[0].set_xlim(0, len(X) + 0.5)
     axes[-1].set_xlabel("Number of posterior evaluations.")
     n_train = progress.data["n_total"][1]
     for ax in axes:
-        ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-99)
+        ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-999)
         for n_iteration in progress.data["n_total"][1:]:
             ax.axvline(n_iteration + 0.5, ls="--", c="0.75")
 
@@ -312,6 +422,7 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
                loc="lower center", ncol=99)
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
 
+
 def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
@@ -372,6 +483,7 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
     fig.legend(list(legend_labels), list(legend_labels.values()),
                loc="lower center", ncol=99)
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
+
 
 def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     """
