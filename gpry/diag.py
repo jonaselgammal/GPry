@@ -84,14 +84,15 @@ def diagnosis(runner):
             print("    SUBTEST: are there more points in GP and finite?", same_length_finite_and_GP)
 
         # PLOTS ##########################################################################
-
+        # Get the "reference" MC sample from runner.reference, if set.
+        reference = getattr(runner, "reference", None)
         # Points distribution and convergence criterion
         from gpry.plots import plot_points_distribution
         try:
             plot_points_distribution(
                 runner.model, runner.gpr, runner.convergence,
                 runner.progress,
-                reference=getattr(runner, "reference", None))
+                reference=reference)
         except ValueError as e:
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:
@@ -100,7 +101,6 @@ def diagnosis(runner):
                 os.path.join(
                     runner.plots_path,
                     f"points_dist_iteration_{runner.current_iteration:03d}.png"))
-
         # Current MC sample (if available)
         from gpry.gp_acquisition import NORA
         if isinstance(runner.acquisition, NORA):
@@ -110,20 +110,29 @@ def diagnosis(runner):
                 samples=runner.acquisition.X_mc,
                 weights=runner.acquisition.w_mc,
                 names=runner.model.parameterization.sampled_params(),
+                ranges=dict(zip(runner.model.parameterization.sampled_params(),
+                                runner.model.prior.bounds())),
             )
+            to_plot = [mcsamples]
+            filled = True
+            if reference is not None:
+                to_plot = [reference] + to_plot
+                filled = [False, True]
             g = plots.get_subplot_plotter()
             try:
-                g.triangle_plot(mcsamples, filled=True)
+                g.triangle_plot(to_plot, filled=filled)
                 try:
                     from gpry.plots import getdist_add_training
-                    getdist_add_training(g, runner.model, runner.gpr)
-                except Exception:
-                    print("FAILED ADDING TRAINING POINTS!")
+                    getdist_add_training(g, runner.model, runner.gpr, highlight_last=True)
+                except Exception as e:
+                    raise
+                    print(f"FAILED ADDING TRAINING POINTS! Error msg: {e}")
                 import matplotlib.pyplot as plt
                 plt.savefig(
                     os.path.join(
                         runner.plots_path,
                         f"NORA_iteration_{runner.current_iteration:03d}.png"))
-            except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError):
-                print("COULD NOT PLOT!!!")
+            except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError) as e:
+                raise
+                print(f"COULD NOT PLOT! Reason: {e}")
         print("**************************************************")

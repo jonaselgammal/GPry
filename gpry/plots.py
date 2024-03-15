@@ -16,8 +16,15 @@ from gpry.tools import (
 )
 
 
-def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
-                         marker=".", marker_inf="x"):
+def getdist_add_training(
+    getdist_plot,
+    model,
+    gpr,
+    colormap="viridis",
+    marker=".",
+    marker_inf="x",
+    highlight_last=False,
+):
     """
     Adds the training points to a GetDist triangle plot, coloured according to
     their log-posterior value.
@@ -43,12 +50,16 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
     marker_inf : matplotlib marker, optional (default=".")
         Marker to be used for the non-finite training points.
 
+    highlight_last: bool (default=False)
+        Draw a red circle around the points added in the last iteration
+
     Returns
     -------
     The GetDist triangle plot with the added training points.
     """
     # Gather axes and bounds
     sampled_params = list(model.parameterization.sampled_params())
+    d = len(sampled_params)
     ax_dict = {}
     bounds = [None] * len(sampled_params)
     for i, pi in enumerate(sampled_params):
@@ -66,27 +77,56 @@ def getdist_add_training(getdist_plot, model, gpr, colormap="viridis",
     Xs_infinite = np.copy(gpr.X_train_infinite)
     for i, (mini, maxi) in enumerate(bounds):
         i_within_finite = np.argwhere(
-            np.logical_and(mini < Xs_finite[:, i], Xs_finite[:, i] < maxi))
+            np.logical_and(mini < Xs_finite[:, i], Xs_finite[:, i] < maxi)
+        )
         Xs_finite = np.atleast_2d(np.squeeze(Xs_finite[i_within_finite]))
         ys_finite = np.atleast_1d(np.squeeze(ys_finite[i_within_finite]))
         i_within_infinite = np.argwhere(
-            np.logical_and(mini < Xs_infinite[:, i], Xs_infinite[:, i] < maxi))
+            np.logical_and(mini < Xs_infinite[:, i], Xs_infinite[:, i] < maxi)
+        )
         Xs_infinite = np.atleast_2d(np.squeeze(Xs_infinite[i_within_infinite]))
-    if not len(Xs_finite) and not len(Xs_infinite):  # no points within plotting ranges
+        if highlight_last:
+            Xs_last = gpr.last_appended[0]
+            print(Xs_last)
+            i_within_last = np.argwhere(
+                np.logical_and(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
+            )
+            X_last = np.atleast_2d(np.squeeze(Xs_last[i_within_last]))
+    if len(Xs_finite) == 0 and len(Xs_infinite) == 0:  # no points within plotting ranges
         return
     # Create colormap with appropriate limits
-    matplotlib.cm.get_cmap(colormap)
+    cmap = matplotlib.cm.get_cmap(colormap)
     if len(Xs_finite):
-        norm = matplotlib.colors.Normalize(vmin=min(ys_finite), vmax=max(ys_finite))
+        Ncolors = 256
+        color_bounds = np.linspace(min(ys_finite), max(ys_finite), Ncolors)
+        norm = matplotlib.colors.BoundaryNorm(color_bounds, Ncolors)
     # Add points
     for (i, j), ax in ax_dict.items():
-        if len(Xs_finite):
+        if highlight_last and len(Xs_last) > 0:
+            points_last = Xs_last[:, [i, j]]
+            ax.scatter(*points_last.T, marker="o", c=None, edgecolor="r", lw=0.5, alpha=1)
+        if len(Xs_finite) > 0:
             points_finite = Xs_finite[:, [i, j]]
-            ax.scatter(*points_finite.T, marker=marker, c=norm(ys_finite), alpha=0.3)
-        if len(Xs_infinite):
+            sc = ax.scatter(
+                *points_finite.T, marker=marker, c=norm(ys_finite), alpha=0.3, cmap=cmap
+            )
+        if len(Xs_infinite) > 0:
             points_infinite = Xs_infinite[:, [i, j]]
             ax.scatter(*points_infinite.T, marker=marker_inf, c="k", alpha=0.3)
-    # TODO: actually add colorbar (see GetDist add_colorbar method)
+    # Colorbar
+    if len(Xs_finite) > 0:
+        getdist_plot.fig.colorbar(
+            cm.ScalarMappable(norm=norm, cmap=cmap),
+            label=r"$\log(p)$",
+            ax=getdist_plot.fig.add_axes(
+                [1 - 0.2 / d, 1 - 0.85 / d, 0.5 / d, 0.5 / d],
+                frame_on=False,
+                xticks=[],
+                yticks=[],
+            ),
+            ticks=np.linspace(min(ys_finite), max(ys_finite), 5),
+            location="left",
+        )
     return getdist_plot
 
 
