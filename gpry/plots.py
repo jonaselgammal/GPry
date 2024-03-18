@@ -16,6 +16,73 @@ from gpry.tools import (
 )
 
 
+def param_samples_for_slices(X, i, bounds, n=200):
+    """
+    From an array of points `X = [X^i] = [[X^1_1, X^1_2,...], [X^2_1,...], ...]`, it
+    generates a list of points per sample, where the `i` coordinate is sliced within the
+    region defined by `bounds`, and the rest of them are kept fixed.
+    """
+    # TODO: could take a GPR, reduce the limits to finite region, and resample.
+    #       The while loop is a leftover from an attempt.
+    X = np.atleast_2d(X)
+    bounds_changed = True
+    while bounds_changed:
+        Xs_i = np.linspace(bounds[0], bounds[1], n)
+        X_slices = np.empty(shape=(X.shape[0], n, X.shape[1]), dtype=float)
+        for j, X_j in enumerate(X):
+            X_slices[j, :, :] = n * [X_j]
+        X_slices[:, :, i] = Xs_i
+        break
+    return X_slices
+
+
+def plot_slices(model, gpr, acquisition, X=None):
+    """
+    Plots slices along parameter coordinates for a series `X` of given points (the GPR
+    training set if not specified). For each coordinate, there is a slice per point,
+    leaving all coordinates of that point fixed except for the one being sliced.
+
+    Lines are coloured according to the value of the mean GP at points X.
+
+    # TODO: make acq func optional
+    """
+    params = list(model.parameterization.sampled_params())
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=len(params),
+        sharex="col",
+        layout="constrained",
+        figsize=(4 * len(params), 4),
+        dpi=200,
+    )
+    # Define X to plot
+    if X is None:
+        X = gpr.X_train.copy()
+        y = gpr.y_train.copy()
+    else:
+        y = gpr.predict(X)
+    min_y, max_y = min(y), max(y)
+    norm_y = lambda y: (y - min_y) / (max_y - min_y)
+    prior_bounds = model.prior.bounds(confidence_for_unbounded=0.999)
+    Xs_for_plots = dict(
+        (p, param_samples_for_slices(X, i, prior_bounds[i], n=200))
+        for i, p in enumerate(params)
+    )
+    cmap = matplotlib.colormaps["viridis"]
+    for i, p in enumerate(params):
+        for j, Xs_j in enumerate(Xs_for_plots[p]):
+            cmap_norm = cmap(norm_y(y[j]))
+            alpha = 1
+            # TODO: could cut by half # of GP evals by reusing for acq func
+            axes[0, i].plot(Xs_j[:, i], gpr.predict(Xs_j), c=cmap_norm, alpha=alpha)
+            axes[0, i].scatter(X[j][i], y[j], color=cmap_norm, alpha=alpha)
+            axes[0, i].set_ylabel(r"$\log(p)$")
+            acq_values = acquisition(Xs_j, gpr)
+            axes[1, i].plot(Xs_j[:, i], acq_values, c=cmap_norm, alpha=alpha)
+            axes[1, i].set_ylabel(r"$\alpha(\mu,\sigma)$")
+            axes[1, i].set_xlabel(model.parameterization.labels()[p])
+
+
 def getdist_add_training(
     getdist_plot,
     model,
@@ -95,7 +162,7 @@ def getdist_add_training(
     if len(Xs_finite) == 0 and len(Xs_infinite) == 0:  # no points within plotting ranges
         return
     # Create colormap with appropriate limits
-    cmap = matplotlib.cm.get_cmap(colormap)
+    cmap = matplotlib.colormaps[colormap]
     if len(Xs_finite):
         Ncolors = 256
         color_bounds = np.linspace(min(ys_finite), max(ys_finite), Ncolors)
@@ -131,8 +198,12 @@ def getdist_add_training(
 
 
 def plot_convergence(
-        convergence_criterion, evaluations="total", marker="", axes=None, ax_labels=True,
-        legend_loc="upper right",
+    convergence_criterion,
+    evaluations="total",
+    marker="",
+    axes=None,
+    ax_labels=True,
+    legend_loc="upper right",
 ):
     """
     Plots the value of the convergence criterion as function of the number of
@@ -271,7 +342,10 @@ def plot_points_distribution(
     """
     X = gpr.X_train_all
     y = gpr.y_train_all
-    y_finite = gpr.infinities_classifier.y_finite
+    if gpr.infinities_classifier is not None:
+        y_finite = gpr.infinities_classifier.y_finite
+    else:
+        y_finite = np.full(shape=len(y), fill_value=True)
     if reference is not None:
         reference = _prepare_reference(reference, model)
     fig, axes = plt.subplots(
@@ -315,16 +389,17 @@ def plot_points_distribution(
             c=np.where(y_finite, y, np.inf),
             **kwargs_accepted,
         )
-        ax.scatter(
-            i_eval,
-            X[:, i],
-            marker="x",
-            c=np.where(y_finite, None, 0.5),
-            cmap="gray",
-            vmin=0,
-            vmax=1,
-            s=20,
-        )
+        if gpr.infinities_classifier is not None:
+            ax.scatter(
+                i_eval,
+                X[:, i],
+                marker="x",
+                c=np.where(y_finite, None, 0.5),
+                cmap="gray",
+                vmin=0,
+                vmax=1,
+                s=20,
+            )
         bounds = (reference or {}).get(p)
         if bounds is not None:
             if len(bounds) == 5:
@@ -344,6 +419,7 @@ def plot_points_distribution(
         ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-999)
         for n_iteration in progress.data["n_total"][1:]:
             ax.axvline(n_iteration + 0.5, ls="--", c="0.75", zorder=-9)
+    # TODO: make sure the x ticks are int
 
 
 def plot_distance_distribution(
@@ -415,8 +491,11 @@ def plot_distance_distribution(
         std_of_cl = nstd_of_1d_nstd(nstd, dim)
         if std_of_cl < max(radial_distances):
             ax.axvline(
-                std_of_cl, c="0.75", ls=ls, zorder=-99,
-                label=f"${100 * credibility_of_nstd(std_of_cl, dim):.2f}\%$ prob mass"
+                std_of_cl,
+                c="0.75",
+                ls=ls,
+                zorder=-99,
+                label=f"${100 * credibility_of_nstd(std_of_cl, dim):.2f}\%$ prob mass",
             )
     ax.set_ylabel(f"{num_or_dens} of points")
     ax.set_xlabel("Number of standard deviations")
@@ -459,12 +538,14 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
+            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+        )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
         if last_points is not None:
             points_last = ax[i].scatter(
-                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$")
+                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$"
+            )
         # Bounds
         ax[i].set_xlim(bounds[0][0], bounds[0][1])
         ax[i].set_ylim(bounds[1][0], bounds[1][1])
@@ -475,8 +556,9 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     if last_points is not None:
         legend_labels[points_last] = "Points added in last iteration."
     legend_labels[point_max] = "Next optimal location"
-    fig.legend(list(legend_labels), list(legend_labels.values()),
-               loc="lower center", ncol=99)
+    fig.legend(
+        list(legend_labels), list(legend_labels.values()), loc="lower center", ncol=99
+    )
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
 
 
@@ -508,25 +590,31 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
         ax[i].set_title(label[i])
         # Boost the upper limit to avoid truncation errors.
         Z_finite = Z[np.isfinite(Z)]
-        #Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
+        # Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
         Z_sort = np.sort(Z_finite)[::-1]
-        top_x_perc = np.sort(Z_finite)[::-1][:int(len(Z_finite)*0.5)]
-        relevant_range = max(top_x_perc)-min(top_x_perc)
-        levels = np.linspace(max(Z_finite)-1.99*relevant_range, max(Z_finite) + 0.01*relevant_range,  500)
+        top_x_perc = np.sort(Z_finite)[::-1][: int(len(Z_finite) * 0.5)]
+        relevant_range = max(top_x_perc) - min(top_x_perc)
+        levels = np.linspace(
+            max(Z_finite) - 1.99 * relevant_range,
+            max(Z_finite) + 0.01 * relevant_range,
+            500,
+        )
         Z[np.isfinite(Z)] = np.clip(Z_finite, min(levels), max(levels))
         Z = Z.reshape(*X.shape)
         norm = cm.colors.Normalize(vmax=max(levels), vmin=min(levels))
-        ax[i].set_facecolor('grey')
+        ax[i].set_facecolor("grey")
         # # Background of the same color as the bottom of the colormap, to avoid "gaps"
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
+            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+        )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
         if last_points is not None:
             points_last = ax[i].scatter(
-                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$")
+                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$"
+            )
         # Bounds
         ax[i].set_xlim(bounds[0][0], bounds[0][1])
         ax[i].set_ylim(bounds[1][0], bounds[1][1])
@@ -537,8 +625,9 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
     if last_points is not None:
         legend_labels[points_last] = "Points added in last iteration."
     legend_labels[point_max] = "Next optimal location"
-    fig.legend(list(legend_labels), list(legend_labels.values()),
-               loc="lower center", ncol=99)
+    fig.legend(
+        list(legend_labels), list(legend_labels.values()), loc="lower center", ncol=99
+    )
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
 
 
@@ -558,37 +647,43 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y)
     xx = np.ascontiguousarray(np.vstack([X.reshape(X.size), Y.reshape(Y.size)]).T)
-    model_mean,model_std = gpr.predict(xx,return_std=True)
+    model_mean, model_std = gpr.predict(xx, return_std=True)
     # TODO: maybe change this one below if __call__ method added to GP_acquisition
     acq_value = acquisition(xx, gpr, eval_gradient=False)
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    cmap = [cm.magma, cm.viridis,cm.magma]
-    label = ["Model mean (log-posterior)", "Acquisition function value","Model std dev."]
+    cmap = [cm.magma, cm.viridis, cm.magma]
+    label = ["Model mean (log-posterior)", "Acquisition function value", "Model std dev."]
     for i, Z in enumerate([model_mean, acq_value]):
         ax[i].set_title(label[i])
         # Boost the upper limit to avoid truncation errors.
         Z_finite = Z[np.isfinite(Z)]
-        #Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
+        # Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
         Z_sort = np.sort(Z_finite)[::-1]
-        top_x_perc = np.sort(Z_finite)[::-1][:int(len(Z_finite)*0.5)]
-        relevant_range = max(top_x_perc)-min(top_x_perc)
-        levels = np.linspace(max(Z_finite)-1.99*relevant_range, max(Z_finite) + 0.01*relevant_range,  500)
+        top_x_perc = np.sort(Z_finite)[::-1][: int(len(Z_finite) * 0.5)]
+        relevant_range = max(top_x_perc) - min(top_x_perc)
+        levels = np.linspace(
+            max(Z_finite) - 1.99 * relevant_range,
+            max(Z_finite) + 0.01 * relevant_range,
+            500,
+        )
         Z[np.isfinite(Z)] = np.clip(Z_finite, min(levels), max(levels))
         Z = Z.reshape(*X.shape)
         norm = cm.colors.Normalize(vmax=max(levels), vmin=min(levels))
-        ax[i].set_facecolor('grey')
+        ax[i].set_facecolor("grey")
         # # Background of the same color as the bottom of the colormap, to avoid "gaps"
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
+            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+        )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
         if last_points is not None:
             points_last = ax[i].scatter(
-                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$")
+                *last_points.T, edgecolors="violet", marker=r"$\bigcirc$"
+            )
         # Bounds
         ax[i].set_xlim(bounds[0][0], bounds[0][1])
         ax[i].set_ylim(bounds[1][0], bounds[1][1])
@@ -600,20 +695,20 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     Z_finite = Z[np.isfinite(model_mean)]
     Z[~np.isfinite(model_mean)] = -np.inf
     minz = min(Z_finite)
-    zrange = max(Z_finite)-minz
-    levels = np.linspace(minz, minz + (zrange if zrange>0 else 0.00001),  500)
-    #Z[np.isfinite(model_mean)] = np.clip(Z_finite, min(levels), max(levels))
+    zrange = max(Z_finite) - minz
+    levels = np.linspace(minz, minz + (zrange if zrange > 0 else 0.00001), 500)
+    # Z[np.isfinite(model_mean)] = np.clip(Z_finite, min(levels), max(levels))
     Z = Z.reshape(*X.shape)
     norm = cm.colors.Normalize(vmax=max(levels), vmin=min(levels))
-    ax[2].set_facecolor('grey')
+    ax[2].set_facecolor("grey")
     ax[2].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[2], 256), norm=norm)
-    points = ax[2].scatter(
-        *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
+    points = ax[2].scatter(*gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
     # Plot position of next best sample
     point_max = ax[2].scatter(*acq_max, marker="x", color="k")
     if last_points is not None:
         points_last = ax[2].scatter(
-            *last_points.T, edgecolors="violet", marker=r"$\bigcirc$")
+            *last_points.T, edgecolors="violet", marker=r"$\bigcirc$"
+        )
     # Bounds
     ax[2].set_xlim(bounds[0][0], bounds[0][1])
     ax[2].set_ylim(bounds[1][0], bounds[1][1])
@@ -621,6 +716,7 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     if last_points is not None:
         legend_labels[points_last] = "Points added in last iteration."
     legend_labels[point_max] = "Next optimal location"
-    fig.legend(list(legend_labels), list(legend_labels.values()),
-               loc="lower center", ncol=99)
+    fig.legend(
+        list(legend_labels), list(legend_labels.values()), loc="lower center", ncol=99
+    )
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)

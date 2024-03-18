@@ -411,7 +411,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     def is_finite(self, y=None):
         """
-        Returns the classification of y (taget) values as finite (True) or not, by
+        Returns the classification of y (target) values as finite (True) or not, by
         comparing them with the current threshold.
 
         Notes

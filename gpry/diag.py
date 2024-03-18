@@ -86,7 +86,8 @@ def diagnosis(runner):
         # PLOTS ##########################################################################
         # Get the "reference" MC sample from runner.reference, if set.
         reference = getattr(runner, "reference", None)
-        # Points distribution and convergence criterion
+
+        # Plot points distribution and convergence criterion
         from gpry.plots import plot_points_distribution
         try:
             plot_points_distribution(
@@ -97,30 +98,52 @@ def diagnosis(runner):
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:
             import matplotlib.pyplot as plt
-            plt.savefig(
-                os.path.join(
-                    runner.plots_path,
-                    f"points_dist_iteration_{runner.current_iteration:03d}.png"))
-        # Current MC sample (if available)
+            plt.savefig(os.path.join(runner.plots_path, "points_dist.png"))
+            plt.close()
+
+        # Plot mean GP and acq func slices
+        from gpry.plots import plot_slices
+        plot_slices(runner.model, runner.gpr, runner.acquisition)
+        import matplotlib.pyplot as plt
+        plt.savefig(os.path.join(runner.plots_path,
+                                 f"slices_iteration_{runner.current_iteration:03d}.png"))
+        plt.close()
+
+        # Plot current MC sample (if available)
         from gpry.gp_acquisition import NORA
         if isinstance(runner.acquisition, NORA):
             from getdist import MCSamples, plots
             from getdist.mcsamples import MCSamplesError
+            name_logp, label_logp = "logpost", r"\log(p)"
             mcsamples = MCSamples(
-                samples=runner.acquisition.X_mc,
+                samples=np.concatenate(
+                    [runner.acquisition.X_mc.T, np.atleast_2d(runner.acquisition.y_mc)]
+                ).T,
                 weights=runner.acquisition.w_mc,
-                names=runner.model.parameterization.sampled_params(),
-                ranges=dict(zip(runner.model.parameterization.sampled_params(),
-                                runner.model.prior.bounds())),
+                names=list(runner.model.parameterization.sampled_params()) + [name_logp],
+                ranges=dict(
+                    zip(runner.model.parameterization.sampled_params(),
+                        runner.model.prior.bounds()
+                        )
+                ),
+                sampler="nested",
+                ignore_rows=0,
             )
             to_plot = [mcsamples]
-            filled = True
+            to_plot_params = list(runner.model.parameterization.sampled_params())
+            filled = [True]
             if reference is not None:
+                try:
+                    reference.addDerived(-reference.loglikes, name_logp, label=label_logp)
+                except (ValueError, TypeError):  # Already added or logpost not in sample
+                    pass
+                else:
+                    to_plot_params += [name_logp]
                 to_plot = [reference] + to_plot
-                filled = [False, True]
+                filled = [False] + filled
             g = plots.get_subplot_plotter()
             try:
-                g.triangle_plot(to_plot, filled=filled)
+                g.triangle_plot(to_plot, to_plot_params, filled=filled)
                 try:
                     from gpry.plots import getdist_add_training
                     getdist_add_training(g, runner.model, runner.gpr, highlight_last=True)
@@ -132,7 +155,7 @@ def diagnosis(runner):
                     os.path.join(
                         runner.plots_path,
                         f"NORA_iteration_{runner.current_iteration:03d}.png"))
+                plt.close()
             except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError) as e:
-                raise
                 print(f"COULD NOT PLOT! Reason: {e}")
         print("**************************************************")

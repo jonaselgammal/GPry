@@ -759,8 +759,10 @@ class Runner():
                     self.log(f"[{mpi.RANK}] Evaluating true posterior at {x}", level=4)
                     new_y_this_process = np.append(
                         new_y_this_process, self.model.logpost(x))
-                    self.log(f"[{mpi.RANK}] Got true log-posterior {new_y_this_process} "
-                             f"at {x}", level=4)
+                    self.log(
+                        f"[{mpi.RANK}] Got true log-posterior {new_y_this_process[-1]} "
+                        f"at {x}", level=4
+                    )
             self.progress.add_truth(timer_truth.time, len(new_X))
             # Collect (if parallel) and append to the current model
             if mpi.multiple_processes:
