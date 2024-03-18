@@ -249,6 +249,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.inf_threshold = inf_threshold
         if account_for_inf == "SVM":
             self.infinities_classifier = SVM(random_state=random_state)
+        elif account_for_inf is False:
+            self.infinities_classifier = None
         else:
             self.infinities_classifier = account_for_inf
         if self.infinities_classifier is not None:
