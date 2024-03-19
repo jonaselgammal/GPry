@@ -239,7 +239,7 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
             f"{dtype.__name__}. Pass either a string ending in '{X_letter}' or a valid "
             f"{dtype.__name__} value."
         ) from excpt
-    
+
 def check_candidates(gpr, new_X, tol=1e-8):
     """
     Method for determining whether points which have been found by the
@@ -262,3 +262,42 @@ def check_candidates(gpr, new_X, tol=1e-8):
     duplicates = np.isin(new_X_r, unique_rows[is_duplicate]).all(axis=1)
     duplicates[indices[is_duplicate]] = False
     return in_training_set, duplicates
+
+
+def shrink_bounds(bounds, samples):
+    """
+    Reduces the given bounds to the minimal hypercube containing a set of `samples`.
+
+    If the samples span a longer region that that defined by the bounds, the given
+    bounds are preferred.
+
+    Parameters
+    ----------
+    bounds: numpy.ndarray
+        An (d, 2) array of parameter bounds
+    samples: numpy.ndarray
+        An (N, d) array of sampling locations.
+
+    Returns
+    -------
+    numpy.ndarray:
+        An (d, 2) array of updater parameter bounds
+
+    Raises
+    ------
+    ValueError:
+        If bounds or samples are not well formatted or inconsistent with each other.
+    """
+    bounds = np.atleast_2d(bounds)
+    samples = np.atleast_2d(samples)
+    if bounds.shape[1] != 2:
+        raise ValueError("bounds must be a (d, 2) array of bounds.")
+    if bounds.shape[0] != samples.shape[1]:
+        raise ValueError(
+            "bounds and samples appear to have different dimensionalities: "
+            f"{bounds.shape[0]} for bounds and {samples.shape[1]} for samples."
+        )
+    updated_samples = np.empty(shape=bounds.shape, dtype=float)
+    updated_samples[:, 0] = np.array([bounds[:, 0], samples.min(axis=0)]).max(axis=0)
+    updated_samples[:, 1] = np.array([bounds[:, 1], samples.max(axis=0)]).min(axis=0)
+    return updated_samples

@@ -3,6 +3,7 @@ GPAcquisition classes, which take care of proposing new locations where to evalu
 true function.
 """
 
+import os
 import sys
 import shutil
 import warnings
@@ -19,7 +20,9 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names
+from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
+    shrink_bounds
+import gpry.ns_interfaces as nsint
 
 
 # TODO: inconsistent use of random_state: passed at init, and also at acquisition time
@@ -629,31 +632,9 @@ class NORA(GenericGPAcquisition):
         self.acq_func_y_sigma = None
         # Configure nested sampler
         self.sampler = sampler
+        self.sampler_interface = None
         if self.sampler.lower() == "polychord":
-            try:
-                # pylint: disable=import-outside-toplevel
-                from pypolychord.settings import PolyChordSettings
-                from pypolychord.priors import UniformPrior
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install PolyChord or select an alternative nested sampler "
-                    "(e.g. UltraNest)."
-                ) from excpt
-            self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
-            # More efficient for const-eval-speed GP's (not very significant)
-            self.polychord_settings.synchronous = False
-            # Don't write unnecessary files: take lots of space and waste time
-            self.polychord_settings.read_resume = False
-            self.polychord_settings.write_resume = False
-            self.polychord_settings.write_live = False
-            self.polychord_settings.write_dead = True
-            self.polychord_settings.write_prior = self.use_prior_sample
-            self.polychord_settings.feedback = verbose - 3
-            # 0: print header and result; not very useful: turn it to -1 if that's the case
-            if self.polychord_settings.feedback == 0:
-                self.polychord_settings.feedback = -1
-            self.prior = UniformPrior(*self.bounds.T)
-            self.last_polychord_output = None
+            self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
         elif self.sampler.lower() == "ultranest":
             try:
                 # pylint: disable=import-outside-toplevel
@@ -674,7 +655,7 @@ class NORA(GenericGPAcquisition):
                     "Please install nessai or select an alternative nested sampler "
                     "(e.g. PolyChord)."
                 ) from excpt
-        # TODO: fix this!
+        # TODO: fix this! and adapt to all codes (set_rng method for interfaces)
         # # Using rng state as seed for PolyChord
         # if self.random_state is not None:
         #     self.polychord_settings.seed = \
@@ -703,10 +684,8 @@ class NORA(GenericGPAcquisition):
         Updates NS precision parameters:
         - num_repeats: constant for now
         - nlive: `nlive_per_training` times the size of the training set, capped at
-            `nlive_per_dim_cap` (typically 25) times the dimension.
-        - precision_criterion: takes a line that passes through some
-            (log_max_preccrit, max_logKL) and some (log_min_preccrit, min_logKL)
-            and interpolates for the exponential running mean of the logKL's
+            `nlive_per_dim_max` (typically 25) times the dimension.
+        - precision_criterion: constant for now.
         """
         nlive = min(self.nlive_per_training * gpr.n, self.nlive_per_dim_max * self.n_d)
         return {"nlive": nlive,
@@ -725,49 +704,22 @@ class NORA(GenericGPAcquisition):
             print(self.log_header + msg)
 
     def shrink_priors(self, gpr):
-        from pypolychord.priors import UniformPrior
         """
-        Adjusts given boundaries based on a cutoff value. Boundaries are only adjusted if the last samples 
-        towards the edges are below the cutoff.
+        Adjusts given boundaries based on the infinities classifier cutoff value.
+        Boundaries are only adjusted if the last samples towards the edges are below the
+        cutoff.
 
-        Parameters:
-        sampling_locations (numpy.ndarray): An (N, d) array of sampling locations.
-        function_values (numpy.ndarray): An N array of function values.
-        parameter_names (list): List of names for each d parameter.
-        threshold_value (float): The threshold value to determine the cutoff.
+        Parameters
+        ----------
+        gpr: GaussianProcessRegressor
+            The current GPR instance.
 
-        Returns:
-        numpy.ndarray, dict: 
-            - A (d, 2) array representing the adjusted boundaries.
-            - A dictionary with parameter names as keys and their [min, max] values as values.
+        Returns
+        -------
+        numpy.ndarray:
+            A (d, 2) array representing the adjusted boundaries.
         """
-        initial_boundaries = self.bounds
-        # Calculate the cutoff value
-
-        sampling_locations = gpr.X_train_all
-        # Find all sampling locations where function values are greater than the cutoff
-        relevant_locations = gpr.X_train
-
-        # Find the minimum and maximum values for each d parameter
-        min_values = relevant_locations.min(axis=0)
-        max_values = relevant_locations.max(axis=0)
-
-        # Initialize adjusted boundaries with initial boundaries
-        adjusted_boundaries = np.array(initial_boundaries)
-
-        # Iterate over each parameter/dimension
-        for i, param in enumerate(initial_boundaries):
-            # Adjust the boundaries if they do not coincide with the overall min/max in this dimension
-            if min_values[i] != sampling_locations[:, i].min():
-                adjusted_boundaries[i, 0] = min_values[i]
-
-            if max_values[i] != sampling_locations[:, i].max():
-                adjusted_boundaries[i, 1] = max_values[i]
-
-
-        self.bounds_array = adjusted_boundaries
-        self.prior = UniformPrior(*adjusted_boundaries.T)
-
+        return shrink_bounds(self.bounds, gpr.X_train)
 
     def get_MC_sample(self, gpr, random_state=None, sampler=None):
         """
@@ -798,7 +750,7 @@ class NORA(GenericGPAcquisition):
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
         return X, None, None, None
-    
+
     def _get_MC_sample_nessai(self, gpr, random_state):
         # write a code to sample from nessai
         import nessai
@@ -820,13 +772,13 @@ class NORA(GenericGPAcquisition):
                     modified_bounds[d, 1] = np.max(X_train_finite[:, d])
                 self.names = generic_params_names(n_d)
                 self.modified_bounds = modified_bounds # self.gpry_model.prior.bounds(confidence_for_unbounded=0.99995)
-                
+
                 self.log_prior_volume = np.sum(np.log(self.gpry_bounds[:,1] - self.gpry_bounds[:,0]))
-                
+
                 self.bounds = {}
                 for i in range(len(self.names)):
                     self.bounds[self.names[i]] = self.modified_bounds[i]
-            
+
             def gpry_log_likelihood(self, point):
                 return self.gpr.predict(point) + self.log_prior_volume
 
@@ -838,7 +790,6 @@ class NORA(GenericGPAcquisition):
                 else:
                     points = np.array([[livepoint[i][p] for p in self.names] for i in range(livepoint.size)])
                     ll = self.gpry_log_likelihood(points)
-                        
                 return ll
 
             def log_prior(self, livepoint):
@@ -873,12 +824,13 @@ class NORA(GenericGPAcquisition):
         y = posterior_samples[:, -2]
 
         return X, y, None, None
-        
-        
+
+
 
 
 
     def _get_MC_sample_polychord(self, gpr, random_state):
+        self.sampler_interface.set_prior(self.shrink_priors(gpr))
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
@@ -888,51 +840,25 @@ class NORA(GenericGPAcquisition):
             return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
         # Update PolyChord precision settings
-        new_prec = self.update_NS_precision(gpr)
-        for k, v in new_prec.items():
-            setattr(self.polychord_settings, k, v)
-        from pypolychord import run_polychord  # pylint: disable=import-outside-toplevel
+        self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
+        # Output folder
         if mpi.is_main_process:
             if self.tmpdir is None:
-                # TODO: add to checkpoint folder?
+                # pylint: disable=consider-using-with
                 tmpdir = tempfile.TemporaryDirectory().name
             else:
-                tmpdir = f"{self.tmpdir}/{self.i}"
+                tmpdir = os.path.join(self.tmpdir, str(self.i))
                 self.i += 1
-            # ALT: persistent folder:
-            # tmpdir = tempfile.mkdtemp()
-            self.polychord_settings.base_dir = tmpdir
-            self.polychord_settings.file_root = "test"
-        mpi.share_attr(self, "polychord_settings")
-        with NumpyErrorHandling(all="ignore") as _:
-            self.shrink_priors(gpr)
-            self.last_polychord_output = run_polychord(
-                logp,
-                nDims=self.n_d, nDerived=0,
-                settings=self.polychord_settings,
-                prior=self.prior)
-        if mpi.is_main_process:
-            dummy_paramnames = [tuple(2 * [f"x_{i + 1}"]) for i in range(gpr.d)]
-            self.last_polychord_output.make_paramnames_files(dummy_paramnames)
-            samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
-            X = samples_T[2:].T
-            y = -0.5 * samples_T[1]  # this one stores chi2
-            y = gpr.predict(X, return_std=False, validate=False)
-            w = samples_T[0]
-            if self.use_prior_sample:
-                raise ValueError("For now use_prior_sample is disabled.")
-                # Old code, for reference.
-                # They do not have weights, so should be stored in a different list
-                # TODO: check if this improves multimodality tests!
-                # prior_T = np.loadtxt(self.last_polychord_output.root + "_prior.txt").T
-                # X_prior = prior_T[2:].T
-                # y_prior = - prior_T[1] / 2  # this one is stored as chi2
-                # X = np.concatenate([X_prior, X])
-                # y = np.concatenate([y_prior, y])
-            # Delete products from tmp folder
-            shutil.rmtree(self.polychord_settings.base_dir)
-            return X, y, None, w
-        return None, None, None, None
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp,
+            out_dir=tmpdir,
+            keep_all=False
+        )
+        # We recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost
+        y_MC = gpr.predict(X_MC, return_std=False, validate=False)
+        return X_MC, y_MC, None, w_MC
 
     def _get_MC_sample_ultranest(self, gpr, random_state):
         # Ultranest cannot deal with -np.inf
