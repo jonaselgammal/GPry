@@ -842,6 +842,7 @@ class NORA(GenericGPAcquisition):
         # Update PolyChord precision settings
         self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
         # Output folder
+        tmpdir = None
         if mpi.is_main_process:
             if self.tmpdir is None:
                 # pylint: disable=consider-using-with
@@ -857,7 +858,8 @@ class NORA(GenericGPAcquisition):
         )
         # We recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost
-        y_MC = gpr.predict(X_MC, return_std=False, validate=False)
+        if mpi.is_main_process:
+            y_MC = gpr.predict(X_MC, return_std=False, validate=False)
         return X_MC, y_MC, None, w_MC
 
     def _get_MC_sample_ultranest(self, gpr, random_state):

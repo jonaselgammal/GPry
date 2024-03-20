@@ -129,6 +129,8 @@ class InterfacePolyChord:
             if mpi.is_main_process:
                 self.X_all = np.concatenate(all_X_all)
                 self.y_all = np.concatenate(all_y_all)
+            else:
+                self.X_all, self.y_all = None, None
         if mpi.is_main_process:
             dummy_paramnames = [tuple(2 * [f"x_{i + 1}"]) for i in range(self.dim)]
             self.last_polychord_output.make_paramnames_files(dummy_paramnames)
