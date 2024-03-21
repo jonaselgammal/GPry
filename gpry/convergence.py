@@ -456,7 +456,7 @@ class GaussianKL(ConvergenceCriterion):
             self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None):
         self.criterion_value(gp, gp_2, acquisition)
         try:
-            if np.all(np.array(self.values[-self.limit_times:]) < self.limit):
+            if np.all(np.abs(np.array(self.values[-self.limit_times:])) < self.limit):
                 return True
         except IndexError:
             pass

@@ -19,7 +19,7 @@ from sklearn.base import clone, BaseEstimator as BE
 from sklearn.utils.validation import check_array
 
 # gpry kernels and SVM
-from gpry.kernels import RBF, Matern, ConstantKernel as C
+from gpry.kernels import RBF, Matern, ConstantKernel as C, WhiteKernel
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds
 from gpry.tools import check_random_state, get_Xnumber, nstd_of_1d_nstd
@@ -299,9 +299,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     f"supported as standard kernels. Got '{kernel_name}'."
                 ) from excpt
             # Build kernel
-            kernel = C(1.0, [0.001, 10000]) \
+            kernel = C(1.0, [0.001, 1000]) \
                 * length_corr_kernel([0.01] * self.d, "dynamic",
-                                     prior_bounds=self.bounds_, **kernel_args)
+                                     prior_bounds=self.bounds_, **kernel_args) # + WhiteKernel(1e-5, (1e-7, 0.1))
         sk_GaussianProcessRegressor.__init__(
             self, kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
