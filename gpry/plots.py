@@ -15,6 +15,9 @@ from gpry.tools import (
     gaussian_distance,
 )
 
+# Use latex labels when available
+plt.rcParams["text.usetex"] = True
+
 
 def param_samples_for_slices(X, i, bounds, n=200):
     """
@@ -80,7 +83,10 @@ def plot_slices(model, gpr, acquisition, X=None):
             acq_values = acquisition(Xs_j, gpr)
             axes[1, i].plot(Xs_j[:, i], acq_values, c=cmap_norm, alpha=alpha)
             axes[1, i].set_ylabel(r"$\alpha(\mu,\sigma)$")
-            axes[1, i].set_xlabel(model.parameterization.labels()[p])
+            label = model.parameterization.labels()[p]
+            if label != p:
+                label = "$" + label + "$"
+            axes[1, i].set_xlabel(label)
 
 
 def getdist_add_training(
@@ -154,7 +160,6 @@ def getdist_add_training(
         Xs_infinite = np.atleast_2d(np.squeeze(Xs_infinite[i_within_infinite]))
         if highlight_last:
             Xs_last = gpr.last_appended[0]
-            print(Xs_last)
             i_within_last = np.argwhere(
                 np.logical_and(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
             )
@@ -171,7 +176,13 @@ def getdist_add_training(
     for (i, j), ax in ax_dict.items():
         if highlight_last and len(Xs_last) > 0:
             points_last = Xs_last[:, [i, j]]
-            ax.scatter(*points_last.T, marker="o", c=None, edgecolor="r", lw=0.5, alpha=1)
+            ax.scatter(
+                *points_last.T,
+                marker="o",
+                c=len(points_last) * [[0, 0, 0, 0]],
+                edgecolor="r",
+                lw=0.5,
+            )
         if len(Xs_finite) > 0:
             points_finite = Xs_finite[:, [i, j]]
             sc = ax.scatter(
@@ -179,7 +190,7 @@ def getdist_add_training(
             )
         if len(Xs_infinite) > 0:
             points_infinite = Xs_infinite[:, [i, j]]
-            ax.scatter(*points_infinite.T, marker=marker_inf, c="k", alpha=0.3)
+            ax.scatter(*points_infinite.T, marker=marker_inf, s=20, c="k", alpha=0.3)
     # Colorbar
     if len(Xs_finite) > 0:
         getdist_plot.fig.colorbar(
@@ -279,15 +290,23 @@ def _prepare_reference(
     """
     # Ensure it is a dict
     try:
-        from getdist import MCSamples
+        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
         if isinstance(reference, MCSamples):
             means = reference.getMeans()
             margstats = reference.getMargeStats()
             bounds = {}
             for p in model.parameterization.sampled_params():
-                i_p = reference.paramNames.numberOfName(p)
+                # NB: numerOfName doest not use renames; needs to find "original" name
+                p_in_ref = reference.paramNames.parWithName(p).name
+                i_p = reference.paramNames.numberOfName(p_in_ref)
                 # by default lims/contours are [68, 95, 99]
-                lims = margstats.parWithName(p).limits
+                try:
+                    lims = margstats.parWithName(p).limits
+                except AttributeError as excpt:
+                    raise ValueError(
+                        f"Could not find parameter {p} in reference sample, which "
+                        f"includes {reference.getParamNames().list()})"
+                    ) from excpt
                 bounds[p] = [
                     lims[1].lower,
                     lims[0].lower,
@@ -378,18 +397,13 @@ def plot_points_distribution(
         "cmap": colormap,
     }
     axes[1].scatter(i_eval, y, c=np.where(y_finite, y, np.inf), **kwargs_accepted)
-    axes[1].set_ylabel("log(p)")
+    axes[1].set_ylabel(r"$\log(p)$")
     axes[1].grid(axis="y")
     # NEXT: parameters plots
-    for i, (p, label) in enumerate(model.parameterization.labels().items()):
+    for i, p in enumerate(model.parameterization.sampled_params()):
+        label = model.parameterization.labels()[p]
         ax = axes[i + 2]
-        ax.scatter(
-            i_eval,
-            X[:, i],
-            c=np.where(y_finite, y, np.inf),
-            **kwargs_accepted,
-        )
-        if gpr.infinities_classifier is not None:
+        if gpr.infinities_classifier is not None and sum(y_finite) < len(X):
             ax.scatter(
                 i_eval,
                 X[:, i],
@@ -400,6 +414,12 @@ def plot_points_distribution(
                 vmax=1,
                 s=20,
             )
+        ax.scatter(
+            i_eval,
+            X[:, i],
+            c=np.where(y_finite, y, np.inf),
+            **kwargs_accepted,
+        )
         bounds = (reference or {}).get(p)
         if bounds is not None:
             if len(bounds) == 5:
@@ -410,7 +430,7 @@ def plot_points_distribution(
                     bounds[1], bounds[3], facecolor="tab:blue", alpha=0.2, zorder=-99
                 )
             ax.axhline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
-        ax.set_ylabel(label)
+        ax.set_ylabel("$" + label + "$" if label != p else p)
         ax.grid(axis="y")
     axes[0].set_xlim(0, len(X) + 0.5)
     axes[-1].set_xlabel("Number of posterior evaluations.")
