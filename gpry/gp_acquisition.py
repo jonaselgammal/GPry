@@ -872,7 +872,12 @@ class NORA(GenericGPAcquisition):
 
     # pylint: disable=import-outside-toplevel
     def _do_MC_sample_nessai(self, gpr, random_state, bounds=None):
-        warnings.warn("Support for Nessai is experimental at the moment.")
+        if not mpi.is_main_process:
+            return None, None, None, None
+        warnings.warn(
+            "Support for Nessai is experimental at the moment, and not MPI-compatible "
+            "(running in rank-0 process only."
+        )
         import nessai
         import nessai.model
         from nessai.flowsampler import FlowSampler
@@ -985,7 +990,7 @@ class NORA(GenericGPAcquisition):
                 reweight_factor = np.exp(self._y_mc_reweight - self._y_mc)
                 w_mc_reweight = (
                     self._w_mc if self._w_mc is not None
-                    else np.ones(shape=self._X_mc.shape)
+                    else np.ones(shape=self._X_mc.shape[0])
                 ) * reweight_factor
                 w_mc_reweight /= max(w_mc_reweight)
             self._w_mc_reweight, self._X_mc_reweight, self._y_mc_reweight, \

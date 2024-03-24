@@ -157,7 +157,7 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
     sigma_y = comm.bcast(sigma_y)
     if sigma_y is None and ensure_sigma_y:
         this_X = step_split(X)
-        if len(this_y) > 0:
+        if len(this_X) > 0:
             this_sigma_y = gpr.predict_std(this_X, validate=False)
         else:
             this_sigma_y = np.array([], dtype=float)

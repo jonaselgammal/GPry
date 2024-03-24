@@ -738,16 +738,23 @@ class Runner():
             # breaking if n_resamples_before_giveup is reached.
             if len(y_pred) < self.n_points_per_acq // 2:
                 self.resamples += 1
+                no_more_candidates = False
                 if self.resamples > self.n_resamples_before_giveup:
                     if mpi.is_main_process:
-                        self.log(f"Acquisition returning no values after {self.resamples-1} "
-                                "re-tries. Giving up.", level=1)
-                        break
+                        self.log(
+                            f"Acquisition returning no values after {self.resamples-1} "
+                            "re-tries. Giving up.",
+                            level=1,
+                        )
+                        no_more_candidates = True
+                no_more_candidates = mpi.comm.bcast(no_more_candidates)
+                if no_more_candidates:
+                    break
                 if mpi.is_main_process:
                     self.log("Acquisition returned less than half of the requested "
-                                "points. Re-sampling ("
-                                f"{self.n_resamples_before_giveup- self.resamples} "
-                                "tries remaining)", level=2)
+                             "points. Re-sampling ("
+                             f"{self.n_resamples_before_giveup- self.resamples} "
+                             "tries remaining)", level=2)
                 continue
             self.resamples = 0
             new_X_this_process = new_X[
