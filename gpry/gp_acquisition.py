@@ -1035,7 +1035,7 @@ class NORA(GenericGPAcquisition):
         params = list(model.parameterization.sampled_params())
         labels = model.parameterization.labels()
         labels_list = [labels.get(p) for p in params]
-        return MCSamples(
+        mcsamples = MCSamples(
             samples=X,
             weights=w,
             loglikes=-y if y is not None else None,
@@ -1045,6 +1045,11 @@ class NORA(GenericGPAcquisition):
             sampler="nested",
             ignore_rows=0,
         )
+        # Add posterior as derived parameter to be able to plot it
+        name_logp, label_logp = "logpost", r"\log(p)"
+        if y is not None and not np.isclose(max(y) - min(y), 0):
+            mcsamples.addDerived(y, name_logp, label=label_logp)
+        return mcsamples
 
     def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
         r"""Method to query multiple points where the objective function

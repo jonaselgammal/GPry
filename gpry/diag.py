@@ -18,6 +18,10 @@ pd.set_option("display.max_columns", 500)
 pd.set_option("expand_frame_repr", False)
 
 
+do_plot_mc = True
+do_plot_slices = False
+
+
 def diagnosis(runner):
     if mpi.is_main_process:
         print("**************************************************")
@@ -84,6 +88,9 @@ def diagnosis(runner):
             print("    SUBTEST: are there more points in GP and finite?", same_length_finite_and_GP)
 
         # PLOTS ##########################################################################
+        # Create the plots path, just in case it want not there yet
+        from gpry.io import create_path
+        create_path(runner.plots_path)
         # Get the "reference" MC sample from runner.reference, if set.
         reference = getattr(runner, "reference", None)
 
@@ -98,52 +105,56 @@ def diagnosis(runner):
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:
             import matplotlib.pyplot as plt
-            plt.savefig(os.path.join(runner.plots_path, "points_dist.png"))
+            plt.savefig(os.path.join(runner.plots_path, "points_dist.svg"))
             plt.close()
 
         # Plot mean GP and acq func slices
         from gpry.plots import plot_slices
-        plot_slices(runner.model, runner.gpr, runner.acquisition)
-        import matplotlib.pyplot as plt
-        plt.savefig(os.path.join(runner.plots_path,
-                                 f"slices_iteration_{runner.current_iteration:03d}.png"))
-        plt.close()
+        if do_plot_slices:
+            plot_slices(runner.model, runner.gpr, runner.acquisition)
+            import matplotlib.pyplot as plt
+            plt.savefig(os.path.join(
+                runner.plots_path,
+                f"slices_iteration_{runner.current_iteration:03d}.png")
+            )
+            plt.close()
 
         # Plot current MC sample (if available)
         from gpry.gp_acquisition import NORA
-        if isinstance(runner.acquisition, NORA):
-            from getdist import MCSamples, plots
+        if (
+            do_plot_mc and isinstance(runner.acquisition, NORA) and
+            not runner.acquisition.is_last_MC_reweighted
+        ):
+            from getdist import plots
             from getdist.mcsamples import MCSamplesError
-            name_logp, label_logp = "logpost", r"\log(p)"
-            mcsamples = MCSamples(
-                samples=np.concatenate(
-                    [runner.acquisition.X_mc.T, np.atleast_2d(runner.acquisition.y_mc)]
-                ).T,
-                weights=runner.acquisition.w_mc,
-                names=list(runner.model.parameterization.sampled_params()) + [name_logp],
-                ranges=dict(
-                    zip(runner.model.parameterization.sampled_params(),
-                        runner.model.prior.bounds()
-                        )
-                ),
-                sampler="nested",
-                ignore_rows=0,
-            )
+            mcsamples = runner.acquisition.last_MC_sample_getdist(runner.model)
             to_plot = [mcsamples]
             to_plot_params = list(runner.model.parameterization.sampled_params())
-            filled = [True]
+            name_logp, label_logp = "logpost", r"\log(p)"
+            if mcsamples.loglikes is not None:
+                to_plot_params += [name_logp]
             if reference is not None:
-                try:
-                    reference.addDerived(-reference.loglikes, name_logp, label=label_logp)
-                except (ValueError, TypeError):  # Already added or logpost not in sample
-                    pass
+                if reference.loglikes is not None:
+                    try:
+                        reference.addDerived(-reference.loglikes, name_logp, label=label_logp)
+                    except ValueError:  # already added
+                        pass
                 else:
-                    to_plot_params += [name_logp]
+                    # Limitation: if logp not present in reference MCSamples (rare), can
+                    # not plot for GP either (1st sample needs to contain all params)
+                    if to_plot_params[-1] == name_logp:
+                        to_plot_params = to_plot_params[:-1]
+            filled = [True]
+            legend_labels = [f"Last NORA sample ({len(runner.gpr.X_train_all)} evals.)"]
+            if reference is not None:
                 to_plot = [reference] + to_plot
                 filled = [False] + filled
-            g = plots.get_subplot_plotter()
+                legend_labels += ["Reference sample"]
+            g = plots.get_subplot_plotter(subplot_size=2)
             try:
-                g.triangle_plot(to_plot, to_plot_params, filled=filled)
+                g.triangle_plot(
+                    to_plot, to_plot_params, filled=filled, legend_labels=legend_labels
+                )
                 try:
                     from gpry.plots import getdist_add_training
                     getdist_add_training(g, runner.model, runner.gpr, highlight_last=True)

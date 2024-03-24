@@ -1197,7 +1197,7 @@ class Runner():
                 "Running plotting function from non-root MPI process. "
                 "May create duplicated plots."
             )
-        base_label = "MC samples"
+        base_label = f"MC samples from GP ({len(self.gpr.X_train_all)} evals.)"
         if samples_or_samples_folder is None:
             if self.last_mc_samples is None:
                 raise ValueError(
@@ -1218,9 +1218,9 @@ class Runner():
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
         self.ensure_paths(plots=True)
-        gdplot = gdplt.get_subplot_plotter(width_inch=5)
+        gdplot = gdplt.get_subplot_plotter(subplot_size=2)
         gdplot.settings.line_styles = 'tab10'
-        gdplot.settings.solid_colors='tab10'
+        gdplot.settings.solid_colors = 'tab10'
         gdplot.triangle_plot(
             list(gdsamples_dict.values()), self.model.parameterization.sampled_params(),
             filled=True, legend_labels=list(gdsamples_dict))
