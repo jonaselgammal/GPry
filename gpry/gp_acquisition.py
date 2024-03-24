@@ -21,7 +21,7 @@ import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
 from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
-    shrink_bounds
+    shrink_bounds, remove_0_weight_samples
 import gpry.ns_interfaces as nsint
 
 
@@ -866,6 +866,7 @@ class NORA(GenericGPAcquisition):
                 raise NotImplementedError("use_prior not implemented yet for UltraNest.")
             # Delete products from tmp folder
             shutil.rmtree(updated_settings["log_dir"])
+            w, X, y = remove_0_weight_samples(w, X, y)
             return X, y, None, w
         return None, None, None, None
 
@@ -987,13 +988,11 @@ class NORA(GenericGPAcquisition):
                     else np.ones(shape=self._X_mc.shape)
                 ) * reweight_factor
                 w_mc_reweight /= max(w_mc_reweight)
-            i_zero_w = np.where(w_mc_reweight == 0)[0]
-            self._X_mc_reweight = np.delete(self._X_mc_reweight, i_zero_w, axis=0)
-            self._y_mc_reweight = np.delete(self._y_mc_reweight, i_zero_w, axis=0)
-            self._sigma_y_mc_reweight = np.delete(
-                self._sigma_y_mc_reweight, i_zero_w, axis=0
-            )
-            self._w_mc_reweight = np.delete(w_mc_reweight, i_zero_w, axis=0)
+            self._w_mc_reweight, self._X_mc_reweight, self._y_mc_reweight, \
+                self._sigma_y_mc_reweight = remove_0_weight_samples(
+                    w_mc_reweight, self._X_mc_reweight,
+                    self._y_mc_reweight, self._sigma_y_mc_reweight
+                )
 
     def last_MC_sample(self, copy=False, warn_reweight=True):
         """

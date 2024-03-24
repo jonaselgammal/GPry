@@ -313,3 +313,24 @@ def shrink_bounds(bounds, samples, factor=1):
     updated_bounds[:, 0] = np.array([updated_bounds[:, 0], bounds[:, 0]]).max(axis=0)
     updated_bounds[:, 1] = np.array([updated_bounds[:, 1], bounds[:, 1]]).min(axis=0)
     return updated_bounds
+
+
+def remove_0_weight_samples(weights, *arrays):
+    """
+    Removes the elements of ``arrays`` (at axis 0) corresponding to the null ``weights``.
+
+    Returns a tuple with the non-null weights as the first element, and the rest of them
+    being copies of the given arrays without null-weighted samples in the order with which
+    they were passed. If an element of the list of arrays is ``None``, ``None`` is
+    returned in its place.
+    """
+    i_zero_w = np.where(weights == 0)[0]
+    new_arrays = [np.delete(weights, i_zero_w)]
+    for array in arrays:
+        if array is None:
+            new_arrays.append(None)
+        elif array.shape[0] != len(weights):
+            raise ValueError("weights and some of the arrays have different lengths.")
+        else:
+            new_arrays.append(np.delete(array, i_zero_w, axis=0))
+    return new_arrays
