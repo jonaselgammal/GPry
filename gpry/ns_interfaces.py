@@ -2,6 +2,8 @@
 Wrappers for external nested samplers.
 """
 
+import os
+import glob
 import shutil
 import tempfile
 from warnings import warn
@@ -83,8 +85,14 @@ class InterfacePolyChord:
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, out_dir=None, keep_all=False):
-        """Runs the nested sampler."""
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+        """
+        Runs the nested sampler.
+
+        param_names (optional, otherwise x_[i] will be used) should be a list of sampled
+        parameter names, or a list of (name, label) tuples. Labels are interpreted as
+        LaTeX but should not include '$' signs.
+        """
         # only for NORA, not at init!!! (true like)
         #        # More efficient for const-eval-speed GP's (not very significant)
         #        self.polychord_settings.synchronous = False
@@ -92,12 +100,13 @@ class InterfacePolyChord:
         self.X_all, self.y_all = None, None
         self.X_MC, self.y_MC, self.w_MC = None, None, None
         if keep_all:
+            warn("keep_all is currently experimental. It may not work as intended.")
             self.X_all = []
             self.y_all = []
 
             def logp_func_wrapped(*x):
                 logp = logp_func(*x)
-                self.X_all.append(x)
+                self.X_all.append(x[0])
                 self.y_all.append(logp)
                 return logp
 
@@ -107,9 +116,15 @@ class InterfacePolyChord:
         if mpi.is_main_process:
             if out_dir is None:
                 # pylint: disable=consider-using-with
-                out_dir = tempfile.TemporaryDirectory().name
-            setattr(self.polychord_settings, "base_dir", out_dir)
-            setattr(self.polychord_settings, "file_root", "test")
+                base_dir = tempfile.TemporaryDirectory().name
+                file_root = ""
+            else:
+                base_dir, file_root = os.path.split(out_dir)
+                # If no slash in there, interpret as folder (since kwarg is 'out_dir')
+                if not base_dir:
+                    base_dir, file_root = file_root, ""
+            self.polychord_settings.base_dir = base_dir
+            self.polychord_settings.file_root = file_root
         mpi.share_attr(self, "polychord_settings")
         # Run PolyChord!
         from pypolychord import run_polychord  # pylint: disable=import-outside-toplevel
@@ -132,12 +147,41 @@ class InterfacePolyChord:
             else:
                 self.X_all, self.y_all = None, None
         if mpi.is_main_process:
-            dummy_paramnames = [tuple(2 * [f"x_{i + 1}"]) for i in range(self.dim)]
-            self.last_polychord_output.make_paramnames_files(dummy_paramnames)
+            if param_names is None:
+                param_names = [tuple(2 * [f"x_{i + 1}"]) for i in range(self.dim)]
+            else:
+                no_labels = len(param_names[0]) == 1
+                if no_labels:
+                    param_names = [(p, p) for p in param_names]
+            self.last_polychord_output.make_paramnames_files(param_names)
             samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
             self.X_MC = samples_T[2:].T
             self.y_MC = -0.5 * samples_T[1]  # this one stores chi2
             self.w_MC = samples_T[0]
-            # Delete products from tmp folder
-            shutil.rmtree(self.polychord_settings.base_dir)
         return self.X_MC, self.y_MC, self.w_MC
+
+    def delete_output(self):
+        if not mpi.is_main_process:
+            return
+        if not self.polychord_settings.file_root:
+            # Delete whole folder
+            shutil.rmtree(self.polychord_settings.base_dir)
+            return
+        files = glob.glob(os.path.join(
+            self.polychord_settings.base_dir,
+            self.polychord_settings.file_root + ".*"
+        ))
+        files += glob.glob(os.path.join(
+            self.polychord_settings.base_dir,
+            "clusters",
+            self.polychord_settings.file_root + "_*"
+        ))
+        for f in files:
+            if os.path.isfile(f):
+                os.remove(f)
+        # Delete empty folders that may have been created by PolyChord
+        try:
+            os.rmdir(os.path.join(self.polychord_settings.base_dir, "clusters"))
+            os.rmdir(self.polychord_settings.base_dir)
+        except OSError:
+            pass

@@ -294,13 +294,10 @@ class GaussianKL(ConvergenceCriterion):
         attr_error, num_error = None, None
         if mpi.is_main_process:
             try:
-                X = getattr(acquisition, "X_mc", None)
-                if X is None:
-                    raise AttributeError
+                X, _, _, w = acquisition.last_MC_sample(warn_reweight=False)
             except AttributeError as excpt:
                 attr_error = excpt
             else:
-                w = getattr(acquisition, "w_mc")
                 try:
                     mean = np.average(X, weights=w, axis=0)
                     cov = np.atleast_2d(np.cov(X.T, aweights=w, ddof=0))
@@ -308,12 +305,12 @@ class GaussianKL(ConvergenceCriterion):
                     num_error = excpt
         attr_error = mpi.comm.bcast(attr_error)
         if attr_error:
-            raise AttributeError  # all processes!
+            raise AttributeError from attr_error # all processes!
         num_error = mpi.comm.bcast(num_error)
         if num_error:
             raise ConvergenceCheckError(
-                f"Numerical error when computing new mean and cov: {excpt}"
-            ) from excpt
+                f"Numerical error when computing new mean and cov: {num_error}"
+            ) from num_error
         return mpi.comm.bcast((mean, cov) if mpi.is_main_process else None)
 
     def _get_new_mean_and_cov_from_mc(self, gp):

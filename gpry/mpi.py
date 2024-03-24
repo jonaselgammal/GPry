@@ -60,6 +60,31 @@ def split_number_for_parallel_processes(n, n_proc=SIZE):
     return np.sum(slots, axis=0)
 
 
+def step_split(values):
+    """
+    Broadcasts from rank=0 and splits array between MPI processes, using mpi.size as step.
+
+    If starting from sorted arrays, it preserves "computational scaling" among
+    processes, but producing similar-in-content partial arrays.
+    """
+    values = comm.bcast(values)
+    return values[RANK::SIZE]
+
+
+def merge_step_split(values):
+    """
+    Gather step-split (with ``::mpi.SIZE``) arrays and returns the merged set for the
+    rank=0 process (``None`` for the rest).
+    """
+    values_step = comm.gather(values)
+    if is_main_process:
+        values_merged = np.zeros(sum(len(v) for v in values_step))
+        for i, v in enumerate(values_step):
+            values_merged[i::SIZE] = v
+        return values_merged
+    return None
+
+
 def multi_gather_array(arrs):
     """
     Gathers (possibly a list of) arrays from all processes into the main process.
@@ -103,3 +128,41 @@ def share_attr(instance, attr_name, root=0):
         return
     setattr(instance, attr_name,
             comm.bcast(getattr(instance, attr_name, None), root=root))
+
+
+def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
+    """
+    Computes the GPR mean (and std if `do_sigma_y=True`) in parallel.
+
+    Returns the resulting `(y, sigma_y)` arrays (computed or given) for rank 0, and
+    ``None`` otherwise.
+    """
+    y = comm.bcast(y)
+    if y is None:  # assume sigma_y is also None
+        this_X = step_split(X)
+        if len(this_X) > 0:
+            if ensure_sigma_y:
+                this_y, this_sigma_y = gpr.predict(
+                    this_X, return_std=True, validate=False
+                )
+            else:
+                this_y = gpr.predict(this_X, return_std=False, validate=False)
+        else:
+            this_y = np.array([], dtype=float)
+            this_sigma_y = np.array([], dtype=float) if ensure_sigma_y else None
+        return (
+            merge_step_split(this_y),
+            merge_step_split(this_sigma_y) if ensure_sigma_y else None,
+        )
+    sigma_y = comm.bcast(sigma_y)
+    if sigma_y is None and ensure_sigma_y:
+        this_X = step_split(X)
+        if len(this_y) > 0:
+            this_sigma_y = gpr.predict_std(this_X, validate=False)
+        else:
+            this_sigma_y = np.array([], dtype=float)
+        return (
+            y if is_main_process else None,
+            merge_step_split(this_sigma_y),
+        )
+    return (y, sigma_y) if is_main_process else (None, None)

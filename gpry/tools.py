@@ -264,9 +264,12 @@ def check_candidates(gpr, new_X, tol=1e-8):
     return in_training_set, duplicates
 
 
-def shrink_bounds(bounds, samples):
+def shrink_bounds(bounds, samples, factor=1):
     """
     Reduces the given bounds to the minimal hypercube containing a set of `samples`.
+
+    If ``factor != 1``, the width is multiplied by that factor, while keeping the hypercube
+    centered.
 
     If the samples span a longer region that that defined by the bounds, the given
     bounds are preferred.
@@ -276,12 +279,14 @@ def shrink_bounds(bounds, samples):
     bounds: numpy.ndarray
         An (d, 2) array of parameter bounds
     samples: numpy.ndarray
-        An (N, d) array of sampling locations.
+        An (N, d) array of sampling locations
+    factor: float
+        A factor by which to multiply the hypercube width
 
     Returns
     -------
     numpy.ndarray:
-        An (d, 2) array of updater parameter bounds
+        An (d, 2) array of updated parameter bounds
 
     Raises
     ------
@@ -297,7 +302,14 @@ def shrink_bounds(bounds, samples):
             "bounds and samples appear to have different dimensionalities: "
             f"{bounds.shape[0]} for bounds and {samples.shape[1]} for samples."
         )
-    updated_samples = np.empty(shape=bounds.shape, dtype=float)
-    updated_samples[:, 0] = np.array([bounds[:, 0], samples.min(axis=0)]).max(axis=0)
-    updated_samples[:, 1] = np.array([bounds[:, 1], samples.max(axis=0)]).min(axis=0)
-    return updated_samples
+    updated_bounds = np.empty(shape=bounds.shape, dtype=float)
+    updated_bounds[:, 0] = samples.min(axis=0)
+    updated_bounds[:, 1] = samples.max(axis=0)
+    if factor != 1:
+        centers = (updated_bounds[:, 1] + updated_bounds[:, 0]) / 2
+        updated_bounds[:, 0] = centers - factor * (centers - updated_bounds[:, 0])
+        updated_bounds[:, 1] = centers + factor * (updated_bounds[:, 1] - centers)
+    # Restrict to prior
+    updated_bounds[:, 0] = np.array([updated_bounds[:, 0], bounds[:, 0]]).max(axis=0)
+    updated_bounds[:, 1] = np.array([updated_bounds[:, 1], bounds[:, 1]]).min(axis=0)
+    return updated_bounds

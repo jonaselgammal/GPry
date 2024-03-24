@@ -561,9 +561,14 @@ class NORA(GenericGPAcquisition):
     zeta: float, optional (default: None, uses zeta_scaling)
         Specifies the value of the zeta parameter directly.
 
-    use_prior_sample: bool
+    use_prior_sample: bool [CURRENTLY DISABLED!]
         Whether to use the initial prior sample from Nested Sampling for the ranking.
         Can be a large number of them in high dimension. Default: False.
+
+    shrink_with_factor: float, optional (default: False)
+        If defined as a float, the nested sampling runs are restricted to the hypercube
+        defined by the current (finite) GPR training set, enlarged by the given factor.
+        Useful if the NORA sampling phase gets stuck (generating initial live points).
 
     nlive_per_training: int
         live points per sample in the current training set.
@@ -610,13 +615,14 @@ class NORA(GenericGPAcquisition):
                  zeta=None,
                  zeta_scaling=None,
                  # Class-specific:
-                 sampler="ultranest",
+                 sampler=None,
                  mc_every="1d",
                  use_prior_sample=False,
                  nlive_per_training=3,
                  nlive_per_dim_max=25,
                  num_repeats_per_dim=5,
                  precision_criterion_target=0.01,
+                 shrink_with_factor=None,
                  nprior_per_nlive=10,
                  max_ncalls=None,
                  tmpdir=None,
@@ -624,6 +630,7 @@ class NORA(GenericGPAcquisition):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
             verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
+        self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
         self.use_prior_sample = use_prior_sample
@@ -633,8 +640,16 @@ class NORA(GenericGPAcquisition):
         # Configure nested sampler
         self.sampler = sampler
         self.sampler_interface = None
+        if self.sampler is None:
+            try:
+                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
+                self.sampler = "polychord"
+            except nsint.NestedSamplerNotInstalledError as excpt:
+                self.log("Could not import PolyChord. Defaulting to UltraNest.")
+                self.sampler = "ultranest"
         if self.sampler.lower() == "polychord":
-            self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
+            if self.sampler_interface is None:
+                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose + 3)
         elif self.sampler.lower() == "ultranest":
             try:
                 # pylint: disable=import-outside-toplevel
@@ -660,6 +675,7 @@ class NORA(GenericGPAcquisition):
         # if self.random_state is not None:
         #     self.polychord_settings.seed = \
         #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
+        self.shrink_with_factor = shrink_with_factor
         # Prepare precision parameters
         self.nlive_per_training = nlive_per_training
         self.nlive_per_dim_max = nlive_per_dim_max
@@ -668,9 +684,12 @@ class NORA(GenericGPAcquisition):
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
         # Pool for storing intermediate results during parallelised acquisition
+        self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = None, None, None, None
+        self._X_mc_reweight, self._y_mc_reweight = None, None
+        self._sigma_y_mc_reweight, self._w_mc_reweight = None, None
+        self.is_last_MC_reweighted = None
         self.pool = None
-        self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc = None, None, None, None
-        self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
+        self._acq_mc = None
 
     @property
     def pool_size(self):
@@ -703,7 +722,7 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
-    def shrink_priors(self, gpr):
+    def shrink_priors(self, gpr, factor=1):
         """
         Adjusts given boundaries based on the infinities classifier cutoff value.
         Boundaries are only adjusted if the last samples towards the edges are below the
@@ -719,9 +738,9 @@ class NORA(GenericGPAcquisition):
         numpy.ndarray:
             A (d, 2) array representing the adjusted boundaries.
         """
-        return shrink_bounds(self.bounds, gpr.X_train)
+        return shrink_bounds(self.bounds, gpr.X_train, factor=factor)
 
-    def get_MC_sample(self, gpr, random_state=None, sampler=None):
+    def do_MC_sample(self, gpr, random_state=None, sampler=None):
         """
 
         Returns
@@ -729,109 +748,33 @@ class NORA(GenericGPAcquisition):
         X, y, sigma_y, weights
             May return None for any of y, sigma_y, weights
         """
+        if self.shrink_with_factor is None:
+            bounds = self.bounds
+        else:
+            bounds = self.shrink_priors(gpr, self.shrink_with_factor)
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
-            return self._get_MC_sample_uniform(gpr, random_state)
+            return self._do_MC_sample_uniform(gpr, random_state, bounds=bounds)
         if sampler.lower() == "polychord":
-            return self._get_MC_sample_polychord(gpr, random_state)
+            return self._do_MC_sample_polychord(gpr, random_state, bounds=bounds)
         if sampler.lower() == "ultranest":
-            return self._get_MC_sample_ultranest(gpr, random_state)
+            return self._do_MC_sample_ultranest(gpr, random_state, bounds=bounds)
         if sampler.lower() == "nessai":
-            return self._get_MC_sample_nessai(gpr, random_state)
+            return self._do_MC_sample_nessai(gpr, random_state, bounds=bounds)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
-    def _get_MC_sample_uniform(self, gpr, random_state):
+    def _do_MC_sample_uniform(self, gpr, random_state, bounds=None):
         if not mpi.is_main_process:
             return None, None, None
-        proposer = UniformProposer(self.bounds)
+        proposer = UniformProposer(self.bounds if bounds is None else bounds)
         n_total = 8 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
         return X, None, None, None
 
-    def _get_MC_sample_nessai(self, gpr, random_state):
-        # write a code to sample from nessai
-        import nessai
-        import nessai.model
-        from nessai.flowsampler import FlowSampler
-        class Nessai_model(nessai.model.Model):
-            """
-            Translates the GP to a nessai model
-            """
-            def __init__(self, gpr, bounds):
-                self.gpr = gpr
-                # Routine to generate tighter bounds which only capture the finite part of the GP.
-                X_train_finite = self.gpr.X_train
-                n_d = self.gpr.d
-                self.gpry_bounds = bounds
-                modified_bounds = np.empty((n_d, 2))
-                for d in range(n_d):
-                    modified_bounds[d, 0] = np.min(X_train_finite[:, d])
-                    modified_bounds[d, 1] = np.max(X_train_finite[:, d])
-                self.names = generic_params_names(n_d)
-                self.modified_bounds = modified_bounds # self.gpry_model.prior.bounds(confidence_for_unbounded=0.99995)
-
-                self.log_prior_volume = np.sum(np.log(self.gpry_bounds[:,1] - self.gpry_bounds[:,0]))
-
-                self.bounds = {}
-                for i in range(len(self.names)):
-                    self.bounds[self.names[i]] = self.modified_bounds[i]
-
-            def gpry_log_likelihood(self, point):
-                return self.gpr.predict(point) + self.log_prior_volume
-
-            def log_likelihood(self, livepoint):
-                if livepoint.ndim == 0:
-                    point = np.array([livepoint[p] for p in self.names])
-                    point = np.atleast_2d(point)
-                    ll = self.gpry_log_likelihood(point)
-                else:
-                    points = np.array([[livepoint[i][p] for p in self.names] for i in range(livepoint.size)])
-                    ll = self.gpry_log_likelihood(points)
-                return ll
-
-            def log_prior(self, livepoint):
-                if not self.in_bounds(livepoint).any():
-                    return -np.inf
-                lp = np.single(0.)
-                return lp
-        nessai_model = Nessai_model(gpr, self.bounds)
-        updated_settings = self.update_NS_precision(gpr)
-
-        if self.tmpdir is None:
-            # TODO: add to checkpoint folder?
-            tmpdir = tempfile.TemporaryDirectory().name
-        else:
-            tmpdir = f"{self.tmpdir}/{self.i}"
-            self.i += 1
-        # TODO: add more options for nessai
-        sampler = FlowSampler(nessai_model, output=tmpdir,
-                              nlive=updated_settings['nlive'],
-                              plot=False, resume=False)
-        sampler.run(plot=False, save=False)
-        result = sampler.ns.get_result_dictionary()
-        X = result['nested_samples']
-        x = sampler.posterior_samples
-
-        # Copy the data from the structured array to the float array
-        dtype_new = np.dtype({'names': x.dtype.names, 'formats': tuple([np.float64]*len(x.dtype.names))})
-        x = x.astype(dtype_new)
-        posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
-
-        X = posterior_samples[:, :-3]
-        y = posterior_samples[:, -2]
-
-        return X, y, None, None
-
-
-
-
-
-    def _get_MC_sample_polychord(self, gpr, random_state):
-        self.sampler_interface.set_prior(self.shrink_priors(gpr))
-
+    def _do_MC_sample_polychord(self, gpr, random_state, bounds=None):
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
             """
@@ -839,6 +782,8 @@ class NORA(GenericGPAcquisition):
             """
             return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds if bounds is None else bounds)
         # Update PolyChord precision settings
         self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
         # Output folder
@@ -856,18 +801,19 @@ class NORA(GenericGPAcquisition):
             out_dir=tmpdir,
             keep_all=False
         )
-        # We recompute y values, because quantities in PolyChord have to go through
-        # text i/o, and some precision may be lost
-        if mpi.is_main_process:
-            y_MC = gpr.predict(X_MC, return_std=False, validate=False)
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
         return X_MC, y_MC, None, w_MC
 
-    def _get_MC_sample_ultranest(self, gpr, random_state):
+    def _do_MC_sample_ultranest(self, gpr, random_state, bounds=None):
         # Ultranest cannot deal with -np.inf
         old_minus_inf_value = gpr.minus_inf_value
         gpr.minus_inf_value = -1e300
-        widths = self.bounds[:, 1] - self.bounds[:, 0]
-        lowers = self.bounds[:, 0]
+        bounds = self.bounds if bounds is None else bounds
+        widths = bounds[:, 1] - bounds[:, 0]
+        lowers = bounds[:, 0]
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
@@ -912,13 +858,189 @@ class NORA(GenericGPAcquisition):
         if mpi.is_main_process:
             w = result['weighted_samples']['weights']
             X = result["weighted_samples"]["points"]
-            y = result["weighted_samples"]["logl"]
+            # y = result["weighted_samples"]["logl"]
+            # We will want to re-evaluate to recover the infinities, so we do not pass
+            # y forward.
+            y = None
             if self.use_prior_sample:
                 raise NotImplementedError("use_prior not implemented yet for UltraNest.")
             # Delete products from tmp folder
             shutil.rmtree(updated_settings["log_dir"])
             return X, y, None, w
         return None, None, None, None
+
+    # pylint: disable=import-outside-toplevel
+    def _do_MC_sample_nessai(self, gpr, random_state, bounds=None):
+        warnings.warn("Support for Nessai is experimental at the moment.")
+        import nessai
+        import nessai.model
+        from nessai.flowsampler import FlowSampler
+
+        class Nessai_model(nessai.model.Model):
+            """
+            Translates the GP to a nessai model
+            """
+
+            def __init__(self, gpr, bounds):
+                self.gpr = gpr
+                n_d = self.gpr.d
+                self.log_prior_volume = np.sum(np.log(bounds[:, 1] - bounds[:, 0]))
+                self.bounds = dict(
+                    (name, bounds[i]) for i, name in enumerate(generic_params_names(n_d))
+                )
+
+            @property
+            def names(self):
+                return list(self.bounds)
+
+            def gpry_log_likelihood(self, point):
+                return self.gpr.predict(point) + self.log_prior_volume
+
+            def log_likelihood(self, livepoint):
+                if livepoint.ndim == 0:
+                    point = np.array([livepoint[p] for p in self.names])
+                    point = np.atleast_2d(point)
+                    ll = self.gpry_log_likelihood(point)
+                else:
+                    points = np.array(
+                        [[livepoint[i][p] for p in self.names]
+                         for i in range(livepoint.size)]
+                    )
+                    ll = self.gpry_log_likelihood(points)
+                return ll
+
+            def log_prior(self, livepoint):
+                if not self.in_bounds(livepoint).any():
+                    return -np.inf
+                lp = np.single(0.)
+                return lp
+
+        nessai_model = Nessai_model(gpr, self.bounds if bounds is None else bounds)
+        updated_settings = self.update_NS_precision(gpr)
+        if self.tmpdir is None:
+            # TODO: add to checkpoint folder?
+            tmpdir = tempfile.TemporaryDirectory().name
+        else:
+            tmpdir = f"{self.tmpdir}/{self.i}"
+            self.i += 1
+        # TODO: add more options for nessai
+        sampler = FlowSampler(nessai_model, output=tmpdir,
+                              nlive=updated_settings['nlive'],
+                              plot=False, resume=False)
+        sampler.run(plot=False, save=False)
+        result = sampler.ns.get_result_dictionary()
+        X = result['nested_samples']
+        x = sampler.posterior_samples
+        # Copy the data from the structured array to the float array
+        dtype_new = np.dtype({
+            'names': x.dtype.names,
+            'formats': tuple([np.float64] * len(x.dtype.names)),
+        })
+        x = x.astype(dtype_new)
+        posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
+        X = posterior_samples[:, :-3]
+        y = posterior_samples[:, -2]
+        return X, y, None, None
+
+    def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, gpr=None):
+        """
+        Stores the MC sample as attributed.
+
+        If either `y` and/or `sigma_y` are passed as `None`, you can ensure their
+        calculation (in parallel) with `ensure_y_sigma=True`. In that case, a `gpr` is
+        needed.
+
+        Use ``last_MC_sample[_getdist]`` to retrieve it.
+        """
+        self.is_last_MC_reweighted = False
+        self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = X, y, sigma_y, w
+        if ensure_y_sigma_y:
+            self._y_mc, self._sigma_y_mc = mpi.compute_y_parallel(
+                gpr, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
+            )
+
+    def _reweight_last_MC_sample(self, gpr, ensure_sigma_y=False):
+        """Stores the MC sample as attributed. Use ``last_MC_sample`` to retrieve it."""
+        self.is_last_MC_reweighted = True
+        X_excpt, y_excpt = None, None
+        if mpi.is_main_process and self._X_mc is None:
+            X_excpt = ValueError("No samples yet!")
+        X_excpt = mpi.comm.bcast(X_excpt)
+        if X_excpt is not None:
+            raise X_excpt
+        if mpi.is_main_process and self._y_mc is None:
+            y_excpt = ValueError("Original logp was not stored. Cannot reweight!")
+        y_excpt = mpi.comm.bcast(y_excpt)
+        if y_excpt is not None:
+            raise y_excpt
+        # Ensure y and sigma_y (optional) are computed
+        self._X_mc_reweight = np.copy(self._X_mc) if mpi.is_main_process else None
+        self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
+            gpr, self._X_mc_reweight, None, None, ensure_sigma_y=True
+        )
+        if mpi.is_main_process:
+            # Reweight, and drop 0 weights
+            with NumpyErrorHandling(all="ignore") as _:
+                reweight_factor = np.exp(self._y_mc_reweight - self._y_mc)
+                w_mc_reweight = (
+                    self._w_mc if self._w_mc is not None
+                    else np.ones(shape=self._X_mc.shape)
+                ) * reweight_factor
+                w_mc_reweight /= max(w_mc_reweight)
+            i_zero_w = np.where(w_mc_reweight == 0)[0]
+            self._X_mc_reweight = np.delete(self._X_mc_reweight, i_zero_w, axis=0)
+            self._y_mc_reweight = np.delete(self._y_mc_reweight, i_zero_w, axis=0)
+            self._sigma_y_mc_reweight = np.delete(
+                self._sigma_y_mc_reweight, i_zero_w, axis=0
+            )
+            self._w_mc_reweight = np.delete(w_mc_reweight, i_zero_w, axis=0)
+
+    def last_MC_sample(self, copy=False, warn_reweight=True):
+        """
+        Returns the last MC sample as ``(X, y, sigma_y, weights)``. ``y, sigma_y``
+        may be None if not computed while sampling. They can be generated with the gpr.
+        If ``weights`` is None, all samples should be assumed to have equal weights.
+
+        Prints a warning if it is a reweighted sample.
+        """
+        if self.is_last_MC_reweighted:
+            if warn_reweight:
+                warnings.warn(
+                    "This is a reweighted sample! (disable with `warn_reweight=False`)"
+                )
+            return_values = (
+                self._X_mc_reweight, self._y_mc_reweight,
+                self._sigma_y_mc_reweight, self._w_mc_reweight
+            )
+        else:
+            return_values = (self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc)
+        if copy:
+            return_values = tuple(
+                (np.copy(val) if val is not None else None) for val in return_values
+            )
+        return return_values
+
+    def last_MC_sample_getdist(self, model, warn_reweight=True):
+        """
+        Returns the last MC sample as a ``getdist.MCSamples`` instance.
+
+        Prints a warning if it is a reweighted sample.
+        """
+        X, y, _, w = self.last_MC_sample(warn_reweight=warn_reweight)
+        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
+        params = list(model.parameterization.sampled_params())
+        labels = model.parameterization.labels()
+        labels_list = [labels.get(p) for p in params]
+        return MCSamples(
+            samples=X,
+            weights=w,
+            loglikes=-y if y is not None else None,
+            names=params,
+            labels=labels_list,
+            ranges=dict(zip(params, self.bounds)),
+            sampler="nested",
+            ignore_rows=0,
+        )
 
     def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
         r"""Method to query multiple points where the objective function
@@ -971,33 +1093,20 @@ class NORA(GenericGPAcquisition):
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
         if mc_sample_this_time:
-            self.X_mc, self.y_mc, self.sigma_y_mc, self.w_mc = self.get_MC_sample(
-                gpr, random_state
+            self._set_MC_sample(
+                *self.do_MC_sample(gpr, random_state), ensure_y_sigma_y=True, gpr=gpr
             )
-            # Save the necessary values for reweighting
-            self.y_mc_last_sampled = np.copy(self.y_mc)
-            if self.w_mc is not None:
-                self.w_mc_last_sampled = np.copy(self.w_mc)
-            else:
-                self.w_mc_last_sampled = None
-        else:  # reuse
-            self.X_mc, self.y_mc, self.sigma_y_mc = self.X_mc, None, None
+        else:
+            self._reweight_last_MC_sample(gpr, ensure_sigma_y=True)
         self.mc_every_i += 1
+        X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
         # Compute acq functions and missing quantities.
         self.acq_func_y_sigma = partial(
             self.acq_func.f, baseline=gpr.y_max,
             noise_level=gpr.noise_level, zeta=self.acq_func.zeta)
+        # *Split* among MPI processes and compute acq func value (in parallel)
         this_X, this_y, this_sigma_y, this_acq = \
-            self._compute_acq_and_missing_y_sigma(gpr=gpr)
-        # Reweight the last acquired samples to the new gp
-        if mpi.is_main_process:
-            if not mc_sample_this_time:
-                reweight_factor = np.exp(self.y_mc - self.y_mc_last_sampled)
-                self.w_mc = (
-                    self.w_mc_last_sampled if self.w_mc_last_sampled is not None else 1
-                ) * reweight_factor
-                self.w_mc /= max(self.w_mc)
-        mpi.sync_processes()
+            self._split_and_compute_acq(gpr, X_mc, y_mc, sigma_y_mc)
         if mpi.is_main_process:
             what_we_did = ("Obtained new MC sample" if mc_sample_this_time
                            else "Re-evaluated previous MC sample")
@@ -1026,59 +1135,22 @@ class NORA(GenericGPAcquisition):
             merged_pool.X[:n_points], merged_pool.y[:n_points], merged_pool_acq[:n_points]
         )
 
-    def _compute_acq_and_missing_y_sigma(self, gpr):
+    def _split_and_compute_acq(self, gpr, X, y, sigma_y):
         """
-        Ensures a full set of `X, y, sigma_y, acq_value`, attributes starting from current
-        attribute values, which are assumed equal-valued for all ranks.
-
-        Returns scattered arrays for these values for all processes.
-
-        Parallelises the computation if possible (returns split arrays per process).
+        Scatters `(X, y, sigma_y)` between processes, and returns them together with the
+        acquisition function values, computed in parallel.
         """
-        X = mpi.comm.bcast(self.X_mc)
         # We don't use mpi.split_number_for_parallel_processes because for the ranking
         # it is good to have similar y scaling in all MPI processes. But if we use that
         # function, some processes get the top of the dist, and others the bottom, and
         # the bottom one's scaling does not perform well with the add_one method, even
         # after sorting, and the slowest MPI process sets the global speed
-        this_X = X[mpi.RANK::mpi.SIZE]
-        y = mpi.comm.bcast(self.y_mc)
-        sigma_y = mpi.comm.bcast(self.sigma_y_mc)
-        if y is None:  # assume sigma_y is also None
-            if len(this_X) > 0:
-                this_y, this_sigma_y = gpr.predict(
-                    this_X, return_std=True, validate=False)
-            else:
-                this_y = np.array([], dtype=float)
-                this_sigma_y = np.array([], dtype=float)
-            self._undo_step_splitting(this_y, "y_mc")
-            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
-        elif sigma_y is None:
-            this_y = y[mpi.RANK::mpi.SIZE]
-            if len(this_y) > 0:
-                this_sigma_y = gpr.predict_std(this_X, validate=False)
-            else:
-                this_sigma_y = np.array([], dtype=float)
-            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
-        else:  # both y and sigma_y are known
-            this_y = y[mpi.RANK::mpi.SIZE]
-            this_sigma_y = sigma_y[mpi.RANK::mpi.SIZE]
+        this_X = mpi.step_split(X)
+        this_y = mpi.step_split(y)
+        this_sigma_y = mpi.step_split(sigma_y)
         with np.errstate(divide='ignore'):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
-        self._undo_step_splitting(this_acq, "acq_mc")
         return this_X, this_y, this_sigma_y, this_acq
-
-    def _undo_step_splitting(self, values, attr_name):
-        """
-        Gather and undoes the ::mpi.SIZE process splitting and sets the corresponding
-        attribute at the rank=0 process.
-        """
-        values_step = mpi.comm.gather(values)
-        if mpi.is_main_process:
-            attr_value = np.zeros(len(self.X_mc))
-            for i, v in enumerate(values_step):
-                attr_value[i::mpi.SIZE] = v
-            setattr(self, attr_name, attr_value)
 
     # Non-parallel version of the ranking of the MC points
     def _rank(self, n_points, gpr):

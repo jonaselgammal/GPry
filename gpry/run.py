@@ -830,7 +830,6 @@ class Runner():
             with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                 has_converged = []
                 for cc in self.convergence:
-                    print(cc)
                     try:
                         has_converged.append(cc.is_converged_MPIwrapped(
                             self.gpr, self.old_gpr,
