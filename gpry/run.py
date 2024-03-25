@@ -365,6 +365,10 @@ class Runner():
         # Prepare progress summary table; the table key is the iteration number
         if not self.loaded_from_checkpoint:
             self.progress = Progress()
+        # Prepare logpriorvolume to subtract
+        self.log_prior_volume = np.sum(
+            np.log(self.prior_bounds[:, 1] - self.prior_bounds[:, 0])
+        )
         self.current_iteration = 0
         self.has_run = False
         self.has_converged = False
@@ -549,6 +553,17 @@ class Runner():
     def d(self):
         """Dimensionality of the problem."""
         return self.model.prior.d()
+
+    def logp(self, X):
+        """
+        Wrapper for the surrogate posterior. Call with a point or a list of them.
+
+        This is the full posterior. If the prior is uniform the likelihood function can be
+        recovered by summing ``self.log_prior_volume`` to this function.
+
+        Always returns an array.
+        """
+        return self.gpr.predict(np.atleast_2d(X))
 
     def log(self, msg, level=None):
         """
@@ -1081,6 +1096,7 @@ class Runner():
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
         gpplt.plot_points_distribution(
             self.model, self.gpr, self.convergence, self.progress,
+            reference=self.last_mc_samples()
         )
         plt.savefig(os.path.join(self.plots_path, "points_dist.svg"))
         gpplt.plot_slices(self.model, self.gpr, self.acquisition)
@@ -1138,7 +1154,7 @@ class Runner():
         :class:`getdist.MCSamples` instance. Otherwise as
         :class:`cobaya.SampleCollection`.
         """
-        if as_getdist:
+        if as_getdist and self._last_mc_samples is not None:
             return self._last_mc_samples.to_getdist(model=self.model)
         return self._last_mc_samples
 

@@ -433,7 +433,7 @@ def plot_points_distribution(
         ax.set_ylabel("$" + label + "$" if label != p else p)
         ax.grid(axis="y")
     axes[0].set_xlim(0, len(X) + 0.5)
-    axes[-1].set_xlabel("Number of posterior evaluations.")
+    axes[-1].set_xlabel("Number of posterior evaluations")
     n_train = progress.data["n_total"][1]
     for ax in axes:
         ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-999)
