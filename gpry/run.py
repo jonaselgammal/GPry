@@ -21,7 +21,7 @@ import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
-from gpry.plots import plot_convergence, plot_distance_distribution
+import gpry.plots as gpplt
 from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates
 
 
@@ -371,7 +371,7 @@ class Runner():
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
         self.mean, self.cov = None, None
         self.last_mc_surr_info, self.last_mc_sampler = None, None
-        self.last_mc_samples = None
+        self._last_mc_samples = None
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -1071,22 +1071,28 @@ class Runner():
         """
         if not mpi.is_main_process:
             warnings.warn(
-                "Running plotting function from non-root MPI process. "
-                "May create duplicated plots."
+                "Running plotting function from non-root MPI process. Doing nothing."
             )
+            return
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=True, save=os.path.join(self.plots_path, "timing.svg"))
         self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
-        fig, ax = plot_convergence(self.convergence)
-        fig.savefig(os.path.join(self.plots_path, "convergence.svg"))
-        plt.close(fig)
+        gpplt.plot_points_distribution(
+            self.model, self.gpr, self.convergence, self.progress,
+        )
+        plt.savefig(os.path.join(self.plots_path, "points_dist.svg"))
+        gpplt.plot_slices(self.model, self.gpr, self.acquisition)
+        plt.savefig(os.path.join(self.plots_path, "slices.svg"))
 
-    def generate_mc_sample(self, sampler="mcmc", output=None, add_options=None,
-                           resume=False):
+    def generate_mc_sample(
+            self, sampler="mcmc", output=None, add_options=None, resume=False
+    ):
         """
         Runs an MC process using `Cobaya <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
+
+        The result can be retrieved using the ``last_mc_samples`` method.
 
         Parameters
         ----------
@@ -1106,16 +1112,6 @@ class Runner():
 
         resume: bool, optional (default=False)
             Whether to resume from existing output files (True) or force overwrite (False)
-
-        Returns
-        -------
-        mc_samples : :class:`cobaya.collection.SampleCollection`
-            The resulting MC samples.
-
-        Notes
-        -----
-        The last computed samples are saved as an attribute `last_mc_samples` (defined as
-        None it no MC samples have been generated yet).
         """
         if not self.gpr.fitted:
             raise Exception("You have to have added points to the GPR "
@@ -1127,12 +1123,24 @@ class Runner():
             convergence=self.convergence, output=output, add_options=add_options,
             resume=resume, verbose=self.verbose)
         sampler_name = sampler if isinstance(sampler, str) else list(sampler)[0]
-        self.last_mc_samples = self.last_mc_sampler.samples(
+        self._last_mc_samples = self.last_mc_sampler.samples(
             combined=True,
             skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0
         )
-        mpi.share_attr(self, "last_mc_samples")
-        return self.last_mc_samples
+        mpi.share_attr(self, "_last_mc_samples")
+
+    def last_mc_samples(self, as_getdist=True):
+        """
+        Returns the last MC sample available from the surrogate model, if any has been
+        generated.
+
+        If ``as_getdist=True`` (default), they are returned as a
+        :class:`getdist.MCSamples` instance. Otherwise as
+        :class:`cobaya.SampleCollection`.
+        """
+        if as_getdist:
+            return self._last_mc_samples.to_getdist(model=self.model)
+        return self._last_mc_samples
 
     def diagnose(self):
         if mpi.is_main_process:
@@ -1166,7 +1174,7 @@ class Runner():
 
     # pylint: disable=import-outside-toplevel
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
-                add_samples=None, output=None):
+                add_samples=None, output=None, output_dpi=200):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.
@@ -1191,21 +1199,24 @@ class Runner():
             The location to save the generated plot in. If ``None`` it will be saved in
             ``checkpoint_path/images/Surrogate_triangle.pdf`` or
             ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
+
+        output_dpi : int (default: 200)
+            The resolution of the generated plot in DPI.
         """
         if not mpi.is_main_process:
             warnings.warn(
-                "Running plotting function from non-root MPI process. "
-                "May create duplicated plots."
+                "Running plotting function from non-root MPI process. Doing nothing."
             )
+            return
         base_label = f"MC samples from GP ({len(self.gpr.X_train_all)} evals.)"
         if samples_or_samples_folder is None:
-            if self.last_mc_samples is None:
+            if self._last_mc_samples is None:
                 raise ValueError(
                     "No MC samples have been obtained for this Runner. You need to run "
                     "the generate_mc_sample() method first, or pass samples or a path "
                     "to them as first argument."
                 )
-            gdsamples_dict = {base_label: self.last_mc_samples}
+            gdsamples_dict = {base_label: self.last_mc_samples()}
         else:
             gdsamples_dict = {base_label: samples_or_samples_folder}
         if add_samples is None:
@@ -1227,14 +1238,13 @@ class Runner():
         if add_training and self.d > 1:
             getdist_add_training(gdplot, self.model, self.gpr)
         if output is None:
-            plt.savefig(os.path.join(self.plots_path, "Surrogate_triangle.png"),
-                        dpi=300)
-        else:
-            plt.savefig(output)
+            output = os.path.join(self.plots_path, "Surrogate_triangle.png")
+        plt.savefig(output, dpi=output_dpi)
         return gdplot
 
     def plot_distance_distribution(
-            self, samples_or_samples_folder=None, show_added=True, output=None):
+            self, samples_or_samples_folder=None, show_added=True, output=None,
+            output_dpi=200):
         """
         Plots the distance distribution of the training points with respect to the
         confidence ellipsoids (in a Gaussian approx) derived from an MC sample of the
@@ -1256,20 +1266,23 @@ class Runner():
             The location to save the generated plot in. If ``None`` it will be saved in
             ``.png`` format at ``checkpoint_path/images/``, or ``./images/`` if
             ``checkpoint_path`` was ``None``.
+
+        output_dpi : int (default: 200)
+            The resolution of the generated plot in DPI.
         """
         if not mpi.is_main_process:
             warnings.warn(
-                "Running plotting function from non-root MPI process. "
-                "May create duplicated plots."
+                "Running plotting function from non-root MPI process. Doing nothing."
             )
+            return
         if samples_or_samples_folder is None:
-            if self.last_mc_samples is None:
+            if self._last_mc_samples is None:
                 raise ValueError(
                     "No MC samples have been obtained for this Runner. You need to run "
                     "the generate_mc_sample() method first, or pass samples or a path "
                     "to them as first argument."
                 )
-            gdsample = self.last_mc_samples
+            gdsample = self.last_mc_samples(as_getdist=True)
         else:
             gdsample = samples_or_samples_folder
         gdsample = list(process_gdsamples({None: gdsample}).values())[0]
@@ -1277,20 +1290,18 @@ class Runner():
         mean = gdsample.getMeans()[:n_params]
         covmat = gdsample.getCovMat().matrix[:n_params, :n_params]
         self.ensure_paths(plots=True)
+        if output is None:
+            output_1 = os.path.join(self.plots_path, "Distance_distribution.png")
+            output_2 = os.path.join(self.plots_path, "Distance_distribution_density.png")
+        else:
+            output_1 = output
+            # We need to change the 2nd NameError
+            name, ext = os.path.splitext(output)
+            output_2 = name + "_density" + ext
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
-        fig, ax = plot_distance_distribution(
+        fig, ax = gpplt.plot_distance_distribution(
             self.gpr, mean, covmat, density=False, show_added=show_added)
-        if output is None:
-            plt.savefig(os.path.join(self.plots_path, "Distance_distribution.png"),
-                        dpi=300)
-        else:
-            plt.savefig(output)
-        fig, ax = plot_distance_distribution(
+        plt.savefig(output_1, dpi=output_dpi)
+        fig, ax = gpplt.plot_distance_distribution(
             self.gpr, mean, covmat, density=True, show_added=show_added)
-        if output is None:
-            plt.savefig(os.path.join(self.plots_path,
-                                     "Distance_distribution_density.png"),
-                        dpi=300)
-        else:
-            plt.savefig(output)
-        plt.close(fig)
+        plt.savefig(output_2, dpi=output_dpi)
