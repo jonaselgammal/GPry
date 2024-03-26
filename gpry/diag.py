@@ -111,7 +111,9 @@ def diagnosis(runner):
         # Plot mean GP and acq func slices
         from gpry.plots import plot_slices
         if do_plot_slices:
-            plot_slices(runner.model, runner.gpr, runner.acquisition)
+            plot_slices(
+                runner.model, runner.gpr, runner.acquisition, reference=runner.reference
+            )
             import matplotlib.pyplot as plt
             plt.savefig(os.path.join(
                 runner.plots_path,

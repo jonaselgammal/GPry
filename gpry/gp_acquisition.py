@@ -1035,6 +1035,12 @@ class NORA(GenericGPAcquisition):
         params = list(model.parameterization.sampled_params())
         labels = model.parameterization.labels()
         labels_list = [labels.get(p) for p in params]
+        name_logp, label_logp = "logpost", r"\log(p)"
+        # Add posterior as derived parameter to be able to plot it
+        if y is not None and not np.isclose(max(y) - min(y), 0):
+            X = np.concatenate([X.T, [y]]).T
+            params.append(name_logp + "*")
+            labels_list.append(label_logp)
         mcsamples = MCSamples(
             samples=X,
             weights=w,
@@ -1045,10 +1051,6 @@ class NORA(GenericGPAcquisition):
             sampler="nested",
             ignore_rows=0,
         )
-        # Add posterior as derived parameter to be able to plot it
-        name_logp, label_logp = "logpost", r"\log(p)"
-        if y is not None and not np.isclose(max(y) - min(y), 0):
-            mcsamples.addDerived(y, name_logp, label=label_logp)
         return mcsamples
 
     def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):

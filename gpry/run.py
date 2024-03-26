@@ -366,6 +366,7 @@ class Runner():
         if not self.loaded_from_checkpoint:
             self.progress = Progress()
         # Prepare logpriorvolume to subtract
+        self.prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
         self.log_prior_volume = np.sum(
             np.log(self.prior_bounds[:, 1] - self.prior_bounds[:, 0])
         )

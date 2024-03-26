@@ -2,6 +2,10 @@
 Advanced example to using GPry
 ==================================
 
+.. warning::
+
+   This code for this example is probably outdated at the moment, but the basics are as presented. It will be updated soon.
+
 This example shows some of the ways in which it is possible to customize the
 Bayesian optimization loop. This will be done using a less standard
 (non-gaussian) likelihood and we will walk through the modules and their

@@ -39,7 +39,7 @@ def param_samples_for_slices(X, i, bounds, n=200):
     return X_slices
 
 
-def plot_slices(model, gpr, acquisition, X=None):
+def plot_slices(model, gpr, acquisition, X=None, reference=None):
     """
     Plots slices along parameter coordinates for a series `X` of given points (the GPR
     training set if not specified). For each coordinate, there is a slice per point,
@@ -71,6 +71,8 @@ def plot_slices(model, gpr, acquisition, X=None):
         (p, param_samples_for_slices(X, i, prior_bounds[i], n=200))
         for i, p in enumerate(params)
     )
+    if reference is not None:
+        reference = _prepare_reference(reference, model)
     cmap = matplotlib.colormaps["viridis"]
     for i, p in enumerate(params):
         for j, Xs_j in enumerate(Xs_for_plots[p]):
@@ -87,6 +89,18 @@ def plot_slices(model, gpr, acquisition, X=None):
             if label != p:
                 label = "$" + label + "$"
             axes[1, i].set_xlabel(label)
+            bounds = (reference or {}).get(p)
+        if bounds is not None:
+            for ax in axes[:, i]:
+                if len(bounds) == 5:
+                    ax.axvspan(
+                        bounds[0], bounds[4], facecolor="tab:blue", alpha=0.2, zorder=-99
+                    )
+                    ax.axvspan(
+                        bounds[1], bounds[3], facecolor="tab:blue", alpha=0.2, zorder=-99
+                    )
+                ax.axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
+
 
 
 def getdist_add_training(
