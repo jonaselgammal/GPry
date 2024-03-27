@@ -102,7 +102,6 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
                 ax.axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
-
 def getdist_add_training(
     getdist_plot,
     model,
@@ -206,7 +205,7 @@ def getdist_add_training(
             points_infinite = Xs_infinite[:, [i, j]]
             ax.scatter(*points_infinite.T, marker=marker_inf, s=20, c="k", alpha=0.3)
     # Colorbar
-    if len(Xs_finite) > 0:
+    if len(Xs_finite) > 0 and not np.isclose(min(ys_finite), max(ys_finite)):
         getdist_plot.fig.colorbar(
             cm.ScalarMappable(norm=norm, cmap=cmap),
             label=r"$\log(p)$",

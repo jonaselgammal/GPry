@@ -303,12 +303,14 @@ def shrink_bounds(bounds, samples, factor=1):
             f"{bounds.shape[0]} for bounds and {samples.shape[1]} for samples."
         )
     updated_bounds = np.empty(shape=bounds.shape, dtype=float)
+    # Find training bounds
     updated_bounds[:, 0] = samples.min(axis=0)
     updated_bounds[:, 1] = samples.max(axis=0)
-    if factor != 1:
-        centers = (updated_bounds[:, 1] + updated_bounds[:, 0]) / 2
-        updated_bounds[:, 0] = centers - factor * (centers - updated_bounds[:, 0])
-        updated_bounds[:, 1] = centers + factor * (updated_bounds[:, 1] - centers)
+    # Apply factor
+    width = updated_bounds[:, 1] - updated_bounds[:, 0]
+    Delta = (factor - 1) / 2 * width
+    updated_bounds[:, 0] -= Delta
+    updated_bounds[:, 1] += Delta
     # Restrict to prior
     updated_bounds[:, 0] = np.array([updated_bounds[:, 0], bounds[:, 0]]).max(axis=0)
     updated_bounds[:, 1] = np.array([updated_bounds[:, 1], bounds[:, 1]]).min(axis=0)

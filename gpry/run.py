@@ -1005,10 +1005,11 @@ class Runner():
         if mpi.is_main_process:
             # Raise error if the number of initial samples hasn't been reached
             if not finished:
-                raise RuntimeError("The desired number of finite initial "
-                                   "samples hasn't been reached. Try "
-                                   "increasing max_initial or decreasing the "
-                                   "volume of the prior")
+                raise RuntimeError(
+                    f"The desired number of finite initial samples ({n_still_needed}) "
+                    f"has not been reached after {len(X_init)} evaluations. Try "
+                    "increasing the amount of max initial evaluations `max_initial`, or "
+                    "decreasing the volume of the prior.")
             # Append the initial samples to the gpr
             with TimerCounter(self.gpr) as timer_fit:
                 self.gpr.fit(X_init, y_init)
