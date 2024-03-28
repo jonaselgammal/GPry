@@ -86,7 +86,7 @@ Both evaluations should produce similar numbers.
 Running a Monte Carlo sample on the final surrogate model
 ---------------------------------------------------------
 
-The ``Runner`` object can also run an MC sampler on the GP in order to extract marginalised quantities. To do that, we use the :py:meth:`generate_mc_sample <run.Runner.generate_mc_sample>` method of the ``Runner``. Leaving all option to their default, it will use an MCMC sampler (`the one of Cobaya <https://cobaya.readthedocs.io/en/latest/sampler_mcmc.html>`):
+The ``Runner`` object can also run an MC sampler on the GP in order to extract marginalised quantities. To do that, we use the :py:meth:`generate_mc_sample <run.Runner.generate_mc_sample>` method of the ``Runner``. Leaving all option to their default, it will use an MCMC sampler (`the one of Cobaya <https://cobaya.readthedocs.io/en/latest/sampler_mcmc.html>`_):
 
 .. code:: python
 

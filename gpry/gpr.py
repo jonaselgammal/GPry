@@ -22,7 +22,7 @@ from sklearn.utils.validation import check_array
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds
-from gpry.tools import check_random_state, get_Xnumber, nstd_of_1d_nstd
+from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd
 
 
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
@@ -1366,8 +1366,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
         assuming a :math:`\chi^2` distribution.
         """
-        return nstd_of_1d_nstd(n_sigma, n_dimensions)
-        return 0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions) ** 2
+        return delta_logp_of_1d_nstd(n_sigma, n_dimensions)
 
     # TO BE DEPRECATED
     @property

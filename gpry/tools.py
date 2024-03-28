@@ -24,8 +24,10 @@ def kl_norm(mean_0, cov_0, mean_1, cov_1):
     """
     cov_1_inv = np.linalg.inv(cov_1)
     dim = len(mean_0)
-    return 0.5 * (np.log(det(cov_1)) - np.log(det(cov_0)) - dim + tr(cov_1_inv @ cov_0) +
-                  (mean_1 - mean_0).T @ cov_1_inv @ (mean_1 - mean_0))
+    with NumpyErrorHandling(all="ignore") as _:
+        return 0.5 * (np.log(det(cov_1)) - np.log(det(cov_0)) - dim +
+                      tr(cov_1_inv @ cov_0) +
+                      (mean_1 - mean_0).T @ cov_1_inv @ (mean_1 - mean_0))
 
 
 def kl_mc(X, logq_func, logp=None, logp_func=None, weight=None):
@@ -94,6 +96,15 @@ def nstd_of_1d_nstd(n1, d):
     ``n1``-sigma interval.
     """
     return np.sqrt(chi2.isf(erfc(n1 / np.sqrt(2)), d))
+
+
+def delta_logp_of_1d_nstd(n1, d):
+    """
+    Difference between the peak/mean of a Gaussian log-probability and the level
+    corresponding to the credible (hyper)volume defined by the equivalent 1-dimensional
+    ``n1``-sigma interval in ``d`` dimensions.
+    """
+    return 0.5 * nstd_of_1d_nstd(n1, d)**2
 
 
 def credibility_of_nstd(n, d):

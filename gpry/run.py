@@ -686,9 +686,6 @@ class Runner():
                              "to each other. This may lead to numerical instability in "
                              "the GP. Consider increasing the number of initial points or "
                              "decreasing the volume of your prior.", level=1)
-            print("########################################")
-            print(np.sort(self.gpr.X_train, axis=0))
-            print("########################################")
             if mpi.is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
