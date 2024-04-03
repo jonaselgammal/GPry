@@ -171,4 +171,19 @@ def diagnosis(runner):
                 plt.close()
             except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError) as e:
                 print(f"COULD NOT DO TRIANGLE PLOT! Reason: {e}")
+
+            if runner.model.prior.d() == 2:
+                from gpry.plots import _plot_2d_model_acquisition_std
+                try:
+                    _plot_2d_model_acquisition_std(
+                        runner.gpr, runner.acquisition, last_points=None, res=200
+                    )
+                    plt.savefig(
+                        os.path.join(
+                            runner.plots_path,
+                            f"contours_iteration_{runner.current_iteration:03d}.png"))
+                    plt.close()
+                except ValueError as e:
+                    print(f"COULD NOT PLOT CONTOURS! Reason: {e}")
+
         print("**************************************************")
