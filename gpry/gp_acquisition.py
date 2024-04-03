@@ -21,7 +21,7 @@ import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
 from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
-    shrink_bounds, remove_0_weight_samples
+    shrink_bounds, remove_0_weight_samples, delta_logp_of_1d_nstd
 import gpry.ns_interfaces as nsint
 
 
@@ -565,10 +565,17 @@ class NORA(GenericGPAcquisition):
         Whether to use the initial prior sample from Nested Sampling for the ranking.
         Can be a large number of them in high dimension. Default: False.
 
-    shrink_with_factor: float, optional (default: False)
-        If defined as a float, the nested sampling runs are restricted to the hypercube
-        defined by the current (finite) GPR training set, enlarged by the given factor.
+    shrink_with_factor: float, optional (default: None)
+        If defined as a positive float, the nested sampling runs are restricted to the
+        hypercube defined by the current (finite) GPR training set, enlarged by the given
+        factor. If ``None``, no shrinking takes place.
         Useful if the NORA sampling phase gets stuck (generating initial live points).
+
+    shrink_1d_nstd: float, optional (default: None)
+        If defined as a positive float, the restriction of the nested sampler runs is
+        defined by the points in the training set corresponding to a significance
+        (assuming a Gaussian posterior) equivalent to this value in 1d standard
+        deviations.
 
     nlive_per_training: int
         live points per sample in the current training set.
@@ -623,6 +630,7 @@ class NORA(GenericGPAcquisition):
                  num_repeats_per_dim=5,
                  precision_criterion_target=0.01,
                  shrink_with_factor=None,
+                 shrink_1d_nstd=None,
                  nprior_per_nlive=10,
                  max_ncalls=None,
                  tmpdir=None,
@@ -676,6 +684,7 @@ class NORA(GenericGPAcquisition):
         #     self.polychord_settings.seed = \
         #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
         self.shrink_with_factor = shrink_with_factor
+        self.shrink_1d_nstd = shrink_1d_nstd
         # Prepare precision parameters
         self.nlive_per_training = nlive_per_training
         self.nlive_per_dim_max = nlive_per_dim_max
@@ -722,7 +731,7 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
-    def shrink_priors(self, gpr, factor=1):
+    def shrink_priors(self, gpr):
         """
         Adjusts given boundaries based on the infinities classifier cutoff value.
         Boundaries are only adjusted if the last samples towards the edges are below the
@@ -738,7 +747,15 @@ class NORA(GenericGPAcquisition):
         numpy.ndarray:
             A (d, 2) array representing the adjusted boundaries.
         """
-        return shrink_bounds(self.bounds, gpr.X_train, factor=factor)
+        if self.shrink_with_factor is None:
+            return self.bounds
+        X = gpr.X_train
+        if self.shrink_1d_nstd is not None:
+            X = X[
+                np.where(max(gpr.y_train) - gpr.y_train <
+                         delta_logp_of_1d_nstd(self.shrink_1d_nstd, gpr.d))
+            ]
+        return shrink_bounds(self.bounds, X, factor=self.shrink_with_factor)
 
     def do_MC_sample(self, gpr, random_state=None, sampler=None):
         """
@@ -748,10 +765,7 @@ class NORA(GenericGPAcquisition):
         X, y, sigma_y, weights
             May return None for any of y, sigma_y, weights
         """
-        if self.shrink_with_factor is None:
-            bounds = self.bounds
-        else:
-            bounds = self.shrink_priors(gpr, self.shrink_with_factor)
+        bounds = self.shrink_priors(gpr)
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
