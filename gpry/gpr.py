@@ -411,6 +411,28 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return (np.copy(self.X_train[-self.n_last_appended_finite:]),
                 np.copy(self.y_train[-self.n_last_appended_finite:]))
 
+    @property
+    def abs_threshold_finite(self):
+        """Current absolute threshold to decide if a target value is finite."""
+        if self.infinities_classifier is None:
+            return -np.info
+        return self.preprocessing_y.inverse_transform(
+            self.infinities_classifier.abs_threshold
+        )
+
+    @property
+    def scales(self):
+        """
+        Kernel scales as ``(output_scale, (length_scale_1, ...))`` in non-transformed
+        coordinates.
+        """
+        return (
+            self.preprocessing_y.inverse_transform_noise_level(
+                np.sqrt(self.kernel_.k1.constant_value)),
+            tuple(self.preprocessing_X.inverse_transform_scale(
+                self.kernel_.k2.length_scale))
+        )
+
     def is_finite(self, y=None):
         """
         Returns the classification of y (target) values as finite (True) or not, by
@@ -444,15 +466,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             return np.full(shape=len(y), fill_value=True)
         return self.infinities_classifier.predict(
             self.preprocessing_X.transform(X), validate=validate
-        )
-
-    @property
-    def abs_threshold_finite(self):
-        """Current absolute threshold to decide if a target value is finite."""
-        if self.infinities_classifier is None:
-            return -np.info
-        return self.preprocessing_y.inverse_transform(
-            self.infinities_classifier.abs_threshold
         )
 
     def set_random_state(self, random_state):

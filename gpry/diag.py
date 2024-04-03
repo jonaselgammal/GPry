@@ -170,5 +170,5 @@ def diagnosis(runner):
                         f"NORA_iteration_{runner.current_iteration:03d}.png"))
                 plt.close()
             except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError) as e:
-                print(f"COULD NOT PLOT! Reason: {e}")
+                print(f"COULD NOT DO TRIANGLE PLOT! Reason: {e}")
         print("**************************************************")

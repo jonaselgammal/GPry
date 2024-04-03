@@ -313,6 +313,28 @@ class Normalize_bounds:
         X = np.copy(X) if copy else X
         return (X * (self.bounds_max - self.bounds_min)) + self.bounds_min
 
+    def inverse_transform_scale(self, X, copy=True):
+        """Applies the inverse transformation to an unbounded scale (e.g. the kernel
+        length scale).
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_dims)
+            Transformed X-values between 0 and 1.
+
+        copy : bool, default: True
+            Return a copy if True, or transform in place if False.
+
+        Returns
+        -------
+        X : array-like, shape = (n_samples, n_dims)
+            Inverse transformed (original) values.
+        """
+        # if np.any(X < 0) or np.any(X > 1):
+        #     raise ValueError("all X must be between 0 and 1.")
+        X = np.copy(X) if copy else X
+        return (X * (self.bounds_max - self.bounds_min))
+
 
 class Pipeline_y:
     """

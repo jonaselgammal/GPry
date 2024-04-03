@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib.patches import FancyArrowPatch
 
 from gpry.gpr import GaussianProcessRegressor
 from gpry.tools import (
@@ -13,10 +14,12 @@ from gpry.tools import (
     nstd_of_1d_nstd,
     volume_sphere,
     gaussian_distance,
+    delta_logp_of_1d_nstd,
 )
 
 # Use latex labels when available
 plt.rcParams["text.usetex"] = True
+_plot_dist_fontsize = 7
 
 
 def param_samples_for_slices(X, i, bounds, n=200):
@@ -279,13 +282,13 @@ def plot_convergence(
                 "'evaluations' must be either 'total' or 'accepted'."
             ) from excpt
         if hasattr(cc, "limit"):
-            axes.axhline(cc.limit, ls="--", lw="0.5", c=color)
+            axes.axhline(cc.limit, ls="--", lw=1, c=color)
     if ax_labels:
         axes.set_xlabel(f"{evaluations} number of posterior evaluations")
         axes.set_ylabel("Value of convergence criterion")
     axes.set_yscale("log")
     axes.grid(axis="y")
-    axes.legend(loc=legend_loc)
+    axes.legend(loc=legend_loc, prop={"size": _plot_dist_fontsize})
     return fig, axes
 
 
@@ -384,10 +387,10 @@ def plot_points_distribution(
         nrows=2 + model.prior.d(),
         ncols=1,
         sharex=True,
+        layout="constrained",
         figsize=(min(4, 0.3 * len(X)), 1.5 * (2 + X.shape[1])),
         dpi=400,
     )
-    fig.set_tight_layout(True)
     i_eval = list(range(1, 1 + len(X)))
     # TOP: convergence plot
     try:
@@ -410,8 +413,45 @@ def plot_points_distribution(
         "cmap": colormap,
     }
     axes[1].scatter(i_eval, y, c=np.where(y_finite, y, np.inf), **kwargs_accepted)
+    # Gaussian contours
+    dashdotdotted = (0, (3, 5, 1, 5, 1, 5))
+    nsigmas_styles = {1: "-", 2: "--", 5: "-.", 10: ":", 20: dashdotdotted}
+    y_min_plot, y_max_plot = axes[1].get_ylim()
+    y_max = np.max(y)
+    for ns, nsls in nsigmas_styles.items():
+        y_ns = y_max - delta_logp_of_1d_nstd(ns, model.prior.d())
+        if y_ns > y_min_plot:
+            axes[1].axhline(
+                y_ns,
+                ls=nsls,
+                c="0.3",
+                lw=0.75,
+                zorder=-1,
+                label=f"{ns}-$\\sigma$ (Gauss. approx.)",
+            )
+    # Output scale
+    logp_scale, _ = gpr.scales
+    x_arrow = (lambda l: l[0] + 0.90 * (l[1] - l[0]))(axes[1].get_xlim())
+    centre = (y_max_plot + y_min_plot) / 2
+    scale_arrow_kwargs = {
+        "mutation_scale": 10,
+        "shrinkA": 0,
+        "shrinkB": 0,
+        "facecolor": "none",
+        "edgecolor": "r",
+        "arrowstyle": "<->",
+    }
+    logp_arrow = FancyArrowPatch(
+        (x_arrow, centre - logp_scale / 2),
+        (x_arrow, centre + logp_scale / 2),
+        label=f"Output scale = {logp_scale:.2g}",
+        **scale_arrow_kwargs,
+    )
+    axes[1].add_patch(logp_arrow)
+    axes[1].set_ylim(y_min_plot, y_max_plot)  # restore original limits
     axes[1].set_ylabel(r"$\log(p)$")
     axes[1].grid(axis="y")
+    axes[1].legend(loc="lower left", prop={"size": _plot_dist_fontsize})
     # NEXT: parameters plots
     for i, p in enumerate(model.parameterization.sampled_params()):
         label = model.parameterization.labels()[p]
@@ -445,13 +485,31 @@ def plot_points_distribution(
             ax.axhline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
         ax.set_ylabel("$" + label + "$" if label != p else p)
         ax.grid(axis="y")
+        # Length scales
+        y_min_plot, y_max_plot = ax.get_ylim()
+        length_scale = gpr.scales[1][i]
+        centre = (y_max_plot + y_min_plot) / 2
+        label = f"Length scale = {length_scale:.2g}"
+        if bounds is not None and len(bounds) == 5:
+            ratio_to_bounds = length_scale / (bounds[4] - bounds[0])
+            label += f" ({100 * ratio_to_bounds:.2f}\% of ref. bounds)"
+        length_arrow = FancyArrowPatch(
+            (x_arrow, centre - length_scale / 2),
+            (x_arrow, centre + length_scale / 2),
+            label=label,
+            **scale_arrow_kwargs,
+        )
+        ax.add_patch(length_arrow)
+        ax.set_ylim(y_min_plot, y_max_plot)  # restore original limits
+        ax.legend(loc="lower left", prop={"size": _plot_dist_fontsize})
+    # Format common x-axis
     axes[0].set_xlim(0, len(X) + 0.5)
     axes[-1].set_xlabel("Number of posterior evaluations")
     n_train = progress.data["n_total"][1]
     for ax in axes:
         ax.axvspan(0, n_train + 0.5, facecolor="0.85", zorder=-999)
         for n_iteration in progress.data["n_total"][1:]:
-            ax.axvline(n_iteration + 0.5, ls="--", c="0.75", zorder=-9)
+            ax.axvline(n_iteration + 0.5, ls="--", c="0.75", lw=0.75, zorder=-9)
     # TODO: make sure the x ticks are int
 
 
