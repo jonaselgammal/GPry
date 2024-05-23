@@ -47,6 +47,8 @@ class GenericGPAcquisition():
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
+                 shrink_1d_nstd=None,
+                 shrink_with_factor=None,
                  # DEPRECATED ON 13-09-2023:
                  zeta=None,
                  zeta_scaling=None,
@@ -95,6 +97,9 @@ class GenericGPAcquisition():
                 "acq_func should be an AcquisitionFunction or a str or dict "
                 f"specification. Got {acq_func}"
             )
+        # Shrinkage of prior bounds for acquisition
+        self.shrink_with_factor = shrink_with_factor
+        self.shrink_1d_nstd = shrink_1d_nstd
 
     def __call__(self, X, gpr, eval_gradient=False):
         """Returns the value of the acquision function at ``X`` given a ``gpr``."""
@@ -105,6 +110,33 @@ class GenericGPAcquisition():
         Method to query multiple points where the objective function
         shall be evaluated.
         """
+
+    def shrink_priors(self, gpr):
+        """
+        Adjusts given boundaries based on the infinities classifier cutoff value.
+        Boundaries are only adjusted if the last samples towards the edges are below the
+        cutoff.
+
+        Parameters
+        ----------
+        gpr: GaussianProcessRegressor
+            The current GPR instance.
+
+        Returns
+        -------
+        numpy.ndarray:
+            A (d, 2) array representing the adjusted boundaries.
+        """
+        if self.shrink_with_factor is None:
+            return self.bounds
+        X = gpr.X_train
+        if self.shrink_1d_nstd is not None:
+            X = X[
+                np.where(max(gpr.y_train) - gpr.y_train <
+                         delta_logp_of_1d_nstd(self.shrink_1d_nstd, gpr.d))
+            ]
+        return shrink_bounds(self.bounds, X, factor=self.shrink_with_factor)
+
 
 class BatchOptimizer(GenericGPAcquisition):
     """
@@ -191,6 +223,18 @@ class BatchOptimizer(GenericGPAcquisition):
     zeta: float, optional (default: None, uses zeta_scaling)
         Specifies the value of the zeta parameter directly.
 
+    shrink_with_factor: float, optional (default: None)
+        If defined as a positive float, the nested sampling runs are restricted to the
+        hypercube defined by the current (finite) GPR training set, enlarged by the given
+        factor. If ``None``, no shrinking takes place.
+        Useful if the NORA sampling phase gets stuck (generating initial live points).
+
+    shrink_1d_nstd: float, optional (default: None)
+        If defined as a positive float, the restriction of the nested sampler runs is
+        defined by the points in the training set corresponding to a significance
+        (assuming a Gaussian posterior) equivalent to this value in 1d standard
+        deviations.
+
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -220,7 +264,9 @@ class BatchOptimizer(GenericGPAcquisition):
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
+            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling,
+            shrink_1d_nstd=shrink_1d_nstd, shrink_with_factor=shrink_with_factor,
+        )
         self.proposer = proposer
         self.obj_func = None
 
@@ -625,19 +671,21 @@ class NORA(GenericGPAcquisition):
                  sampler=None,
                  mc_every="1d",
                  use_prior_sample=False,
+                 shrink_with_factor=None,
+                 shrink_1d_nstd=None,
                  nlive_per_training=3,
                  nlive_per_dim_max=25,
                  num_repeats_per_dim=5,
                  precision_criterion_target=0.01,
-                 shrink_with_factor=None,
-                 shrink_1d_nstd=None,
                  nprior_per_nlive=10,
                  max_ncalls=None,
                  tmpdir=None,
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
+            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling,
+            shrink_1d_nstd=shrink_1d_nstd, shrink_with_factor=shrink_with_factor,
+        )
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
@@ -657,7 +705,7 @@ class NORA(GenericGPAcquisition):
                 self.sampler = "ultranest"
         if self.sampler.lower() == "polychord":
             if self.sampler_interface is None:
-                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose + 3)
+                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
         elif self.sampler.lower() == "ultranest":
             try:
                 # pylint: disable=import-outside-toplevel
@@ -683,8 +731,6 @@ class NORA(GenericGPAcquisition):
         # if self.random_state is not None:
         #     self.polychord_settings.seed = \
         #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
-        self.shrink_with_factor = shrink_with_factor
-        self.shrink_1d_nstd = shrink_1d_nstd
         # Prepare precision parameters
         self.nlive_per_training = nlive_per_training
         self.nlive_per_dim_max = nlive_per_dim_max
@@ -730,32 +776,6 @@ class NORA(GenericGPAcquisition):
         """
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
-
-    def shrink_priors(self, gpr):
-        """
-        Adjusts given boundaries based on the infinities classifier cutoff value.
-        Boundaries are only adjusted if the last samples towards the edges are below the
-        cutoff.
-
-        Parameters
-        ----------
-        gpr: GaussianProcessRegressor
-            The current GPR instance.
-
-        Returns
-        -------
-        numpy.ndarray:
-            A (d, 2) array representing the adjusted boundaries.
-        """
-        if self.shrink_with_factor is None:
-            return self.bounds
-        X = gpr.X_train
-        if self.shrink_1d_nstd is not None:
-            X = X[
-                np.where(max(gpr.y_train) - gpr.y_train <
-                         delta_logp_of_1d_nstd(self.shrink_1d_nstd, gpr.d))
-            ]
-        return shrink_bounds(self.bounds, X, factor=self.shrink_with_factor)
 
     def do_MC_sample(self, gpr, random_state=None, sampler=None):
         """
@@ -1143,9 +1163,11 @@ class NORA(GenericGPAcquisition):
             start_rank = time()
         # TODO: still testing in realistic scenarios whether it is faster to rank in
         #       parallel (doesn't matter a lot, since it's way faster than NS anyway)
-        # merged_pool = self._rank(n_points, gpr)
+        # merged_pool = self._rank(this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
+        args = (this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
+        method, merge_method = "bulk", "bulk"
         merged_pool = self._parallel_rank_and_merge(
-            this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method="auto")
+            *args, method=method, merge_method=merge_method)
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
         with np.errstate(divide='ignore'):
@@ -1177,24 +1199,11 @@ class NORA(GenericGPAcquisition):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
         return this_X, this_y, this_sigma_y, this_acq
 
-    # Non-parallel version of the ranking of the MC points
-    def _rank(self, n_points, gpr):
-        if mpi.is_main_process:
-            self.pool = RankedPool(
-                n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
-                verbose=self.verbose - 3)
-            with np.errstate(divide='ignore'):
-                self.pool.add(
-                    self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc,
-                    method="single sort acq")
-        mpi.share_attr(self, "pool")
-        return self.pool
-
     # Parallel version of the ranking of the MC points
     def _parallel_rank_and_merge(
-            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None):
+            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None,
+            merge_method=None):
         # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
-        merge_method = None
         if method.lower() == "auto":
             method = "bulk" if gpr.d <= 4 else "single sort acq"
             merge_method = "bulk"
@@ -1370,7 +1379,7 @@ class RankedPool():
             Acquisition function values (unconditioned). Will be computed if not passed.
 
         method: {"single", "single sort acq", "single sort y", "bulk"}
-            Uses the one-by-one algorithm ("single", with pre-sorting accorting to X if
+            Uses the one-by-one algorithm ("single", with pre-sorting according to X if
             "single sort X"), or the bulk algorithm.
         """
         if len(X.shape) < 2:

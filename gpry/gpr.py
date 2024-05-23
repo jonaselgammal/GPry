@@ -301,8 +301,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     f"supported as standard kernels. Got '{kernel_name}'."
                 ) from excpt
             # Build kernel
-            kernel = C(1.0, [0.001, 10000]) \
-                * length_corr_kernel([0.01] * self.d, "dynamic",
+            kernel = C(1.0, [0.001, 1e3**2]) \
+                * length_corr_kernel([0.01] * self.d, [0.001, 1],
                                      prior_bounds=self.bounds_, **kernel_args)
         sk_GaussianProcessRegressor.__init__(
             self, kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
@@ -427,7 +427,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         coordinates.
         """
         return (
-            self.preprocessing_y.inverse_transform_noise_level(
+            self.preprocessing_y.inverse_transform_scale(
                 np.sqrt(self.kernel_.k1.constant_value)),
             tuple(self.preprocessing_X.inverse_transform_scale(
                 self.kernel_.k2.length_scale))
@@ -565,7 +565,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             if self.preprocessing_y is None:
                 diff_threshold_ = np.copy(self.diff_threshold)
             else:
-                diff_threshold_ = self.preprocessing_y.transform_noise_level(
+                diff_threshold_ = self.preprocessing_y.transform_scale(
                     self.diff_threshold
                 )
             finite_last_appended = self.infinities_classifier.fit(
@@ -613,7 +613,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 if not fit:
                     if self.preprocessing_y is not None:
                         noise_level_transformed = self.preprocessing_y.\
-                            transform_noise_level(noise_level)
+                            transform_scale(noise_level)
                     else:
                         noise_level_transformed = noise_level
                     self.noise_level_ = np.append(self.noise_level_,
@@ -630,7 +630,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 if not fit:
                     if self.preprocessing_y is not None:
                         noise_level_transformed = self.preprocessing_y.\
-                            transform_noise_level(noise_level)
+                            transform_scale(noise_level)
                     else:
                         noise_level_transformed = noise_level
                     self.noise_level_ = noise_level_transformed
@@ -647,7 +647,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                               "cause unwanted behaviour.")
                 if self.preprocessing_y is not None:
                     noise_level_transformed = \
-                        self.preprocessing_y.transform_noise_level(noise_level)
+                        self.preprocessing_y.transform_scale(noise_level)
                 else:
                     noise_level_transformed = noise_level
                 self.noise_level_ = noise_level_transformed
@@ -808,7 +808,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     diff_threshold_ = self.diff_threshold
                 else:
                     y_ = self.preprocessing_y.transform(y)
-                    diff_threshold_ = self.preprocessing_y.transform_noise_level(
+                    diff_threshold_ = self.preprocessing_y.transform_scale(
                         self.diff_threshold
                     )
                 finite = self.infinities_classifier.fit(X_, y_, diff_threshold_)
@@ -838,7 +838,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.preprocessing_y.fit(X, y)
             self.y_train_ = self.preprocessing_y.transform(y)
             self.y_train_all_ = self.preprocessing_y.transform(self.y_train_all)
-            self.noise_level_ = self.preprocessing_y.transform_noise_level(noise_level)
+            self.noise_level_ = self.preprocessing_y.transform_scale(noise_level)
         self.alpha = self.noise_level_**2.
         if self.infinities_classifier is not None:
             # If preprocessors fit, the SVM needs to be refit (acts in the transf. space)
@@ -847,7 +847,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             if self.preprocessing_y is None:
                 diff_threshold_ = self.diff_threshold
             else:
-                diff_threshold_ = self.preprocessing_y.transform_noise_level(
+                diff_threshold_ = self.preprocessing_y.transform_scale(
                     self.diff_threshold
                 )
             _ = self.infinities_classifier.fit(
@@ -1108,11 +1108,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         # Predict based on GP posterior
         K_trans = self.kernel_(X, self.X_train_)
-        y_mean = K_trans.dot(self.alpha_)    # Line 4 (y_mean = f_star)
+        y_mean_ = K_trans.dot(self.alpha_)    # Line 4 (y_mean = f_star)
         # Undo normalization
-        if self.preprocessing_y is not None:
-            y_mean = self.preprocessing_y.inverse_transform(y_mean)
+        if self.preprocessing_y is None:
+            y_mean = y_mean_
+        else:
+            y_mean = self.preprocessing_y.inverse_transform(y_mean_)
         # Put together with SVM predictions
+        clip_factor = 0.1
+        y_mean = np.clip(y_mean, None, (1 + clip_factor) * max(self.y_train) - clip_factor * min(self.y_train))
         if self.infinities_classifier is not None:
             y_mean_full[finite] = y_mean
             y_mean = y_mean_full
@@ -1141,7 +1145,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Undo normalization
             if self.preprocessing_y is not None:
                 y_std = self.preprocessing_y.\
-                    inverse_transform_noise_level(y_std)
+                    inverse_transform_scale(y_std)
             # Add infinite values
             if self.infinities_classifier is not None:
                 y_std_full[finite] = y_std
@@ -1156,7 +1160,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Undo normalization
             if self.preprocessing_y is not None:
                 grad_mean = self.preprocessing_y.\
-                    inverse_transform_noise_level(grad_mean)
+                    inverse_transform_scale(grad_mean)
             # Include infinite values
             if self.infinities_classifier is not None:
                 grad_mean_full[finite] = grad_mean
@@ -1172,9 +1176,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     if self.preprocessing_y is not None:
                         # Apply inverse transformation twice
                         grad_std = self.preprocessing_y.\
-                            inverse_transform_noise_level(grad_std)
+                            inverse_transform_scale(grad_std)
                         grad_std = self.preprocessing_y.\
-                            inverse_transform_noise_level(grad_std)
+                            inverse_transform_scale(grad_std)
                     # Include infinite values
                     if self.infinities_classifier is not None:
                         grad_std_full[finite] = grad_std
@@ -1259,7 +1263,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Undo normalization
         if self.preprocessing_y is not None:
             y_std = self.preprocessing_y.\
-                inverse_transform_noise_level(y_std)
+                inverse_transform_scale(y_std)
         # Add infinite values
         if self.infinities_classifier is not None:
             y_std_full[finite] = y_std

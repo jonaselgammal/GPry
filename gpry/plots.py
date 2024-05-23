@@ -105,6 +105,84 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
                 ax.axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
+def plot_slices_reference(model, gpr, X, truth=True, reference=None):
+    """
+    Plots slices of the gpr model and true log-posterior (if ``truth=True``) along
+    parameter coordinates for a given point ``X``, leaving all coordinates of that point
+    fixed except for the one being sliced.
+    """
+    params = list(model.parameterization.sampled_params())
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=len(params),
+        sharex="col",
+        layout="constrained",
+        figsize=(4 * len(params), 2),
+        dpi=200,
+    )
+    prior_bounds = model.prior.bounds(confidence_for_unbounded=0.999)
+    if X is None:
+        if reference is None:
+            raise ValueError("Needs at least a reference point or a reference sample.")
+    X_array = np.array([X[p] for p in model.parameterization.sampled_params()])
+    y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
+    if truth:
+        y_truth_centre = model.logpost(X_array)
+    Xs_for_plots, ys_gpr_for_plot, sigmas_gpr_for_plot, ys_truth_for_plot = {}, {}, {}, {}
+    for i, p in enumerate(params):
+        Xs_for_plots[p] = param_samples_for_slices([X_array], i, prior_bounds[i], n=200)[0]
+        ys_gpr_for_plot[p], sigmas_gpr_for_plot[p] = gpr.predict(Xs_for_plots[p], return_std=True)
+        if truth:
+            ys_truth_for_plot[p] = np.array([model.logpost(x) for x in Xs_for_plots[p]])
+    # Training set referenced to X and div by X, for distance-based transparency
+    X_train_diff = (gpr.X_train - X_array) / X_array
+    if reference is not None:
+        reference = _prepare_reference(reference, model)
+    for i, p in enumerate(params):
+        axes[i].fill_between(Xs_for_plots[p][:, i], ys_gpr_for_plot[p] - 2 * sigmas_gpr_for_plot[p], ys_gpr_for_plot[p] + 2 * sigmas_gpr_for_plot[p], color="0.5", alpha=0.25, edgecolor="none")
+        axes[i].fill_between(Xs_for_plots[p][:, i], ys_gpr_for_plot[p] - 1 * sigmas_gpr_for_plot[p], ys_gpr_for_plot[p] + 1 * sigmas_gpr_for_plot[p], color="0.5", alpha=0.25, edgecolor="none")
+        if truth:
+            axes[i].plot(Xs_for_plots[p][:, i], ys_truth_for_plot[p], ls="--")
+            axes[i].scatter(X[p], y_truth_centre, marker="*")
+        axes[i].set_ylabel(r"$\log(p)$")
+        label = model.parameterization.labels()[p]
+        if label != p:
+            label = "$" + label + "$"
+        axes[i].set_xlabel(label)
+        # If there is an infinities classifier, use if for the lower bound on y:
+        diff_min_logp = getattr(gpr, "diff_threshold", None)
+        if diff_min_logp is not None:
+            try:
+                max_y = max(ys_gpr_for_plot[p])
+                upper_y = max_y
+                if truth:
+                    upper_y = max(max_y, max(ys_truth_for_plot[p]))
+                axes[i].set_ylim(
+                    max_y - 1.05 * diff_min_logp, upper_y + 0.05 * diff_min_logp
+                )
+            except ValueError as e:
+                print(f"ERROR when setting y-lims for '{p}': max(y) was {max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, upper bound was {upper_y}, MSG was {e}")
+                pass
+        # Add training set
+        dists = np.sqrt(
+            np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1)
+        )
+        dists_relative = dists / max(dists)
+        axes[i].scatter(
+            gpr.X_train[:, i], gpr.y_train, marker=".", alpha=1 - dists_relative, zorder=-9
+        )
+        bounds = (reference or {}).get(p)
+        if bounds is not None:
+            if len(bounds) == 5:
+                axes[i].axvspan(
+                    bounds[0], bounds[4], facecolor="tab:blue", alpha=0.2, zorder=-99
+                )
+                axes[i].axvspan(
+                    bounds[1], bounds[3], facecolor="tab:blue", alpha=0.2, zorder=-99
+                )
+                axes[i].axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
+
+
 def getdist_add_training(
     getdist_plot,
     model,
@@ -190,6 +268,18 @@ def getdist_add_training(
         norm = matplotlib.colors.BoundaryNorm(color_bounds, Ncolors)
     # Add points
     for (i, j), ax in ax_dict.items():
+        # 1st -inf points, so the are displayed in the background of the finite ones.
+        # and we give them low zorder anyway, so that they lay behind the contours
+        if len(Xs_infinite) > 0:
+            points_infinite = Xs_infinite[:, [i, j]]
+            ax.scatter(
+                *points_infinite.T, marker=marker_inf, s=20, c="k", alpha=0.3, zorder=-99
+            )
+        if len(Xs_finite) > 0:
+            points_finite = Xs_finite[:, [i, j]]
+            sc = ax.scatter(
+                *points_finite.T, marker=marker, c=norm(ys_finite), alpha=0.3, cmap=cmap
+            )
         if highlight_last and len(Xs_last) > 0:
             points_last = Xs_last[:, [i, j]]
             ax.scatter(
@@ -199,14 +289,6 @@ def getdist_add_training(
                 edgecolor="r",
                 lw=0.5,
             )
-        if len(Xs_finite) > 0:
-            points_finite = Xs_finite[:, [i, j]]
-            sc = ax.scatter(
-                *points_finite.T, marker=marker, c=norm(ys_finite), alpha=0.3, cmap=cmap
-            )
-        if len(Xs_infinite) > 0:
-            points_infinite = Xs_infinite[:, [i, j]]
-            ax.scatter(*points_infinite.T, marker=marker_inf, s=20, c="k", alpha=0.3)
     # Colorbar
     if len(Xs_finite) > 0 and not np.isclose(min(ys_finite), max(ys_finite)):
         getdist_plot.fig.colorbar(

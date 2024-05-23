@@ -252,7 +252,9 @@ class GaussianKL(ConvergenceCriterion):
         self.mean = None
         self.cov = None
         self.limit = params.get("limit", 1e-2)
-        self.limit_times = params.get("limit_times", 2)
+        d = len(self.prior_bounds)
+        # Needs to at least encompass 2 full MC samples -- TODO: fix in run.py at init
+        self.limit_times = params.get("limit_times", d)
         self.convergence_policy = params.get("policy", "and")
         self.values = []
         self.thres = []
@@ -271,7 +273,7 @@ class GaussianKL(ConvergenceCriterion):
         # We'll some hight MCMC temperature, to get the tails right
         self.temperature = 2
         # Prepare Cobaya's input
-        self.paramnames = [f"x_{i + 1}" for i in range(len(self.prior_bounds))]
+        self.paramnames = [f"x_{i + 1}" for i in range(d)]
         self.cobaya_input = None
         # Save last sample
         self._last_info = {}

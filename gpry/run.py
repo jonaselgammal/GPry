@@ -297,17 +297,24 @@ class Runner():
                 self.log(
                     "No options dict found. Defaulting to standard parameters.", level=3)
                 options = {}
-            self.n_initial = options.get("n_initial", 3 * self.d)
+            self.n_initial = get_Xnumber(
+                options.get("n_initial", 3 * self.d), "d", self.d, int, "n_initial",
+            )
+            self.n_initial = max(self.n_initial, 2)  # we need at least 2 points to start
             self.max_initial = options.get("max_initial", 10 * self.d * self.n_initial)
             self.max_total = options.get("max_total", int(70 * self.d**1.5))
             self.max_finite = options.get("max_finite", self.max_total)
-            self.n_points_per_acq = options.get("n_points_per_acq", min(mpi.SIZE, self.d))
+            self.n_points_per_acq = get_Xnumber(
+                options.get("n_points_per_acq", min(mpi.SIZE, self.d)),
+                 "d", self.d, int, "n_points_per_acq",
+            )
             self.n_resamples_before_giveup = options.get(
-                "n_resamples_before_giveup", 2)
+                "n_resamples_before_giveup", 2
+            )
             self.resamples = 0
             if options.get("fit_full_every"):
                 self.fit_full_every = get_Xnumber(
-                    options.get("fit_full_every"), "d", self.d, int, "fit_full_every"
+                    options.get("fit_full_every"), "d", self.d, int, "fit_full_every",
                 )
             else:
                 self.fit_full_every = max(int(2 * np.sqrt(self.d)), 1)
@@ -475,7 +482,7 @@ class Runner():
     def _construct_initial_proposer(self, initial_proposer):
         """Constructs or passes the initial proposer."""
         if isinstance(initial_proposer, InitialPointProposer):
-            self.intial_proposer = initial_proposer
+            self.initial_proposer = initial_proposer
         elif isinstance(initial_proposer, (Mapping, str)):
             if isinstance(initial_proposer, str):
                 initial_proposer = {initial_proposer: {}}
@@ -955,6 +962,9 @@ class Runner():
         # and according to the distribution of the prior.
         mpi.sync_processes()  # to sync the timer
         with Timer() as timer_truth:
+            if mpi.is_main_process:
+                from tqdm import tqdm
+                bar = tqdm(total=n_still_needed)
             for i in range(n_iterations_before_giving_up):
                 X_init_loop = np.empty((0, self.d))
                 y_init_loop = np.empty(0)
@@ -979,8 +989,8 @@ class Runner():
                     y_init = np.concatenate([y_init, np.concatenate(all_posts)])
                     # Only finite values contribute to the number of initial samples
                     n_finite_new = sum(is_finite(max(y_init) - y_init))
-                    for i in range(len(y_init)):
-                        print(max(y_init), y_init[i], self.gpr.diff_threshold, is_finite(max(y_init) - y_init)[i])
+                    # NB: tqdm.update takes *increments*
+                    bar.update(n_finite_new - bar.n)
                     # Break loop if the desired number of initial samples is reached
                     finished = n_finite_new >= n_still_needed
                 if mpi.multiple_processes:
@@ -990,6 +1000,8 @@ class Runner():
                 else:
                     # TODO: maybe re-fit SVM to shrink initial sample region
                     pass
+        if mpi.is_main_process:
+            bar.close()
         if self.progress and mpi.is_main_process:
             self.progress.add_truth(timer_truth.time, len(X_init))
         if mpi.is_main_process:
@@ -1009,7 +1021,7 @@ class Runner():
                     "decreasing the volume of the prior.")
             # Append the initial samples to the gpr
             with TimerCounter(self.gpr) as timer_fit:
-                self.gpr.fit(X_init, y_init)
+                self.gpr.append_to_data(X_init, y_init, fit=True, simplified_fit=False)
             self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
                      " points, including GPR hyperparameters. "

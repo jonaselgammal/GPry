@@ -40,5 +40,6 @@ setup(
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9'
     ],
-    install_requires=['cobaya>=3.2.2', 'scikit-learn', 'dill', 'mpi4py']
+    install_requires=['cobaya>=3.2.2', 'scikit-learn', 'dill', 'mpi4py', 'tqdm']
+    # docs requires: sphinx, sphinx-rtd-theme
 )

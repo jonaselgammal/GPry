@@ -362,18 +362,19 @@ class Pipeline_y:
                     ...
                     return self
 
-                def transform_noise_level(self, noise_level):
-                    # This method should transform the noise level of
-                    # the training data such that it represents the noise level
+                def transform_scale(self, scale):
+                    # This method should transform a scale-like quantity
+                    # (e.g. the noise level of the training data) such that
+                    # it represents the corresponding scale
                     # of the transformed data.
                     ...
-                    return transformed_noise_level
+                    return transformed_scale
 
-                def inverse_transform_noise_level(self, noise_level):
+                def inverse_transform_scale(self, scale):
                     # This method should invert the transformation applied by
-                    # 'transform_noise_level'.
+                    # 'transform_scale'.
                     ...
-                    return inverse_transformed_noise_level
+                    return inverse_transformed_scale
 
                 def transform(self, y, copy=True):
                     # This method transforms the y-data. For this the fit
@@ -413,26 +414,26 @@ class Pipeline_y:
         self.fitted = True
         return self
 
-    def transform_noise_level(self, noise_level):
+    def transform_scale(self, scale):
         """
         Transforms the noise level through the pipeline
         """
-        noise_level_transformed = np.copy(noise_level)
+        scale_transformed = np.copy(scale)
         for preprocessor in self.preprocessors:
-            noise_level_transformed = \
-                preprocessor.transform_noise_level(noise_level_transformed)
-        return noise_level_transformed
+            scale_transformed = \
+                preprocessor.transform_noise_level(scale_transformed)
+        return scale_transformed
 
-    def inverse_transform_noise_level(self, noise_level):
+    def inverse_transform_scale(self, scale):
         """
         Inverse transforms the noise level through the pipeline
         """
-        noise_level_transformed = np.copy(noise_level)
+        scale_transformed = np.copy(scale)
         for preprocessor in reversed(self.preprocessors):
-            noise_level_transformed = \
-                preprocessor.inverse_transform_noise_level(
-                    noise_level_transformed)
-        return noise_level_transformed
+            scale_transformed = \
+                preprocessor.inverse_transform_scale(
+                    scale_transformed)
+        return scale_transformed
 
     def transform(self, y, copy=True):
         """
@@ -504,17 +505,17 @@ class Normalize_y:
         self.mean_ = np.mean(y)
         self.std_ = np.std(y)
 
-    def transform_noise_level(self, noise_level, copy=True):
+    def transform_scale(self, scale, copy=True):
         if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
-        noise_level = np.copy(noise_level) if copy else noise_level
-        return noise_level / self.std_  # Divide by the standard deviation
+        scale = np.copy(scale) if copy else scale
+        return scale / self.std_  # Divide by the standard deviation
 
-    def inverse_transform_noise_level(self, noise_level, copy=True):
+    def inverse_transform_scale(self, scale, copy=True):
         if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
-        noise_level = np.copy(noise_level) if copy else noise_level
-        return noise_level * self.std_  # Multiply by the standard deviation
+        scale = np.copy(scale) if copy else scale
+        return scale * self.std_  # Multiply by the standard deviation
 
     def transform(self, y, copy=True):
         """Transforms y.

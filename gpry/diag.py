@@ -90,9 +90,11 @@ def diagnosis(runner):
         # PLOTS ##########################################################################
         # Create the plots path, just in case it want not there yet
         from gpry.io import create_path
+        import matplotlib.pyplot as plt
         create_path(runner.plots_path)
         # Get the "reference" MC sample from runner.reference, if set.
         reference = getattr(runner, "reference", None)
+        fiducial = getattr(runner, "fiducial", None)
 
         # Plot points distribution and convergence criterion
         from gpry.plots import plot_points_distribution
@@ -104,21 +106,31 @@ def diagnosis(runner):
         except ValueError as e:
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:
-            import matplotlib.pyplot as plt
             plt.savefig(os.path.join(runner.plots_path, "points_dist.svg"))
-            plt.close()
+        plt.close()
 
         # Plot mean GP and acq func slices
-        from gpry.plots import plot_slices
+        from gpry.plots import plot_slices, plot_slices_reference
         if do_plot_slices:
             plot_slices(
-                runner.model, runner.gpr, runner.acquisition, reference=runner.reference
+                runner.model, runner.gpr, runner.acquisition, reference=reference
             )
-            import matplotlib.pyplot as plt
             plt.savefig(os.path.join(
                 runner.plots_path,
                 f"slices_iteration_{runner.current_iteration:03d}.png")
             )
+            plt.close()
+            try:
+                plot_slices_reference(
+                    runner.model, runner.gpr, fiducial, truth=True, reference=reference,
+                )
+                plt.savefig(os.path.join(
+                    runner.plots_path,
+                    f"comparison_slices_iteration_{runner.current_iteration:03d}.png")
+                )
+            except:
+                raise
+                pass
             plt.close()
 
         # Plot current MC sample (if available)
@@ -129,6 +141,7 @@ def diagnosis(runner):
         ):
             from getdist import plots
             from getdist.mcsamples import MCSamplesError
+            from getdist.densities import DensitiesError
             mcsamples = runner.acquisition.last_MC_sample_getdist(runner.model)
             to_plot = [mcsamples]
             to_plot_params = list(runner.model.parameterization.sampled_params())
@@ -138,7 +151,12 @@ def diagnosis(runner):
             if reference is not None:
                 if reference.loglikes is not None:
                     try:
-                        reference.addDerived(-reference.loglikes, name_logp, label=label_logp)
+                        # PROBLEM: loglikes will be -chi2 if obtained with PolyChord and
+                        # not corrected, but we cannot assume anything here: it may have
+                        # been corrected already
+                        reference.addDerived(
+                            -reference.loglikes, name_logp, label=label_logp,
+                        )
                     except ValueError:  # already added
                         pass
                 else:
@@ -163,13 +181,12 @@ def diagnosis(runner):
                 except Exception as e:
                     raise
                     print(f"FAILED ADDING TRAINING POINTS! Error msg: {e}")
-                import matplotlib.pyplot as plt
                 plt.savefig(
                     os.path.join(
                         runner.plots_path,
                         f"NORA_iteration_{runner.current_iteration:03d}.png"))
                 plt.close()
-            except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError) as e:
+            except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError, DensitiesError) as e:
                 print(f"COULD NOT DO TRIANGLE PLOT! Reason: {e}")
 
             if runner.model.prior.d() == 2:

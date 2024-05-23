@@ -156,7 +156,8 @@ class InterfacePolyChord:
             self.last_polychord_output.make_paramnames_files(param_names)
             samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
             self.X_MC = samples_T[2:].T
-            self.y_MC = -0.5 * samples_T[1]  # this one stores chi2
+            # PolyChord stores chi**2 in 2nd col (contrary to getdist: -logp)
+            self.y_MC = -0.5 * samples_T[1]
             self.w_MC = samples_T[0]
         return self.X_MC, self.y_MC, self.w_MC
 
