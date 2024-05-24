@@ -18,12 +18,13 @@ pd.set_option("display.max_columns", 500)
 pd.set_option("expand_frame_repr", False)
 
 
+do_check_inf_classifier = True
 do_plot_mc = True
-do_plot_slices = False
+do_plot_slices = True
 
 
 def diagnosis(runner):
-    if mpi.is_main_process:
+    if mpi.is_main_process and do_check_inf_classifier and runner.gpr.infinities_classifier:
         print("**************************************************")
         print("Traning set (full):")
         points = pd.DataFrame(
@@ -99,6 +100,8 @@ def diagnosis(runner):
         # Plot points distribution and convergence criterion
         from gpry.plots import plot_points_distribution
         try:
+            if runner.acquisition.is_last_MC_reweighted:
+                raise ValueError()
             plot_points_distribution(
                 runner.model, runner.gpr, runner.convergence,
                 runner.progress,
@@ -156,6 +159,7 @@ def diagnosis(runner):
                         # been corrected already
                         reference.addDerived(
                             -reference.loglikes, name_logp, label=label_logp,
+#                            range=(-np.inf, max(-reference.loglikes)),
                         )
                     except ValueError:  # already added
                         pass
