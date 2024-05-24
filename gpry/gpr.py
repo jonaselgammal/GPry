@@ -481,7 +481,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 random_state, convert_to_random_state=True)
 
     def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False,
-                       hyperparameter_bounds=None):
+                       ignore_classifier=False, hyperparameter_bounds=None):
         r"""Append newly acquired data to the GP Model and updates it.
 
         Here updating refers to the re-calculation of
@@ -524,12 +524,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         fit : Bool, optional (default: True)
             Whether the model is refit to new :math:`\theta`-parameters
             or just updated using the blockwise matrix-inversion lemma.
-            NB: if used, the SVM classifier is always fit regardless of this arg.
+            NB: if used, the SVM classifier is always fit regardless of this arg
+            (to disable its update, see ``ignore_classifier``).
 
         simplified_fit : Bool, optional (default: False)
             If True and ``fit=True``, hyperparameters are only optimised from the last
             optimum (otherwise, a number of optimisation processes are also started from
             samples of the hyperparameters' priors).
+
+        ignore_classifier : Bool (default: False)
+            Does not take into account the infinities classifier when adding points.
+            Can produce ill-defined models. Use for small augmentation (e.g. NORA) only.
 
         Returns
         -------
@@ -561,7 +566,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             y_ = self.preprocessing_y.transform(y)
             self.y_train_all_ = np.append(self.y_train_all_, y_, axis=0)
         # Re-fit the SVM with the new data and select only finite points for GPR
-        if self.infinities_classifier is not None:
+        if self.infinities_classifier is not None and not ignore_classifier:
             if self.preprocessing_y is None:
                 diff_threshold_ = np.copy(self.diff_threshold)
             else:

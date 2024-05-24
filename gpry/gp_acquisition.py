@@ -525,10 +525,13 @@ class BatchOptimizer(GenericGPAcquisition):
                         # Add lie to GP
                         gpr_.append_to_data(
                             X_opt, y_lie, noise_level=lie_noise_level,
-                            fit=False)
+                            fit=False, ignore_classifier=True,
+                        )
                     else:
                         # Add lie to GP
-                        gpr_.append_to_data(X_opt, y_lie, fit=False)
+                        gpr_.append_to_data(
+                            X_opt, y_lie, fit=False, ignore_classifier=True
+                        )
                 # Append the points found to the array
                 X_opts[ipoint] = X_opt[0]
                 y_lies[ipoint] = y_lie[0]
@@ -1203,6 +1206,8 @@ class NORA(GenericGPAcquisition):
     def _parallel_rank_and_merge(
             self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None,
             merge_method=None):
+        if method is None:
+            method = "auto"
         # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
         if method.lower() == "auto":
             method = "bulk" if gpr.d <= 4 else "single sort acq"
@@ -1623,7 +1628,9 @@ class RankedPool():
             return self._gpr
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
         self.gpr_cond[i] = deepcopy(self._gpr)
-        self.gpr_cond[i].append_to_data(self.X[:i + 1], self.y[:i + 1], fit=False)
+        self.gpr_cond[i].append_to_data(
+            self.X[:i + 1], self.y[:i + 1], fit=False, ignore_classifier=True
+        )
         self.cache_counter += 1
         return self.gpr_cond[i]
 
