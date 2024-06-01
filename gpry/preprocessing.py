@@ -16,6 +16,7 @@ custom class. How to do that for X- and y-preprocessors is explained in the
 import numpy as np
 import warnings
 from scipy.linalg import eigh
+from gpry.tools import delta_logp_of_1d_nstd
 
 
 class Pipeline_X:
@@ -558,3 +559,43 @@ class Normalize_y:
             raise TypeError("mean_ and std_ have not been fit before")
         y = np.copy(y_transformed) if copy else y_transformed
         return (y * self.std_) + self.mean_
+
+
+class NormalizeChi2_y(Normalize_y):
+    """
+    Transforms y-values (target values) such that they are centered around the Gaussian
+    1-sigma value with respect to the largest logp, so that the standard deviation is the
+    distance between the maximum and the value that defines that 0.
+
+    Attributes
+    ----------
+    mean_ : float
+        Mean of the y-values
+
+    std_ : float
+        Standard deviation of the y-values
+
+    **Methods:**
+
+    .. autosummary::
+        :toctree: stubs
+
+        transform
+        inverse_transform
+    """
+
+    def fit(self, X, y):
+        """
+        Calculates the mean and standard deviation of y
+        and saves them.
+
+        Parameters
+        ----------
+        y : array-like, shape = (n_samples,)
+            y-values (target values) that are used to
+            determine the mean and std.
+        """
+        dim = np.atleast_2d(X).shape[1]
+        delta_y = delta_logp_of_1d_nstd(1, dim)
+        self.mean_ = max(y) - delta_y
+        self.std_ = delta_y
