@@ -384,6 +384,7 @@ class Runner():
         self.mean, self.cov = None, None
         self.last_mc_surr_info, self.last_mc_sampler = None, None
         self._last_mc_samples = None
+        self._is_model_saved = False
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -635,13 +636,17 @@ class Runner():
         self.model, self.gpr, self.acquisition, self.convergence, self.options, \
             self.progress = read_checkpoint(self.checkpoint, model=model)
 
-    def save_checkpoint(self):
+    def save_checkpoint(self, update_model=False):
         """
         Saves checkpoint files to be able to resume a run or save the results for
         further processing.
         """
         if mpi.is_main_process:
-            save_checkpoint(self.checkpoint, self.model, self.gpr, self.acquisition,
+            to_save_model = None
+            if update_model or not self._is_model_saved:
+                to_save_model = self.model
+                self._is_model_saved = True
+            save_checkpoint(self.checkpoint, to_save_model, self.gpr, self.acquisition,
                             self.convergence, self.options, self.progress)
 
     def _share_gpr_from_main(self):
@@ -783,13 +788,8 @@ class Runner():
             mpi.sync_processes()  # to sync the timer
             with Timer() as timer_truth:
                 for x in new_X_this_process:
-                    self.log(f"[{mpi.RANK}] Evaluating true posterior at {x}", level=4)
-                    new_y_this_process = np.append(
-                        new_y_this_process, self.model.logpost(x))
-                    self.log(
-                        f"[{mpi.RANK}] Got true log-posterior {new_y_this_process[-1]} "
-                        f"at {x}", level=4
-                    )
+                    logp = self.logpost_eval_and_report(x, level=4)
+                    new_y_this_process = np.append(new_y_this_process, logp)
             self.progress.add_truth(timer_truth.time, len(new_X))
             # Collect (if parallel) and append to the current model
             if mpi.multiple_processes:
@@ -971,9 +971,7 @@ class Runner():
                 for j in range(n_to_sample_per_process):
                     # Draw point from prior and evaluate logposterior at that point
                     X = self.initial_proposer.get(random_state=self.random_state)
-                    self.log(f"[{mpi.RANK}] Evaluating true posterior at {X}", level=4)
-                    y = self.model.logpost(X)
-                    self.log(f"[{mpi.RANK}] Got true log-posterior {y} at {X}", level=4)
+                    y = self.logpost_eval_and_report(X, level=4)
                     X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                     y_init_loop = np.append(y_init_loop, y)
                 # Gather points and decide whether to break.
@@ -1077,6 +1075,16 @@ class Runner():
             if mpi.is_main_process:
                 print(f"OPT best accross processes was {best_i} with value {lmls[best_i][1]}")
             mpi.share_attr(self, "gpr", root=best_i)
+
+    def logpost_eval_and_report(self, X, level=None):
+        """
+        Simple wrapper to evaluate and return the true log-posterior at X, and log it
+        with the given ``level``.
+        """
+        self.log(f"[{mpi.RANK}] Evaluating true posterior at\n{X}", level=level)
+        logp = self.model.logpost(X)
+        self.log(f"[{mpi.RANK}] --> log(p) = {logp}", level=4)
+        return logp
 
     def update_mean_cov(self):
         """

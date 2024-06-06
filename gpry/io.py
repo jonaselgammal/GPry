@@ -135,10 +135,11 @@ def save_checkpoint(path, model, gpr, acquisition, convergence, options, progres
     pickle = _get_dill()
     create_path(path, verbose=False)
     try:
-        with open(os.path.join(path, _checkpoint_filenames["model"]), 'wb') as f:
-            # Save model as dict
-            model_dict = model.info()
-            pickle.dump(model_dict, f, pickle.HIGHEST_PROTOCOL)
+        if model is not None:
+            with open(os.path.join(path, _checkpoint_filenames["model"]), 'wb') as f:
+                # Save model as dict
+                model_dict = model.info()
+                pickle.dump(model_dict, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["gpr"]), 'wb') as f:
             pickle.dump(gpr, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["acquisition"]), 'wb') as f:
