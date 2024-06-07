@@ -13,11 +13,43 @@ custom class. How to do that for X- and y-preprocessors is explained in the
 :class:`Pipeline_X` and :class:`Pipeline_y` classes respectively.
 """
 
-import numpy as np
 import warnings
+from numbers import Number
+from functools import partial
+
+import numpy as np
 from scipy.linalg import eigh
+
 from gpry.tools import delta_logp_of_1d_nstd
 
+
+class DummyPreprocessor():
+
+    is_linear = True
+
+    @classmethod
+    def fit(*args, **kwargs):
+        pass
+
+    @classmethod
+    def transform_bounds(cls, bounds):
+        return bounds
+
+    @classmethod
+    def transform(cls, _):
+        return _
+
+    @classmethod
+    def inverse_transform(cls, _):
+        return _
+
+    @classmethod
+    def transform_scale(cls, _):
+        return _
+
+    @classmethod
+    def inverse_transform_scale(cls, _):
+        return _
 
 class Pipeline_X:
     """

@@ -3,6 +3,7 @@ import warnings
 from copy import deepcopy
 from operator import itemgetter
 from typing import Mapping
+from numbers import Number
 
 # numpy and scipy
 import numpy as np
@@ -21,7 +22,7 @@ from sklearn.utils.validation import check_array
 # gpry kernels and SVM
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
-from gpry.preprocessing import Normalize_bounds
+from gpry.preprocessing import Normalize_bounds, DummyPreprocessor
 from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd
 
 
@@ -235,8 +236,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_last_appended = 0
         self.n_last_appended_finite = 0
         self.newly_appended_for_inv = 0
-        self.preprocessing_X = preprocessing_X
-        self.preprocessing_y = preprocessing_y
+        self.preprocessing_X = \
+            DummyPreprocessor if preprocessing_X is None else preprocessing_X
+        self.preprocessing_y = \
+            DummyPreprocessor if preprocessing_y is None else preprocessing_y
         self.noise_level = noise_level
         self.n_eval = 0
         self.n_eval_loglike = 0
@@ -288,10 +291,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                                  f"constructed '{kernel_name}' kernel without "
                                  "specifying prior bounds.")
             # Transform prior bounds if neccessary
-            if self.preprocessing_X is not None:
-                self.bounds_ = self.preprocessing_X.transform_bounds(self.bounds)
-            else:
-                self.bounds_ = self.bounds
+            self.bounds_ = self.preprocessing_X.transform_bounds(self.bounds)
             # Check if it's a supported kernel
             try:
                 length_corr_kernel = {"rbf": RBF, "matern": Matern}[kernel_name.lower()]
@@ -310,6 +310,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             normalize_y=False, copy_X_train=True,
             random_state=random_state
         )
+        self.X_train, self.y_train = np.empty((0, self.d)), np.empty((0,))
+        self.X_train_, self.y_train_ = None, None
+        self.X_train_all, self.y_train_all = np.empty((0, self.d)), np.empty((0,))
+        self.X_train_all_, self.y_train_all_ = None, None
+        self.noise_level_ = None
+        self.kernel_ = None
         if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
@@ -391,7 +397,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     @property
     def fitted(self):
-        """Whether the GPR has been fitted at least once."""
+        """Whether the GPR hyperparameters have been fitted at least once."""
         return self._fitted
 
     @property
@@ -480,186 +486,239 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.infinities_classifier.random_state = check_random_state(
                 random_state, convert_to_random_state=True)
 
-    def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False,
-                       ignore_classifier=False, hyperparameter_bounds=None):
-        r"""Append newly acquired data to the GP Model and updates it.
+    def append_to_data(
+            self, X, y, noise_level=None, fit_gpr=True, fit_classifier=True,
+    ):
+        r"""
+        Append newly acquired data to the GP Model and updates it.
 
-        Here updating refers to the re-calculation of
-        :math:`(K(X,X)+\sigma_n^2 I)^{-1}` which is needed for predictions. In
-        most cases (except if :math:`f(x_*)=\mu(x_*)`) the hyperparameters
-        :math:`\theta` need to be updated too though. Therefore the function
-        offers two different methods of updating the GPR after the training data
-        (``X_train, y_train``) has been updated:
+        Here updating refers to the re-calculation of the the GPR inverse matrix
+        :math:`(K(X,X)+\sigma_n^2 I)^{-1}` which is needed for predictions.
 
-           * Refit :math:`\theta` using the
-             internal ``fit`` method.
-           * Keep :math:`\theta` fixed and update
-             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using a single matrix inversion.
+        The highest cost incurred by this method is the refitting of the GPR kernel
+        hyperparameters :math:`\theta`. It can be useful to disable it (``fit_gpr=False``)
+        in cases where it is worth saving the computational expense in exchange for a loss
+        of information, such as when performing parallelized active sampling (NB: this is
+        only possible when the GPR hyperparameters have been fit at least once).
 
-        While the first method can always be applied it is considerably slower
-        than the second one. Therefore it can be useful to use the second
-        algorithm in cases where it is worth saving the computational expense
-        such as when performing parallelized active sampling.
+        An intermediate option is to perform a single GPR hyperparameter optimization run
+        (instead of the default number of restarts) from the current hyperparameter
+        values, using ``fit_gpr='simple'``.
 
-         .. note::
+        For an additional speed boost, the refitting of the infinities classifier (if
+        present) can be disabled with ``fit_classifier=False`` (.if a GPR refit is
+        requested this value is overridden).
 
-            The second method can only be used if the GPR has previously been
-            trained.
+        If called with ``X=None, y=None``, it re-fits the model without adding new points.
+
+        The following calls should then be equivalent:
+
+        .. code-block:: python
+
+           fit_gpr_kwargs = {"n_restarts": 10}
+           # A
+           gpr.append_to_data(new_X, new_y, fit_gpr=fit_gpr_kwargs)
+           # B
+           gpr.append_to_data(new_X, new_y, fit_gpr=False)
+           gpr.fit_gpr_hyperparameters(**fit_gpr_kwargs)
+           # C
+           gpr.append_to_data(new_X, new_y, fit_gpr=False, fit_classifier=False)
+           gpr.append_to_data(None, None, fit_gpr=fit_gpr_kwargs)
+
 
         Parameters
         ----------
-        X : array-like, shape = (n_samples, n_features)
+        X : array-like, shape = (n_samples, n_features), or None
             Training data to append to the model.
 
-        y : array-like, shape = (n_samples, [n_output_dims])
+        y : array-like, shape = (n_samples, [n_output_dims]), or None
             Target values to append to the data
 
         noise_level : array-like, shape = (n_samples, [n_output_dims])
-            Uncorrelated standard deviations to add to the diagonal part of the
-            covariance matrix. Needs to have the same number of entries as
-            y. If None, the noise_level set in the instance is used. If you pass
-            a single number the noise level will be overwritten. In this case it
-            is advisable to refit the hyperparameters of the kernel.
+            Uncorrelated standard deviations to add to the diagonal part of the covariance
+            matrix. Needs to have the same number of entries as y. If None, the
+            noise_level set in the instance is used. If you pass a single number the noise
+            level will be overwritten. In this case it is advisable to refit the
+            hyperparameters of the kernel.
 
-        fit : Bool, optional (default: True)
-            Whether the model is refit to new :math:`\theta`-parameters
-            or just updated using the blockwise matrix-inversion lemma.
-            NB: if used, the SVM classifier is always fit regardless of this arg
-            (to disable its update, see ``ignore_classifier``).
+        fit_gpr : Bool or 'simple', dict, optional (default: True)
+            Whether the GPR :math:`\theta`-parameters are optimised (``'simple'`` for a
+            single run from last optimum; ``True`` for a more thorough search with
+            multiple restarts), or a simple kernel matrix inversion is performed
+            (``False``) with constant hyperparameters. Can also be passed a dict with
+            arguments to be passed to the `fit_gpr_hyperparameters` method.
 
-        simplified_fit : Bool, optional (default: False)
-            If True and ``fit=True``, hyperparameters are only optimised from the last
-            optimum (otherwise, a number of optimisation processes are also started from
-            samples of the hyperparameters' priors).
-
-        ignore_classifier : Bool (default: False)
-            Does not take into account the infinities classifier when adding points.
-            Can produce ill-defined models. Use for small augmentation (e.g. NORA) only.
+        fit_classifier: Bool, optional (default: True)
+            Whether the infinities classifier is refit. Overridden to ``True`` if
+            ``fit_gpr`` is not ``False``.
 
         Returns
         -------
         self
             Returns an instance of self.
         """
-        # Check if X_train and y_train exist to see if a model has previously been fit
-        if not (hasattr(self, "X_train_all_") and hasattr(self, "y_train_all_")):
-            if not fit and self.verbose > 1:
-                warnings.warn("No model has previously been fit to the data, "
-                              "a model will be fit with X and y instead of just "
-                              "updating with the same kernel hyperparameters")
-            self.fit(X, y, noise_level=noise_level,
-                     hyperparameter_bounds=hyperparameter_bounds)
-            return self
-        self.n_last_appended = y.shape[0]
+        # Ensure fit_gpr --> fit_classifier --> fit_preprocessors
+        fit_preprocessors = False
+        fit_gpr_kwargs = None
+        if fit_gpr is True:
+            fit_classifier = True
+            fit_gpr_kwargs = {}
+        elif str(fit_gpr) == "simple":
+            fit_classifier = True
+            fit_gpr_kwargs = {"simple": True}
+            fit_gpr = True
+        elif isinstance(fit_gpr, Mapping):
+            fit_classifier = True
+            fit_gpr_kwargs = deepcopy(fit_gpr)
+            fit_gpr = True
+        elif fit_gpr is not False:
+            raise ValueError(
+                "`fit_gpr` needs to be bool, 'simple', or a dict of args for the "
+                f"`fit_gpr_hyperparameters` method. Got {fit_gpr}."
+            )
+        if fit_classifier:
+            fit_preprocessors = True
+        force_fit_gpr = False  # to avoid skipping fit if no points added if X,y = None
+        if X is None and y is None:
+            X, y = np.empty((0, self.d)), np.empty((0,))
+            force_fit_gpr = fit_gpr
+            if noise_level is not None:
+                raise ValueError("Cannot give a noise level if X and y are not given.")
+        elif X is None or y is None:  # (None, None) already excluded
+            raise ValueError("If passing X, y needs to be passed too, and viceversa.")
+        noise_level_valid = self._validate_noise_level(noise_level, len(y))
+        # NB: if called with X,y = None, None, we could also have adopted the convention
+        #     that the "last"-named variables refer to the last call with non-null X, y,
+        #     but for now they are reset at every call, turning into 0 if no points given.
+        self.n_last_appended = len(y)
         self.X_train_all = np.append(self.X_train_all, X, axis=0)
         self.y_train_all = np.append(self.y_train_all, y)
-        if self.preprocessing_X is None:
-            X_ = np.copy(X)
-            self.X_train_all_ = np.copy(self.X_train_all)
+        self._update_noise_level(noise_level_valid)
+        # 1. Fit preprocessors with finite points and select finite points in the process,
+        #    and create transformed training set and noises.
+        # NB: which points are finite does not change after SVM refit (as long as
+        #     y-preprocessor is liner), so we can select them now.
+        if self.infinities_classifier is None:
+            is_finite_all = np.full(fill_value=True, shape=(len(self.y_train_all), ))
+            X_finite = np.copy(self.X_train_all)
+            y_finite = np.copy(self.y_train_all)
         else:
-            X_ = self.preprocessing_X.transform(X)
-            self.X_train_all_ = np.append(self.X_train_all_, X_, axis=0)
-        if self.preprocessing_y is None:
-            y_ = np.copy(y)
-            self.y_train_all_ = np.copy(self.y_train_all)
-        else:
-            y_ = self.preprocessing_y.transform(y)
-            self.y_train_all_ = np.append(self.y_train_all_, y_, axis=0)
-        # Re-fit the SVM with the new data and select only finite points for GPR
-        if self.infinities_classifier is not None and not ignore_classifier:
-            if self.preprocessing_y is None:
-                diff_threshold_ = np.copy(self.diff_threshold)
-            else:
-                diff_threshold_ = self.preprocessing_y.transform_scale(
-                    self.diff_threshold
-                )
-            finite_last_appended = self.infinities_classifier.fit(
-                self.X_train_all_, self.y_train_all_, diff_threshold_
-            )[-self.n_last_appended:]
-            # If all added values are infinite there's no need to refit the GP
-            if not np.any(finite_last_appended):
-                return self
-            X, X_ = X[finite_last_appended], X_[finite_last_appended]
-            y, y_ = y[finite_last_appended], y_[finite_last_appended]
-            if noise_level is not None and np.iterable(noise_level):
-                noise_level = noise_level[finite_last_appended]
-        # Process the noise level
-        self._reset_noise_level(noise_level, y.shape[0], fit)
-        # Append the new data and maybe re-fit the kernel and preprocessors
-        self.X_train = np.append(self.X_train, X, axis=0)
-        self.y_train = np.append(self.y_train, y)
-        # The number of newly added points. Used for the update_model method
-        self.n_last_appended_finite = y.shape[0]
-        self.newly_appended_for_inv = y.shape[0]
-        if fit:
-            self.fit(simplified=simplified_fit,
-                     hyperparameter_bounds=hyperparameter_bounds
+            # Use the manual method for non-preprocessed input
+            is_finite_all = self.infinities_classifier._is_finite_raw(
+                self.y_train_all, self.diff_threshold
+            )
+            X_finite = np.copy(self.X_train_all[is_finite_all])
+            y_finite = np.copy(self.y_train_all[is_finite_all])
+        if fit_preprocessors:
+            self.preprocessing_X.fit(X_finite, y_finite)
+            self.preprocessing_y.fit(X_finite, y_finite)
+        self.X_train_all_ = self.preprocessing_X.transform(self.X_train_all)
+        self.y_train_all_ = self.preprocessing_y.transform(self.y_train_all)
+        # The transformed noise level is always an array.
+        noise_level_array = (
+            np.full(fill_value=self.noise_level, shape=(len(self.y_train_all_),))
+            if isinstance(self.noise_level, Number) else self.noise_level
+        )
+        self.noise_level_ = self.preprocessing_y.transform_scale(noise_level_array)
+        # 2. Fit the SVM in the transformed space.
+        if self.infinities_classifier is None:
+            is_finite_last_appended = np.full(
+                fill_value=True, shape=(self.n_last_appended, )
             )
         else:
-            # Append points manually (after pre-processing) and update the kernel matrix
-            self.X_train_ = np.append(self.X_train_, X_, axis=0)
-            self.y_train_ = np.append(self.y_train_, y_)
-            self.alpha = self.noise_level_**2.
+            if fit_classifier:
+                diff_threshold_ = \
+                    self.preprocessing_y.transform_scale(self.diff_threshold)
+                # The SVM lives in the preprocessed space, and the preprocessor may have
+                # changed, so we need to pass all points every time
+                is_finite_predict = self.infinities_classifier.fit(
+                    self.X_train_all_, self.y_train_all_, diff_threshold_
+                )
+                assert np.array_equal(is_finite_all, is_finite_predict), \
+                    "Infinities classifier miss-classified at least 1 point."
+            # Even if assert test fails, use the real classification
+            is_finite_last_appended = is_finite_all[-self.n_last_appended:]
+        # The number of newly added points. Used for the _update_model method
+        self.n_last_appended_finite = sum(is_finite_last_appended)
+        # If all added values are infinite there's no need to refit the GPR,
+        # unless an explicit call for that with X, y = None was made
+        if not self.n_last_appended_finite and not force_fit_gpr:
+            return self
+        # 3. Re-fit the GPR in the transformed space, and maybe hyperparameters
+        self.X_train = X_finite
+        self.y_train = y_finite
+        self.X_train_ = self.preprocessing_X.transform(self.X_train)
+        self.y_train_ = self.preprocessing_y.transform(self.y_train)
+        self.alpha = self.noise_level_[is_finite_all]**2  # NB: different from self.alpha_
+        self.newly_appended_for_inv = self.n_last_appended_finite
+        if fit_gpr:
+            self.fit_gpr_hyperparameters(**fit_gpr_kwargs)
+        else:  # just update the regressor, keeping the kernel constant
             self._update_model()
-        return self
 
-    def _reset_noise_level(self, noise_level, n_train, fit):
-        # Update noise_level, this is a bit complicated because it can be
-        # a number, iterable or None. The noise level is also transformed here
-        # if the data is not refit.
+    def _validate_noise_level(self, noise_level, n_train):
+        """
+        Checks for type and inconsistencies for the given noise level. Separated from the
+        update method to be performed before updating class attributes.
+
+        Returns a validated value that can be used directly.
+        """
+        if n_train == 0 and noise_level is not None:
+            raise ValueError("noise_level must be None if not fitting to new points.")
         if np.iterable(noise_level):
+            noise_level = np.atleast_1d(noise_level)
             if noise_level.shape[0] != n_train:
-                raise ValueError("noise_level must be an array with same "
-                                 "number of entries as y.(%d != %d)"
-                                 % (noise_level.shape[0], n_train))
-            elif np.iterable(self.noise_level):
-                self.noise_level = np.append(self.noise_level,
-                                             noise_level, axis=0)
-                if not fit:
-                    if self.preprocessing_y is not None:
-                        noise_level_transformed = self.preprocessing_y.\
-                            transform_scale(noise_level)
-                    else:
-                        noise_level_transformed = noise_level
-                    self.noise_level_ = np.append(self.noise_level_,
-                                                  noise_level_transformed, axis=0)
-            else:
-                if self.verbose > 1:
-                    warnings.warn(
-                        "A new noise level has been assigned to the "
-                        "updated training set while the old training set has a"
-                        " single scalar noise level: %s" % self.noise_level)
-                noise_level = np.append(np.ones(self.y_train_.shape) *
-                                        self.noise_level, noise_level, axis=0)
-                self.noise_level = noise_level
-                if not fit:
-                    if self.preprocessing_y is not None:
-                        noise_level_transformed = self.preprocessing_y.\
-                            transform_scale(noise_level)
-                    else:
-                        noise_level_transformed = noise_level
-                    self.noise_level_ = noise_level_transformed
+                raise ValueError(
+                    "noise_level must be an array with same number of entries as y, but "
+                    f"len(n)={noise_level.shape[0]} != len(y)={n_train})"
+                )
+        elif isinstance(noise_level, Number):
+            if np.iterable(self.noise_level):
+                noise_level = np.full(fill_value=noise_level, shape=(n_train,))
         elif noise_level is None:
             if np.iterable(self.noise_level):
-                raise ValueError("No value for the noise level given even "
-                                 "though concrete values were given earlier. Please only "
-                                 "give one scalar value or a different one for each "
-                                 "training point.")
-        elif isinstance(noise_level, int) or isinstance(noise_level, float):
-            if not fit and self.verbose > 1:
-                warnings.warn("Overwriting the noise level with a scalar "
-                              "without refitting the kernel's hyperparamters. This may "
-                              "cause unwanted behaviour.")
-                if self.preprocessing_y is not None:
-                    noise_level_transformed = \
-                        self.preprocessing_y.transform_scale(noise_level)
-                else:
-                    noise_level_transformed = noise_level
-                self.noise_level_ = noise_level_transformed
-            self.noise_level = noise_level
+                raise ValueError(
+                    "Need to pass non-null noise_level (scalar or array) because concrete"
+                    " values were given earlier for the training points."
+                )
         else:
-            raise ValueError("noise_level needs to be an iterable, number or "
-                             "None, not %s" % noise_level)
+            raise ValueError(
+                "noise_level needs to be an iterable, number or None. "
+                f"Got type(noise_level)={type(noise_level)}"
+            )
+        return noise_level
+
+    def _update_noise_level(self, noise_level):
+        """
+        Updates the noise level of the training set with the new values (or the lack
+        thereof).
+
+        Assumes possible inconsistencies dealt with by ``_validate_noise_level``.
+        """
+        if np.iterable(noise_level):
+            if not np.iterable(self.noise_level):
+                if self.verbose > 1:
+                    warnings.warn(
+                        "A new noise level has been assigned to the updated training set "
+                        "while the old training set has a single scalar noise level: "
+                        f"{self.noise_level}. Converting to individual levels!"
+                    )
+                self.noise_level = np.full(
+                    fill_value=self.noise_level, shape=(len(self.y_train_all),)
+                )
+            self.noise_level = np.append(self.noise_level, noise_level, axis=0)
+        elif isinstance(noise_level, Number):
+            # NB at validation new=scalar has been converted to array if old=array
+            assert not np.iterable(self.noise_level)
+            if not np.isclose(noise_level, self.noise_level):
+                if self.verbose > 1:
+                    warnings.warn(
+                        "Overwriting the noise level with a scalar. Make sure that "
+                        "kernel's hyperparamters are refitted."
+                    )
+                self.noise_level = noise_level
+        elif noise_level is None:
+            pass  # keep old level for new points.
 
     def remove_from_data(self, position, fit=True):
         r"""
@@ -725,200 +784,117 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_eval_loglike += 1
         return super().log_marginal_likelihood(*args, **kwargs)
 
-    def fit(self, X=None, y=None, noise_level=None, simplified=False,
-            hyperparameter_bounds=None, n_restarts=None, start_from_current=True):
-        r"""Optimizes the hyperparameters :math:`\theta` for the training data
-        given. The algorithm used to perform the optimization is very similar
-        to the one provided by Scikit-learn. The only major difference is, that
-        gradient information is used in addition to the values of the
-        marginalized log-likelihood.
+
+    def fit_gpr_hyperparameters(
+            self, simple=False, start_from_current=True, n_restarts=None,
+            hyperparameter_bounds=None
+    ):
+        r"""Optimizes the hyperparameters :math:`\theta` for the current training data.
+        The algorithm used to perform the optimization is very similar to the one provided
+        by Scikit-learn. The only major difference is, that gradient information is used
+        in addition to the values of the marginalized log-likelihood.
 
         Parameters
         ----------
-        X : array-like, shape = (n_samples, n_features), optional
-            (default: None)
-            Training data (full set). If None is given X_train is
-            taken from the instance. None should only be passed if it is called
-            from the ``append to data`` method.
-
-        y : array-like, shape = (n_samples, [n_output_dims]), optional
-            (default: None)
-            Target values (full set). If None is given y_train is taken from the instance.
-            None should only be passed if it is called from the
-            ``append to data`` method.
-
         n_restarts : int, default None
             Number of restarts of the optimizer. If not defined, uses the one set at
-            instantiation.
+            instantiation. ``1`` means a single optimizer run.
 
         start_from_current : bool, default: True
-            Starts the fitting by optimizing from the current hyperparameters. This
-            initial optimization does not count towards ``n_restarts``.
+            Starts the first optimization run from the current hyperparameters (ignored if
+            not previously fitted).
 
-        simplified : bool, default: False
+        simple : bool, default: False
             If True, runs the optimiser only from the last optimum of the hyperparameters,
-            without restarts. Shorthand for ``start_from_current=True, n_restarts=0`` (it
+            without restarts. Shorthand for ``start_from_current=True, n_restarts=1``. (it
             overrides them if True).
+
+        hyperparameter_bounds : array-like, default: None
+            Bounds for the hyperparameters, if different from those declared at init.
 
         Returns
         -------
         self
         """
-        if not hasattr(self, 'kernel_'):
-            self.kernel_ = clone(self.kernel)
-        self._rng = check_random_state(self.random_state)
-        # Prepare data for which we will fit, and noise level
-        # If X and y are not given, it re-fits with the current training set
-        if X is None or y is None:
-            # Check if X AND y are None, else raise ValueError
-            if X is not None or y is not None:
-                raise ValueError("X or y is None, while the other isn't. "
-                                 "Either both need to be provided or both should be None")
-            if noise_level is not None:
-                raise ValueError("Cannot give a noise level if X and y are "
-                                 "not given.")
-            # Take X and y from model. We assume that all infinite values have
-            # been removed by the append_to_data method
-            X = np.copy(self.X_train)
-            y = np.copy(self.y_train)
-            noise_level = np.copy(self.noise_level)
-        else:  # X and y are given as args -- takes them as the *full* training set
-            self.X_train_all = np.copy(X)
-            self.y_train_all = np.copy(y)
-            # Set noise level
-            if noise_level is None:
-                if np.iterable(self.noise_level):
-                    raise ValueError("If None is passed as noise level the "
-                                     "internally saved noise level needs "
-                                     "to be a scalar")
-                noise_level = self.noise_level
-            else:
-                self.noise_level = noise_level
-            if np.iterable(noise_level) and noise_level.shape[0] != y.shape[0]:
-                raise ValueError("noise_level must be a scalar or an array "
-                                 "with same number of entries as y.(%s "
-                                 "!= %s)"
-                                 % (noise_level.shape[0], y.shape[0]))
-            # Account for infinite values
-            # Notice that at the time of this call the preprocessors may not have been fit
-            # This is OK: we can do a first check in the untransformed space, since the
-            # SVM will be re-fitted after the preprocessors below anyway.
-            if self.infinities_classifier is not None:
-                if self.preprocessing_X is None or not self.preprocessing_X.fitted:
-                    X_ = X
-                else:
-                    X_ = self.preprocessing_X.transform(X)
-                if self.preprocessing_y is None or not self.preprocessing_y.fitted:
-                    y_ = y
-                    diff_threshold_ = self.diff_threshold
-                else:
-                    y_ = self.preprocessing_y.transform(y)
-                    diff_threshold_ = self.preprocessing_y.transform_scale(
-                        self.diff_threshold
-                    )
-                finite = self.infinities_classifier.fit(X_, y_, diff_threshold_)
-                # If there are no finite values there's no point in fitting the GP.
-                if np.all(~finite):
-                    return self
-                X = X[finite]
-                y = y[finite]
-                if np.iterable(noise_level):
-                    noise_level = noise_level[finite]
-            # Copy X and y for later use
-            self.X_train = np.copy(X)
-            self.y_train = np.copy(y)
-        # (Re)fit preprocessors to *finite* data; store transformed data and noise level
-        if self.preprocessing_X is None:
-            self.X_train_ = X
-            self.X_train_all_ = self.X_train_all
-        else:
-            self.preprocessing_X.fit(X, y)
-            self.X_train_ = self.preprocessing_X.transform(X)
-            self.X_train_all_ = self.preprocessing_X.transform(self.X_train_all)
-        if self.preprocessing_y is None:
-            self.y_train_ = y
-            self.y_train_all_ = self.y_train_all
-            self.noise_level_ = noise_level
-        else:
-            self.preprocessing_y.fit(X, y)
-            self.y_train_ = self.preprocessing_y.transform(y)
-            self.y_train_all_ = self.preprocessing_y.transform(self.y_train_all)
-            self.noise_level_ = self.preprocessing_y.transform_scale(noise_level)
-        self.alpha = self.noise_level_**2.
-        if self.infinities_classifier is not None:
-            # If preprocessors fit, the SVM needs to be refit (acts in the transf. space)
-            # NB: this assumes that the finite training points are the same after
-            # re-fitting the y transf., true if it preserves y-y(max) (checked above)
-            if self.preprocessing_y is None:
-                diff_threshold_ = self.diff_threshold
-            else:
-                diff_threshold_ = self.preprocessing_y.transform_scale(
-                    self.diff_threshold
-                )
-            _ = self.infinities_classifier.fit(
-                self.X_train_all_, self.y_train_all_, diff_threshold_
-            )
-        # Perform the optimization loop
-        if simplified:
+        if simple:
             start_from_current = True
-            n_restarts = 0
-        elif n_restarts is None:
+            n_restarts = 1
+        if not self._fitted:
+            start_from_current = False
+        if n_restarts is None:
             n_restarts = self.n_restarts_optimizer
-        do_optimization = (
-            self.optimizer is not None and self.kernel_.n_dims > 0 and
-            (start_from_current or n_restarts)
-        )
-        if do_optimization:
-            # Choose hyperparameters based on maximizing the log-marginal
-            # likelihood (potentially starting from several initial values)
-            def obj_func(theta, eval_gradient=True):
-                if eval_gradient:
-                    lml, grad = self.log_marginal_likelihood(
-                        theta, eval_gradient=True, clone_kernel=False)
-                    return -lml, -grad
-                else:
-                    return -self.log_marginal_likelihood(theta, clone_kernel=False)
-
-            if hyperparameter_bounds is None:
-                hyperparameter_bounds = self.kernel_.bounds
-            optima = []
-            # First optimize starting from theta specified in kernel
-            if start_from_current:
-                optima.append(
-                    self._constrained_optimization(
-                        obj_func, self.kernel_.theta, hyperparameter_bounds
-                    )
-                )
-            # Additional runs are performed from log-uniform chosen initial theta
-            if n_restarts > 0:
-                if not np.isfinite(self.kernel_.bounds).all():
-                    raise ValueError(
-                        "Multiple optimizer restarts (n_restarts[_optimizer]>0) "
-                        "requires that all bounds are finite.")
-                for iteration in range(n_restarts):
-                    theta_initial = self._rng.uniform(
-                        hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
-                    )
-                    optima.append(
-                        self._constrained_optimization(
-                            obj_func, theta_initial, hyperparameter_bounds
-                        )
-                    )
-            # Select result from run with minimal (negative) log-marginal likelihood
-            lml_values = list(map(itemgetter(1), optima))
-            self.kernel_.theta = optima[np.argmin(lml_values)][0]
-            # self.kernel_._check_bounds_params()
-            self.log_marginal_likelihood_value_ = -np.min(lml_values)
-        else:
+        no_optimizer = self.optimizer is None
+        no_hyperparams = self.kernel.n_dims == 0
+        no_restarts = n_restarts == 0
+        if no_optimizer or no_hyperparams or no_restarts:
+            msg_reasons = []
+            if no_optimizer:
+                msg_reasons += ["no optimizer has been specified"]
+            if no_hyperparams:
+                msg_reasons += ["the kernel has no hyperparamenters"]
+            if no_restarts:
+                msg_reasons += ["the number of optimizer restarts requested is 0."]
+            warnings.warn(
+                f"Hyper-parameters not (re)fit. Reason(s): {'; '.join(msg_reasons)}."
+            )
             self.log_marginal_likelihood_value_ = \
                 self.log_marginal_likelihood(self.kernel_.theta, clone_kernel=False)
+            self._update_model()
+            return self
+        # Choose hyperparameters based on maximizing the log-marginal
+        # likelihood (potentially starting from several initial values)
+        # We don't need to clone the kernel here, even if overwritten during optimization,
+        # because it will be recomputed in the final `log_marginal_likelihood` call.
+
+        def obj_func(theta, eval_gradient=True):
+            if eval_gradient:
+                lml, grad = self.log_marginal_likelihood(
+                    theta, eval_gradient=True, clone_kernel=False)
+                return -lml, -grad
+            else:
+                return -self.log_marginal_likelihood(theta, clone_kernel=False)
+
+        if self.kernel_ is None:
+            self.kernel_ = clone(self.kernel)
+        if hyperparameter_bounds is None:
+            hyperparameter_bounds = self.kernel_.bounds
+        else:
+            # TODO: validate dimensions!
+            pass
+        # If at least one run will be sampled from the prior, is has to be finite
+        if n_restarts - int(start_from_current):
+            if not np.isfinite(hyperparameter_bounds).all():
+                raise ValueError(
+                    "There is at least one optimizer run the requires sampling from the "
+                    "hyperparameters' prior, but it has not finite density, because not "
+                    "all bounds are finite. You can pass some finite bounds manually "
+                    "using ``hyperparameter_bounds``."
+                )
+        optima = []
+        self._rng = check_random_state(self.random_state)
+        for iteration in range(n_restarts):
+            if iteration == 0 and start_from_current:
+                # self.kernel_ guaranteed to exist because self.fitted checked above
+                theta_initial = self.kernel_.theta
+            else:
+                # Additional runs are performed from log-uniform chosen initial theta
+                theta_initial = self._rng.uniform(
+                    hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+                )
+            # Run the optimizer!
+            optima.append(
+                self._constrained_optimization(
+                    obj_func, theta_initial, hyperparameter_bounds
+                )
+            )
+        # Select result from run with minimal (negative) log-marginal likelihood,
+        # and ensure recomputation of the kernel with the new hyperparamenters.
+        lml_values = list(map(itemgetter(1), optima))
+        self.log_marginal_likelihood_value_ = -np.min(lml_values)
+        self.kernel_.theta = optima[np.argmin(lml_values)][0]
         # Precompute quantities required for predictions which are independent
         # of actual query points
-        K = self.kernel_(self.X_train_)
-        K[np.diag_indices_from(K)] += self.alpha
-        self._kernel_inverse(K)
-        # Reset newly_appended_for_inv to 0
-        self.newly_appended_for_inv = 0
+        self._update_model()
         self._fitted = True
         return self
 
@@ -937,37 +913,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         -------
         self
         """
-        # Check if a model has previously been fit to the data, i.e. that a
-        # V_, X_train_ and y_train_ exist. Furthermore check, that
-        # newly_appended_for_inv > 0.
-
+        # Check if there are new points with which to update:
         if self.newly_appended_for_inv < 1:
-            raise ValueError("No new points have been appended to the model. "
-                             "Please append points with the 'append_to_data'-method "
-                             "before trying to update.")
-
-        if getattr(self, "X_train_", None) is None:
-            raise ValueError("X_train_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if getattr(self, "y_train_", None) is None:
-            raise ValueError("y_train_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if getattr(self, "V_", None) is None:
-            raise ValueError("V_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if self.V_.shape[0] != self.y_train_.size - self.newly_appended_for_inv:
-            raise ValueError("The number of added points doesn't match the "
-                             "dimensions of the V_ matrix. %s != %s"
-                             % (self.V_.shape[0],
-                                self.y_train_.size - self.newly_appended_for_inv))
-
-        kernel = self.kernel_(self.X_train_)
-        kernel[np.diag_indices_from(kernel)] += self.alpha
-        self._kernel_inverse(kernel)
-
+            warnings.warn("No new points have been appended to the model.")
+            return self
+        K = self.kernel_(self.X_train_)
+        K[np.diag_indices_from(K)] += self.alpha
+        self._kernel_inverse(K)
         # Reset newly_appended_for_inv to 0
         self.newly_appended_for_inv = 0
         return self

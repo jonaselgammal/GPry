@@ -253,6 +253,8 @@ class BatchOptimizer(GenericGPAcquisition):
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
+                 shrink_1d_nstd=None,
+                 shrink_with_factor=None,
                  # DEPRECATED ON 13-09-2023:
                  zeta=None,
                  zeta_scaling=None,
@@ -519,19 +521,15 @@ class BatchOptimizer(GenericGPAcquisition):
                 # (no need to append if it's the last iteration)
                 if ipoint < n_points - 1:
                     # Take the mean of errors as supposed measurement error
-                    if np.iterable(gpr_.noise_level):
-                        lie_noise_level = np.array(
-                            [np.mean(gpr_.noise_level)])
-                        # Add lie to GP
-                        gpr_.append_to_data(
-                            X_opt, y_lie, noise_level=lie_noise_level,
-                            fit=False, ignore_classifier=True,
-                        )
-                    else:
-                        # Add lie to GP
-                        gpr_.append_to_data(
-                            X_opt, y_lie, fit=False, ignore_classifier=True
-                        )
+                    lie_noise_level = (
+                        np.array([np.mean(gpr_.noise_level)])
+                        if np.iterable(gpr_.noise_level) else None
+                    )
+                    # Add lie to GP
+                    gpr_.append_to_data(
+                        X_opt, y_lie, noise_level=lie_noise_level,
+                        fit_gpr=False, fit_classifier=False,
+                    )
                 # Append the points found to the array
                 X_opts[ipoint] = X_opt[0]
                 y_lies[ipoint] = y_lie[0]
@@ -1629,7 +1627,7 @@ class RankedPool():
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
         self.gpr_cond[i] = deepcopy(self._gpr)
         self.gpr_cond[i].append_to_data(
-            self.X[:i + 1], self.y[:i + 1], fit=False, ignore_classifier=True
+            self.X[:i + 1], self.y[:i + 1], fit_gpr=False, fit_classifier=False
         )
         self.cache_counter += 1
         return self.gpr_cond[i]

@@ -109,7 +109,11 @@ class Runner():
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try decreasing the volume of your prior (default: max_total).
             * fit_full_every : The GP hyperparameters will be fit every ``fit_full_every``
-              iterations (default : 2 * sqrt(number of dimensions), at least 1)
+              iterations (default : 2 * sqrt(number of dimensions), at least 1). Pass
+              ``False`` to never refit with restarts.
+            * fit_simple_every : The GP hyperparameters will be fit from the last optimum
+              only every ``fit_simple_every`` iterations (default : 1, i.e. every iter.).
+              Pass ``False`` to never refit with restarts.
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
@@ -316,8 +320,18 @@ class Runner():
                 self.fit_full_every = get_Xnumber(
                     options.get("fit_full_every"), "d", self.d, int, "fit_full_every",
                 )
-            else:
+            elif options.get("fit_full_every") is not False:
                 self.fit_full_every = max(int(2 * np.sqrt(self.d)), 1)
+            else:
+                self.fit_full_every = False
+            if options.get("fit_simple_every"):
+                self.fit_simple_every = get_Xnumber(
+                    options.get("fit_simple_every"), "d", self.d, int, "fit_simple_every",
+                )
+            elif options.get("fit_simple_every") is not False:
+                self.fit_simple_every = 1
+            else:
+                self.fit_simple_every = False
             if self.n_points_per_acq > self.d:
                 self.log("Warning: The number kriging believer samples per "
                          "acquisition step is larger than the number of dimensions of "
@@ -354,7 +368,8 @@ class Runner():
             self.log("Initialized GPry.", level=3)
         if mpi.multiple_processes:
             for attr in ("n_initial", "max_initial", "max_total", "max_finite",
-                         "n_points_per_acq", "fit_full_every", "options", "acquisition",
+                         "n_points_per_acq", "fit_full_every", "fit_simple_every",
+                         "options", "acquisition",
                          "callback_is_MPI_aware", "loaded_from_checkpoint",
                          "initial_proposer", "progress", "diagnosis",
                          "n_resamples_before_giveup", "resamples"):
@@ -815,22 +830,26 @@ class Runner():
                 self.log(f"Maximum log-posterior value found so far: {self.gpr.y_max}", level=3)
             # Add the newly evaluated truths to the GPR, and maybe refit hyperparameters.
             with TimerCounter(self.gpr) as timer_fit:
-                do_simplified_fit_only = (
-                    self.current_iteration % self.fit_full_every !=
-                    self.fit_full_every - 1
-                )
-                self._fit_gpr_parallel(new_X, new_y, do_simplified_fit_only)
+                which_fit = None
+                if self.fit_full_every and (
+                        self.current_iteration % self.fit_full_every == \
+                        self.fit_full_every - 1
+                ):
+                    which_fit = "full"
+                elif self.fit_simple_every and (
+                        self.current_iteration % self.fit_simple_every == \
+                        self.fit_simple_every - 1
+                ):
+                    which_fit = "simple"
+                self._fit_gpr_parallel(new_X, new_y, fit=which_fit)
             if mpi.is_main_process:
                 n_finite_added = (
                     self.gpr.n_last_appended_finite if sum(np.isfinite(new_y)) else 0
                 )
                 self.log(
-                    f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with "
-                    f"{n_finite_added} new finite points. Hyperparameters were fitted "
-                    "from last optimum" + (
-                        " plus random restarts."
-                        if not do_simplified_fit_only else "."
-                    ),
+                    f"[FIT] ({timer_fit.time:.2g} sec) Fitted GPR model with "
+                    f"{n_finite_added} new finite points. "
+                    f"Hyperparameters fitted: '{which_fit}'",
                     level=3,
                 )
                 self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=2)
@@ -1019,7 +1038,7 @@ class Runner():
                     "decreasing the volume of the prior.")
             # Append the initial samples to the gpr
             with TimerCounter(self.gpr) as timer_fit:
-                self.gpr.append_to_data(X_init, y_init, fit=True, simplified_fit=False)
+                self.gpr.append_to_data(X_init, y_init, fit_gpr=True)
             self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             self.log(f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
                      " points, including GPR hyperparameters. "
@@ -1030,11 +1049,7 @@ class Runner():
         self._share_gpr_from_main()
         self.progress.mpi_sync()
 
-    def _fit_gpr_parallel(self, new_X, new_y, simplified=True):
-        # Add points without fitting hyperparams. Then fit them in parallel.
-        if mpi.is_main_process:
-            self.gpr.append_to_data(new_X, new_y, fit=False)
-        self._share_gpr_from_main()
+    def _fit_gpr_parallel(self, new_X, new_y, fit="full"):
         # Prepare hyperparameter fit
         hyperparams_bounds = None
         # if self.cov is not None:
@@ -1044,37 +1059,46 @@ class Runner():
         #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
         #     hyperparams_bounds = self.gpr.kernel_.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
-        hyperparams_bounds = mpi.comm.bcast(hyperparams_bounds)
-        # Optimize hyperparameters in parallel. Rank 0 strarts one from current.
-        if simplified:
-            if mpi.is_main_process:
-                self.gpr.fit(
-                    start_from_current=True,
-                    n_restarts=0,
-                    hyperparameter_bounds=hyperparams_bounds,
-                )
-            mpi.share_attr(self, "gpr")
+        if str(fit).lower() == "full":
+            n_restarts = mpi.split_number_for_parallel_processes(
+                self.gpr.n_restarts_optimizer
+            )[mpi.RANK]
+        elif str(fit).lower() == "simple":
+            n_restarts = 1
         else:
-            start_from_current = mpi.RANK == 0
-            n_restarts = (
-                    (self.gpr.n_restarts_optimizer + 1) // mpi.SIZE +
-                    (-1 if mpi.RANK == 0 else 0)
+            n_restarts = 0
+        fit_gpr_kwargs = {
+            "hyperparameter_bounds": mpi.comm.bcast(hyperparams_bounds),
+            "start_from_current": mpi.is_main_process,
+            "n_restarts": n_restarts,
+        }
+        if fit_gpr_kwargs['n_restarts']:
+            self.log(
+                f"[{mpi.RANK}] Fitting hyperparameters with "
+                f"{fit_gpr_kwargs['n_restarts']} restarts" + (
+                    ", including from last optimum."
+                    if fit_gpr_kwargs['start_from_current'] else "."
+                ),
+                level=4,
             )
-            if start_from_current or n_restarts:
-                self.gpr.fit(
-                    start_from_current=start_from_current,
-                    n_restarts=n_restarts,
-                    hyperparameter_bounds=hyperparams_bounds,
-                )
-                lml = self.gpr.log_marginal_likelihood_value_
-            else:
-                lml = -np.inf
-            # Pick best and share it
-            lmls = mpi.comm.allgather((mpi.RANK, lml))
-            best_i = lmls[np.argmax([l for i, l in lmls])][0]
-            if mpi.is_main_process:
-                print(f"OPT best accross processes was {best_i} with value {lmls[best_i][1]}")
-            mpi.share_attr(self, "gpr", root=best_i)
+            self.gpr.append_to_data(new_X, new_y, fit_gpr=fit_gpr_kwargs)
+            lml = self.gpr.log_marginal_likelihood_value_
+            self.log(f"[{mpi.RANK}] Got best log-marginal-likelihood {lml}]", level=4)
+        else:
+            self.log(
+                f"[{mpi.RANK}] No hyperparameter fitting runs assigned to this process.",
+                level=4,
+            )
+            lml = -np.inf
+        # Pick best and share it
+        lmls = mpi.comm.allgather((mpi.RANK, lml))
+        best_i = lmls[np.argmax([l for i, l in lmls])][0]
+        if mpi.is_main_process:
+            self.log(
+                f"[{mpi.RANK}] Overall best log-marginal-likelihood {lmls[best_i][1]}]",
+                level=4,
+            )
+        mpi.share_attr(self, "gpr", root=best_i)
 
     def logpost_eval_and_report(self, X, level=None):
         """

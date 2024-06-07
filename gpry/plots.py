@@ -645,7 +645,7 @@ def plot_distance_distribution(
     title_str = f"{num_or_dens} of points per standard deviation"
     if show_added:
         title_str += " (bluer=newer)"
-        cmap = cm.get_cmap("Spectral")
+        cmap = cm.Spectral
         colors = [cmap(i / len(points)) for i in range(len(points))]
         ax.hist(
             np.atleast_2d(radial_distances),
@@ -778,7 +778,7 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
         ax[i].set_facecolor("grey")
         # # Background of the same color as the bottom of the colormap, to avoid "gaps"
         # plt.gca().set_facecolor(cmap[i].colors[0])
-        ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
+        ax[i].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
             *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
         )

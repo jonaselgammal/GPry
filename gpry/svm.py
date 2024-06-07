@@ -177,7 +177,8 @@ class SVM(SVC):
         self.y_finite = None
         self.at_least_one_finite = False
         self.all_finite = False
-        self.abs_threshold = None
+        self.diff_threshold = None
+        self._max_y = None
         # In the SVM, since we have not wrapper the calls to the RNG,
         # (as we have for the GPR), we need to repackage the new numpy Generator
         # as a RandomState, which is achieved by gpry.tools.check_random_state
@@ -248,9 +249,12 @@ class SVM(SVC):
             return self.y_finite
         self.at_least_one_finite = True
         # Update threshold value
-        self.abs_threshold = max(self.y_train) - diff_threshold
+        self.diff_threshold = diff_threshold
+        self._max_y = max(self.y_train)
         # Turn into boolean categorial values
-        self.y_finite = self.is_finite()
+        self.y_finite = self._is_finite_raw(
+            self.y_train, self.diff_threshold, max_y=self._max_y
+        )
         # If no value below the threshold, nothing to do. Save test for faster checks.
         if np.all(self.y_finite):
             self.all_finite = True
@@ -258,6 +262,16 @@ class SVM(SVC):
         self.all_finite = False
         super().fit(self.X_train, self.y_finite)
         return self.y_finite
+
+    @staticmethod
+    def _is_finite_raw(y, diff_threshold, max_y=None):
+        """
+        Returns the indices of the finite points, depending on some delta-like threshold,
+        in the same space (transformed or not) as the y's.
+        """
+        if max_y is None:
+            max_y = np.max(y)
+        return np.greater_equal(y, max_y - diff_threshold)
 
     def is_finite(self, y=None):
         """
