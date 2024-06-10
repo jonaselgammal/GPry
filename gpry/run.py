@@ -4,6 +4,7 @@ from copy import deepcopy
 from inspect import getfullargspec
 from typing import Mapping, Sequence
 import numpy as np
+from tqdm import tqdm
 
 from cobaya.model import Model
 from cobaya.collection import SampleCollection
@@ -717,10 +718,6 @@ class Runner():
                 # Save checkpoint
                 self.save_checkpoint()
         # Run bayesian optimization loop
-        n_evals_per_acq_per_process = \
-            mpi.split_number_for_parallel_processes(self.n_points_per_acq)
-        n_evals_this_process = n_evals_per_acq_per_process[mpi.RANK]
-        i_evals_this_process = sum(n_evals_per_acq_per_process[:mpi.RANK])
         self.has_converged = False
         if mpi.is_main_process:
             maybe_stop_before_max_total = (
@@ -738,7 +735,8 @@ class Runner():
                             f"Total truth evals: {self.gpr.n_total} "
                             f"({self.gpr.n_finite} finite) of {self.max_total}" +
                             (f" (or {self.max_finite} finite)"
-                             if self.max_finite < self.max_total else ""))
+                             if self.max_finite < self.max_total else "") + "\n"
+                )
             self.old_gpr = deepcopy(self.gpr)
             self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
             # Acquire new points in parallel
@@ -797,63 +795,23 @@ class Runner():
                              "tries remaining)", level=2)
                 continue
             self.resamples = 0
-            new_X_this_process = new_X[
-                i_evals_this_process: i_evals_this_process + n_evals_this_process]
-            new_y_this_process = np.empty(0)
             mpi.sync_processes()  # to sync the timer
             with Timer() as timer_truth:
-                for x in new_X_this_process:
-                    logp = self.logpost_eval_and_report(x, level=4)
-                    new_y_this_process = np.append(new_y_this_process, logp)
-            self.progress.add_truth(timer_truth.time, len(new_X))
-            # Collect (if parallel) and append to the current model
-            if mpi.multiple_processes:
-                # GATHER keeps rank order (MPI standard): we can do X and y separately
-                new_Xs = mpi.comm.gather(new_X_this_process)
-                new_ys = mpi.comm.gather(new_y_this_process)
-                if mpi.is_main_process:
-                    new_X = np.concatenate(new_Xs)
-                    new_y = np.concatenate(new_ys)
-                new_X, new_y = mpi.comm.bcast(
-                    (new_X, new_y) if mpi.is_main_process else (None, None))
-            else:
-                new_y = new_y_this_process
+                # This call includes some overhead that will be added to the timer,
+                # but it is very small for realistic true posteriors.
+                new_y, eval_msg = self._eval_truth_parallel(new_X)
             if mpi.is_main_process:
-                self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) Evaluated the true "
-                         f"model at {len(new_X)} location(s)" +
-                         (f" (at most {len(new_X_this_process)} per MPI process)"
-                          if mpi.multiple_processes else "") +
-                         f", of which {sum(np.isfinite(new_y))} returned a finite value.",
-                         level=3)
+                self.progress.add_truth(timer_truth.time, len(new_X))
+                self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) {eval_msg}", level=3)
             mpi.sync_processes()
-            if mpi.is_main_process:
-                self.log(f"Maximum log-posterior value found so far: {self.gpr.y_max}", level=3)
             # Add the newly evaluated truths to the GPR, and maybe refit hyperparameters.
             with TimerCounter(self.gpr) as timer_fit:
-                which_fit = None
-                if self.fit_full_every and (
-                        self.current_iteration % self.fit_full_every == \
-                        self.fit_full_every - 1
-                ):
-                    which_fit = "full"
-                elif self.fit_simple_every and (
-                        self.current_iteration % self.fit_simple_every == \
-                        self.fit_simple_every - 1
-                ):
-                    which_fit = "simple"
-                self._fit_gpr_parallel(new_X, new_y, fit=which_fit)
+                fit_msg = self._fit_gpr_parallel(new_X, new_y)
             if mpi.is_main_process:
-                n_finite_added = (
-                    self.gpr.n_last_appended_finite if sum(np.isfinite(new_y)) else 0
-                )
-                self.log(
-                    f"[FIT] ({timer_fit.time:.2g} sec) Fitted GPR model with "
-                    f"{n_finite_added} new finite points. "
-                    f"Hyperparameters fitted: '{which_fit}'",
-                    level=3,
-                )
-                self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=2)
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
+                self.log(f"[FIT] ({timer_fit.time:.2g} sec) {fit_msg}", level=3)
+                self.log(f"Current maximum log-posterior: {self.gpr.y_max}", level=3)
+                self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=3)
             mpi.sync_processes()
             # Share new_X, new_y and y_pred to the runner instance
             self.new_X, self.new_y, self.y_pred = mpi.comm.bcast(
@@ -936,6 +894,16 @@ class Runner():
                 self.diagnose()
         self.has_run = True
 
+    def logpost_eval_and_report(self, X, level=None):
+        """
+        Simple wrapper to evaluate and return the true log-posterior at X, and log it
+        with the given ``level``.
+        """
+        self.log(f"[{mpi.RANK}] Evaluating true posterior at\n{X}", level=level)
+        logp = self.model.logpost(X)
+        self.log(f"[{mpi.RANK}] --> log(p) = {logp}", level=4)
+        return logp
+
     def do_initial_training(self):
         """
         Draws an initial sample for the `gpr` GP model until it has a training set of size
@@ -982,8 +950,7 @@ class Runner():
         mpi.sync_processes()  # to sync the timer
         with Timer() as timer_truth:
             if mpi.is_main_process:
-                from tqdm import tqdm
-                bar = tqdm(total=n_still_needed)
+                progress_bar = tqdm(total=n_still_needed)
             for i in range(n_iterations_before_giving_up):
                 X_init_loop = np.empty((0, self.d))
                 y_init_loop = np.empty(0)
@@ -1007,7 +974,7 @@ class Runner():
                     # Only finite values contribute to the number of initial samples
                     n_finite_new = sum(is_finite(max(y_init) - y_init))
                     # NB: tqdm.update takes *increments*
-                    bar.update(n_finite_new - bar.n)
+                    progress_bar.update(n_finite_new - progress_bar.n)
                     # Break loop if the desired number of initial samples is reached
                     finished = n_finite_new >= n_still_needed
                 if mpi.multiple_processes:
@@ -1018,7 +985,7 @@ class Runner():
                     # TODO: maybe re-fit SVM to shrink initial sample region
                     pass
         if mpi.is_main_process:
-            bar.close()
+            progress_bar.close()
         if self.progress and mpi.is_main_process:
             self.progress.add_truth(timer_truth.time, len(X_init))
         if mpi.is_main_process:
@@ -1049,6 +1016,46 @@ class Runner():
         self._share_gpr_from_main()
         self.progress.mpi_sync()
 
+    def _eval_truth_parallel(self, new_X):
+        """
+        Performs the evaluation of the true model in parallel.
+
+        Returns all y's at rank 0 (None otherwise), and a short report msg.
+        """
+        # Select locations that will be evaluated by this process
+        n_evals_per_process = mpi.split_number_for_parallel_processes(
+            self.n_points_per_acq
+        )
+        n_this_process = n_evals_per_process[mpi.RANK]
+        i_this_process = sum(n_evals_per_process[:mpi.RANK])
+        new_X_this_process = new_X[i_this_process: i_this_process + n_this_process]
+        # Perform the evaluations
+        new_y_this_process = np.empty(0)
+        for x in new_X_this_process:
+            logp = self.logpost_eval_and_report(x, level=4)
+            new_y_this_process = np.append(new_y_this_process, logp)
+        # Collect (if parallel) and append to the current model
+        if mpi.multiple_processes:
+            # GATHER keeps rank order (MPI standard): we can do X and y separately
+            new_Xs = mpi.comm.gather(new_X_this_process)
+            new_ys = mpi.comm.gather(new_y_this_process)
+            if mpi.is_main_process:
+                new_X = np.concatenate(new_Xs)
+                new_y = np.concatenate(new_ys)
+            new_X, new_y = mpi.comm.bcast(
+                (new_X, new_y) if mpi.is_main_process else (None, None))
+        else:
+            new_y = new_y_this_process
+        eval_msg = None
+        if mpi.is_main_process:
+            eval_msg = (
+                f"Evaluated the true model at {len(new_X)} location(s)" +
+                (f" (at most {len(new_X_this_process)} per MPI process)"
+                 if mpi.multiple_processes else "") +
+                f", of which {sum(np.isfinite(new_y))} returned a finite value."
+            )
+        return new_y, eval_msg
+
     def _fit_gpr_parallel(self, new_X, new_y, fit="full"):
         # Prepare hyperparameter fit
         hyperparams_bounds = None
@@ -1059,31 +1066,37 @@ class Runner():
         #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
         #     hyperparams_bounds = self.gpr.kernel_.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
-        if str(fit).lower() == "full":
-            n_restarts = mpi.split_number_for_parallel_processes(
-                self.gpr.n_restarts_optimizer
-            )[mpi.RANK]
-        elif str(fit).lower() == "simple":
-            n_restarts = 1
-        else:
-            n_restarts = 0
         fit_gpr_kwargs = {
             "hyperparameter_bounds": mpi.comm.bcast(hyperparams_bounds),
             "start_from_current": mpi.is_main_process,
-            "n_restarts": n_restarts,
         }
-        if fit_gpr_kwargs['n_restarts']:
+        is_this_iter = lambda every: self.current_iteration % every == every -1
+        if self.fit_full_every and is_this_iter(self.fit_full_every):
+            fit_gpr_kwargs["n_restarts"] = mpi.split_number_for_parallel_processes(
+                self.gpr.n_restarts_optimizer
+            )[mpi.RANK]
+        elif self.fit_simple_every and is_this_iter(self.fit_simple_every):
+            fit_gpr_kwargs["n_restarts"] = 1
+        else:
+            fit_gpr_kwargs["n_restarts"] = 0
+        # At lest rank 0 must run, even if not fitting the GPR/SVM, to add the points
+        if fit_gpr_kwargs['n_restarts'] or mpi.is_main_process:
+            what_hyper = (
+                f"fit with {fit_gpr_kwargs['n_restarts']} restarts" if
+                fit_gpr_kwargs['n_restarts'] else "kept constant."
+            )
             self.log(
-                f"[{mpi.RANK}] Fitting hyperparameters with "
-                f"{fit_gpr_kwargs['n_restarts']} restarts" + (
-                    ", including from last optimum."
-                    if fit_gpr_kwargs['start_from_current'] else "."
-                ),
+                f"[{mpi.RANK}] Fitting log(p) surrogate model. "
+                "GPR hyperparameters will be " + what_hyper,
                 level=4,
             )
-            self.gpr.append_to_data(new_X, new_y, fit_gpr=fit_gpr_kwargs)
+            self.gpr.append_to_data(
+                new_X, new_y, fit_classifier=True,
+                # Supresses warning:
+                fit_gpr=(fit_gpr_kwargs if fit_gpr_kwargs['n_restarts'] else False),
+            )
             lml = self.gpr.log_marginal_likelihood_value_
-            self.log(f"[{mpi.RANK}] Got best log-marginal-likelihood {lml}]", level=4)
+            self.log(f"[{mpi.RANK}] --> Got best log-marginal-likelihood {lml}", level=4)
         else:
             self.log(
                 f"[{mpi.RANK}] No hyperparameter fitting runs assigned to this process.",
@@ -1095,20 +1108,18 @@ class Runner():
         best_i = lmls[np.argmax([l for i, l in lmls])][0]
         if mpi.is_main_process:
             self.log(
-                f"[{mpi.RANK}] Overall best log-marginal-likelihood {lmls[best_i][1]}]",
+                f"[{mpi.RANK}] Overall best log-marginal-likelihood {lmls[best_i][1]}",
                 level=4,
             )
         mpi.share_attr(self, "gpr", root=best_i)
-
-    def logpost_eval_and_report(self, X, level=None):
-        """
-        Simple wrapper to evaluate and return the true log-posterior at X, and log it
-        with the given ``level``.
-        """
-        self.log(f"[{mpi.RANK}] Evaluating true posterior at\n{X}", level=level)
-        logp = self.model.logpost(X)
-        self.log(f"[{mpi.RANK}] --> log(p) = {logp}", level=4)
-        return logp
+        msg = None
+        if mpi.is_main_process:
+            msg = (
+                f"Fitted log(p) surrogate model with {self.gpr.n_last_appended} new "
+                f"points, of which {self.gpr.n_last_appended} were added to the GPR. "
+                f"GPR hyperparameters were " + what_hyper
+            )
+        return msg
 
     def update_mean_cov(self):
         """

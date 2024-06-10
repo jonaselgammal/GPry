@@ -469,7 +469,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         attribute, since the arguments of that one may need to be transformed first.
         """
         if self.infinities_classifier is None:
-            return np.full(shape=len(y), fill_value=True)
+            return np.full(shape=(len(self.y_train_all), ), fill_value=True)
         return self.infinities_classifier.predict(
             self.preprocessing_X.transform(X), validate=validate
         )
