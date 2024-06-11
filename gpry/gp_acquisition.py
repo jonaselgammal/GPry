@@ -801,13 +801,13 @@ class NORA(GenericGPAcquisition):
 
     def _do_MC_sample_uniform(self, gpr, random_state, bounds=None):
         if not mpi.is_main_process:
-            return None, None, None
+            return None, None, None, None
         proposer = UniformProposer(self.bounds if bounds is None else bounds)
         n_total = 8 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
-        return X, None, None, None
+        return X, None, None, None, None
 
     def _do_MC_sample_polychord(self, gpr, random_state, bounds=None):
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
@@ -985,7 +985,7 @@ class NORA(GenericGPAcquisition):
 
     def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, gpr=None):
         """
-        Stores the MC sample as attributed.
+        Stores the MC sample as attributes.
 
         If either `y` and/or `sigma_y` are passed as `None`, you can ensure their
         calculation (in parallel) with `ensure_y_sigma=True`. In that case, a `gpr` is
@@ -1001,7 +1001,7 @@ class NORA(GenericGPAcquisition):
             )
 
     def _reweight_last_MC_sample(self, gpr, ensure_sigma_y=False):
-        """Stores the MC sample as attributed. Use ``last_MC_sample`` to retrieve it."""
+        """Stores the MC sample as attributes. Use ``last_MC_sample`` to retrieve it."""
         self.is_last_MC_reweighted = True
         X_excpt, y_excpt = None, None
         if mpi.is_main_process and self._X_mc is None:
@@ -1134,7 +1134,7 @@ class NORA(GenericGPAcquisition):
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(f"n_points should be int > 0, got {n_points}")
-        # Gather an MC sample
+        # Gather an MC sample, only not-None for rank 0; bcasted by _split_and_compute_acq
         if mpi.is_main_process:
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
@@ -1142,10 +1142,25 @@ class NORA(GenericGPAcquisition):
             self._set_MC_sample(
                 *self.do_MC_sample(gpr, random_state), ensure_y_sigma_y=True, gpr=gpr
             )
+            self._X_already_proposed = np.empty(shape=(0, gpr.d))
         else:
             self._reweight_last_MC_sample(gpr, ensure_sigma_y=True)
         self.mc_every_i += 1
         X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
+        # Find indices of already used elements to exclude them.
+        # Needs to be here because _reweight_last_MC_sample changes the indices.
+        # Both the X's of the MC sample and the pool are assumed unique.
+        if mpi.is_main_process and self._X_already_proposed.size > 0:
+            i_already_proposed = []
+            for X_i in self._X_already_proposed:
+                i_this_one = np.flatnonzero(
+                    np.all(np.isin(X_mc, X_i, assume_unique=True), axis=1)
+                )
+                if i_this_one.size > 0:
+                    i_already_proposed.append(i_this_one[0])
+            X_mc = np.delete(X_mc, i_already_proposed, axis=0)
+            y_mc = np.delete(y_mc, i_already_proposed, axis=0)
+            sigma_y_mc = np.delete(sigma_y_mc, i_already_proposed, axis=0)
         # Compute acq functions and missing quantities.
         self.acq_func_y_sigma = partial(
             self.acq_func.f, baseline=gpr.y_max,
@@ -1171,17 +1186,17 @@ class NORA(GenericGPAcquisition):
             *args, method=method, merge_method=merge_method)
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
+        X_pool, y_pool = merged_pool.X[:n_points], merged_pool.y[:n_points]
         with np.errstate(divide='ignore'):
-            merged_pool_acq = self.acq_func_y_sigma(
-                merged_pool.y[:n_points], merged_pool.sigma[:n_points])
+            acq_pool = self.acq_func_y_sigma(y_pool, merged_pool.sigma[:n_points])
+        # Track the used ones, to ignore them until new MC sample drawn.
+        self._X_already_proposed = np.concatenate([self._X_already_proposed, X_pool])
         mpi.sync_processes()
         self.pool.reset_cache()  # reduces size of pickled object
         if mpi.is_main_process:
             self.log(
                 f"({(time()-start_rank):.2g} sec) Ranked pool of candidates.")
-        return (
-            merged_pool.X[:n_points], merged_pool.y[:n_points], merged_pool_acq[:n_points]
-        )
+        return X_pool, y_pool, acq_pool
 
     def _split_and_compute_acq(self, gpr, X, y, sigma_y):
         """
