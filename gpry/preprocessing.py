@@ -16,9 +16,10 @@ custom class. How to do that for X- and y-preprocessors is explained in the
 import warnings
 from numbers import Number
 from functools import partial
+from itertools import product
 
 import numpy as np
-from scipy.linalg import eigh
+from scipy.linalg import eigh, LinAlgError
 
 from gpry.tools import delta_logp_of_1d_nstd
 
@@ -50,6 +51,7 @@ class DummyPreprocessor():
     @classmethod
     def inverse_transform_scale(cls, _):
         return _
+
 
 class Pipeline_X:
     """
@@ -147,13 +149,10 @@ class Pipeline_X:
         return X_transformed
 
 
-# UNUSED
+# See https://www.projectrhea.org/rhea/images/1/15/
+#         Slecture_ECE662_Whitening_and_Coloring_Transforms_S14_MH.pdf
 class Whitening:
     r"""
-    **TODO:** Fix whitening transformation and make it somewhat robust or
-    delete it altogether.
-
-
     A class which can pre-transform the posterior in a way
     that it matches a multivariate normal distribution during the Regression
     step. This is done in the hope that by matching a normal distribution the
@@ -170,82 +169,95 @@ class Whitening:
     empirical mean and :math:`\sigma = \sqrt{\mathbf{C}^{ii}}` the
     empirical standard deviation.
 
-    This step is neccessary if one assumes that the kernel is isotropic while
-    the posterior distribution isn't it is however important to note that this
-    is not very numerically robust since the empirical mean and standard
-    deviation are weighted by the posterior values which have a high dynamical
-    range. Therefore I suggest that you use an anisotropic kernel instead.
+    This can help with highly anisotropic distributions, especially if degeneracy
+    directions are known a priori.
 
-    This class provides three methods:
-
-        * The ``fit`` method sets the mean, covariance as well as their
-          Eigendecompositions
-        * The ``transform`` method applies the whitening transformation to X
-        * The ``inverse_transform`` method reverses the transformation
-          applied to the data
+    When adapting it with `learn=True`, this may not be very numerically robust, since the
+    empirical mean and standard deviation are weighted by the posterior values which have
+    a high dynamical range. An anisotropic kernel may be preferred.
     """
 
-    def __init__(self):
-        # Have a variable which tells whether the whitening
-        # transformation works
-        self.can_transform = False
-
-        self.mean_ = None
-        self.cov = None
+    def __init__(self, mean=None, cov=None, learn=False):
+        self.mean = mean
+        self.cov = cov
+        self.learn = learn
+        self.direct_transf_matrix = None
+        self.inverse_transf_matrix = None
+        if self.mean is None or self.cov is None:
+            if not self.learn:
+                raise ValueError(
+                    "Needs a mean and a covariance matrix, or to be `learn=True`."
+                )
+        else:  # has mean and covmat
+            try:
+                self.prepare_transform(self.mean, self.cov)
+            except LinAlgError as excpt:
+                raise ValueError(
+                    "Cannot compute eigenvalues and eigenvectors of the given mean and "
+                    f"cov: {excpt}"
+                ) from excpt
 
     def transform_bounds(self, bounds):
-        return bounds
+        if self.learn and not self.cov:
+            return bounds
+        vertices = np.array(list(product(*bounds)))
+        transf_vertices = self.transform(vertices)
+        return np.array(
+            [np.min(transf_vertices.T, axis=1), np.max(transf_vertices.T, axis=1)]
+        ).T
+
+    def prepare_transform(self, mean, cov):
+        """
+        Compute the relevant elements for the transform from the mean and covmat.
+
+        Raises `np.linalg.LinAlgError` if it fails.
+        """
+        self.eigenvals, self.eigenvecs = eigh(cov)
+        self.direct_transf_matrix = np.diag(self.eigenvals**-0.5) @ self.eigenvecs.T
+        self.inverse_transf_matrix = self.eigenvecs @ np.diag(self.eigenvals**0.5)
 
     def fit(self, X, y):
         """
-        Fits the whitening transformation
+        Fits the whitening transformation, if initialised with `learn=True`.
         """
+        if not self.learn:
+            return self
+        warn_msg = "Could not fit a whitening transformation. Keeping previous one."
         with warnings.catch_warnings():
             # Raise exception for all warnings to catch them.
-            warnings.filterwarnings('error')
-
+            warnings.filterwarnings("error")
             # First try to calculate the mean and covariance matrix
             try:
-                # Get training data and transform exponentially
-                X_train = np.copy(X)
-                y_train = np.copy(y)
-                y_train = np.exp(y_train - np.max(y_train))
-
-                # Calculate mean and cov for KL div and to fit the
-                # transformation
-                self.mean_ = np.average(X_train, axis=0, weights=y_train)
-                self.cov = np.cov(X_train.T, aweights=y_train)
-
-            except Exception:
-                print("Cannot whiten the data")
-                self.can_transform = False  # Cannot perform PCA transformation
+                # Calculate mean and cov for KL div and to fit the transformation.
+                # Weighting with probability = exp(y)
+                y_exp = np.exp(y - np.max(y))
+                mean = np.average(X, axis=0, weights=y_exp)
+                cov = np.cov(X, aweights=y_exp)
+            except (ZeroDivisionError, TypeError, ValueError, RuntimeWarning) as excpt:
+                warnings.warn(warn_msg + "Reason:" + str(excpt))
                 return self
-
-            # Try to calculate eigendecomposition of the covariance matrix
-            try:
-                self.evals, self.evecs = eigh(self.cov)
-                self.last_factor = (self.evals)**(-0.5)
-                self.can_transform = True
-            except Exception:
-                print("Cannot whiten the data")
-                self.can_transform = False
-                return self
-
-            return self
+        try:
+            self.prepare_transform(mean, cov)
+            # Assign if no errors only
+            self.mean = mean
+            self.cov = cov
+        except LinAlgError as excpt:
+            warnings.warn(warn_msg + "Reason:" + str(excpt))
+        return self
 
     def transform(self, X, copy=True):
-        if not self.can_transform:
+        if self.learn and not self.cov:
             return X
         if copy:
             X = np.copy(X)
-        return (self.evecs @ (X - self.mean_).T).T * self.last_factor
+        return (self.direct_transf_matrix @ (X - self.mean).T).T
 
     def inverse_transform(self, X, copy=True):
-        if not self.can_transform:
+        if self.learn and not self.cov:
             return X
         if copy:
             X = np.copy(X)
-        return (self.evecs.T @ (X * self.last_factor**(0.5)).T).T + self.mean_
+        return (self.inverse_transf_matrix @ X.T).T + self.mean
 
 
 class Normalize_bounds:
