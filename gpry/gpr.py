@@ -1060,11 +1060,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             grad_mean_full[~finite] = self.inf_value  # the grad of inf values is +inf
             X = X[finite]  # only predict the finite samples
 
-        if self.preprocessing_X is not None:
-            X = self.preprocessing_X.transform(X)
+        X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
 
         # Predict based on GP posterior
-        K_trans = self.kernel_(X, self.X_train_)
+        K_trans = self.kernel_(X_, self.X_train_)
         y_mean_ = K_trans.dot(self.alpha_)    # Line 4 (y_mean = f_star)
         # Undo normalization
         if self.preprocessing_y is None:
@@ -1082,7 +1081,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             M = tri_mul(1., self.V_, K_trans.T, lower=True)
 
             # Compute variance of predictive distribution
-            y_var = self.kernel_.diag(X)
+            y_var = self.kernel_.diag(X_)
             y_var -= np.einsum("ji,ji->i", M, M, optimize=True)
             # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
             # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
@@ -1112,7 +1111,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 return y_mean, y_std
 
         if return_mean_grad:
-            grad = self.kernel_.gradient_x(X[0], self.X_train_)
+            grad = self.kernel_.gradient_x(X_[0], self.X_train_)
             grad_mean = np.dot(grad.T, self.alpha_)
             # Undo normalization
             if self.preprocessing_y is not None:
@@ -1123,7 +1122,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 grad_mean_full[finite] = grad_mean
                 grad_mean = grad_mean_full
             if return_std_grad:
-                grad_std = np.zeros(X.shape[1])
+                grad_std = np.zeros(X_.shape[1])
                 if not np.allclose(y_std, grad_std):
                     # TODO: This can be made much more efficient, but I don't think it's used currently
                     grad_std = -np.dot(K_trans,
@@ -1197,14 +1196,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 return np.zeros(n_samples)
             X = X[finite]  # only predict the finite samples
 
-        if self.preprocessing_X is not None:
-            X = self.preprocessing_X.transform(X)
+        X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
 
         # Predict based on GP posterior
-        K_trans = self.kernel_(X, self.X_train_)
+        K_trans = self.kernel_(X_, self.X_train_)
         M = tri_mul(1., self.V_, K_trans.T, lower=True)
         # Compute variance of predictive distribution
-        y_var = self.kernel_.diag(X)
+        y_var = self.kernel_.diag(X_)
         y_var -= np.einsum("ji,ji->i", M, M, optimize=True)
         # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
         # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
