@@ -547,8 +547,8 @@ class Normalize_y:
             y-values (target values) that are used to
             determine the mean and std.
         """
-        self.mean_ = np.mean(y)
-        self.std_ = np.std(y)
+        self.mean_ = np.mean(y[np.isfinite(y)])
+        self.std_ = np.std(y[np.isfinite(y)])
 
     def transform_scale(self, scale, copy=True):
         if not self.fitted:

@@ -251,6 +251,7 @@ class SVM(SVC):
         # Update threshold value
         self.diff_threshold = diff_threshold
         self._max_y = max(self.y_train)
+        self.abs_threshold = self._max_y - self.diff_threshold
         # Turn into boolean categorial values
         self.y_finite = self._is_finite_raw(
             self.y_train, self.diff_threshold, max_y=self._max_y
@@ -271,7 +272,7 @@ class SVM(SVC):
         """
         if max_y is None:
             max_y = np.max(y)
-        return np.greater_equal(y, max_y - diff_threshold)
+        return np.greater_equal(y, max_y - diff_threshold) & np.isfinite(y)
 
     def is_finite(self, y=None):
         """
