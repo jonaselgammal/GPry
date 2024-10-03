@@ -61,7 +61,7 @@ class CobayaSampler(Sampler):
                 initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
                 options=self.options,
-                callback=get_external_function(self.callback),
+                callback=get_external_function(self.callback) if self.callback else None,
                 callback_is_MPI_aware=self.callback_is_MPI_aware,
                 checkpoint=self.path_checkpoint,
                 load_checkpoint=self.output_strategy,
@@ -102,6 +102,7 @@ class CobayaSampler(Sampler):
             if self.plots:
                 self.log.info("Doing some plots...")
                 self.do_plots()
+        return self.mc_sampler_upd_info, self.mc_sampler_instance
 
     def do_surrogate_sample(self, resume=False, prefix=None):
         """
