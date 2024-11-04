@@ -59,6 +59,9 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     info : dict
         A dict containing the ``prior`` and ``likelihood`` blocks.
     """
+    if true_model is not None and not isinstance(true_model, Model):
+        raise ValueError("`true_model` must be a Cobaya model.")
+    # Get bounds
     if bounds is not None:
         if np.array(bounds).shape != np.array(gpr.bounds).shape \
                 and gpr.bounds is not None:
@@ -74,16 +77,16 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     elif gpr.bounds is not None:
         bounds = deepcopy(gpr.bounds)
     else:
-        raise ValueError("You need to either provide bounds, a model or a GP regressor "
-                         "with bounds.")
+        raise ValueError(
+            "You need to either provide bounds, a model or a GP regressor with bounds."
+        )
+    # Get labels
     paramlabels = None
     if paramnames is not None:
         if len(paramnames) != gpr.d:
             raise ValueError(f"Passed `paramnames` with {len(paramnames)} "
                              f"parameters, but the prior has dimension {gpr.d}")
     elif true_model is not None:
-        if not isinstance(true_model, Model):
-            raise ValueError("`true_model` must be a Cobaya model.")
         paramnames = list(true_model.parameterization.sampled_params())
         all_labels = true_model.parameterization.labels()
         paramlabels = [all_labels[p] for p in paramnames]
@@ -97,7 +100,8 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     # It was added here by Jonas, so I am leaving it for now until we discuss further
     epsilon = [1e-8 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
     for p, eps in zip(info["params"].values(), epsilon):
-        p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
+        if "prior" in p:
+            p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
     log_prior_volume = np.sum(np.log(bounds[:,1] - bounds[:,0]))
 
     def lkl(**kwargs):

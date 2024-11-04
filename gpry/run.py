@@ -1188,8 +1188,14 @@ class Runner():
                             "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
+        # Hack: reuse shrunk bounds from acquisition class
+        # TODO: change this so that shrunk bounds are used at GPR model level
+        bounds = None
+        if hasattr(self.acquisition, "shrink_priors"):
+            bounds = self.acquisition.shrink_priors(self.gpr)
+        # end of hack
         self.last_mc_surr_info, self.last_mc_sampler = mc_sample_from_gp(
-            self.gpr, true_model=self.model, sampler=sampler,
+            self.gpr, true_model=self.model, sampler=sampler, bounds=bounds,
             convergence=self.convergence, output=output, add_options=add_options,
             resume=resume, verbose=self.verbose)
         sampler_name = sampler if isinstance(sampler, str) else list(sampler)[0]
@@ -1198,6 +1204,7 @@ class Runner():
             skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0
         )
         mpi.share_attr(self, "_last_mc_samples")
+        return self._last_mc_samples
 
     def last_mc_samples(self, as_getdist=True):
         """
