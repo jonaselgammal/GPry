@@ -427,10 +427,13 @@ class Runner():
                 gpr["n_restarts_optimizer"], "d", self.d, int, "n_restarts_optimizer"
             )
             # If running with MPI, round down the #restarts of hyperparam optimizer to
-            # a multiple of the MPI size (taking into account the run from the optimum)
-            if (gpr["n_restarts_optimizer"] + 1) % mpi.SIZE:
+            # a multiple of the MPI size (NB: #restarts includes from current best)
+            if (
+                    gpr["n_restarts_optimizer"] > mpi.SIZE and
+                    gpr["n_restarts_optimizer"] % mpi.SIZE
+            ):
                 gpr["n_restarts_optimizer"] = (
-                    ((gpr["n_restarts_optimizer"] + 1) // mpi.SIZE) * mpi.SIZE - 1
+                    (gpr["n_restarts_optimizer"] // mpi.SIZE) * mpi.SIZE
                 )
                 warnings.warn(
                     "The number of restarts of the optimizer has been rounded down to "

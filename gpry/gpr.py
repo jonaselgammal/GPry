@@ -825,7 +825,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             n_restarts = self.n_restarts_optimizer
         no_optimizer = self.optimizer is None
         no_hyperparams = self.kernel.n_dims == 0
-        no_restarts = n_restarts == 0
+        no_restarts = n_restarts <= 0
         if no_optimizer or no_hyperparams or no_restarts:
             msg_reasons = []
             if no_optimizer:
