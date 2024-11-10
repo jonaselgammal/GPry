@@ -375,7 +375,7 @@ class Runner():
                          "initial_proposer", "progress", "diagnosis",
                          "n_resamples_before_giveup", "resamples"):
                 mpi.share_attr(self, attr)
-            self._share_gpr_from_main()
+            self._share_gpr()
             self._share_convergence_from_main()
             if self.callback_is_MPI_aware:
                 mpi.share_attr(self, "callback")
@@ -668,13 +668,13 @@ class Runner():
             save_checkpoint(self.checkpoint, to_save_model, self.gpr, self.acquisition,
                             self.convergence, self.options, self.progress)
 
-    def _share_gpr_from_main(self):
+    def _share_gpr(self, root=0):
         """
         Shares the GPR of the main process, restoring each process' RNG.
         """
         if not mpi.multiple_processes:
             return
-        mpi.share_attr(self, "gpr")
+        mpi.share_attr(self, "gpr", root=root)
         self.gpr.set_random_state(self.random_state)
 
     def _share_convergence_from_main(self):
@@ -1016,7 +1016,7 @@ class Runner():
                      "GPR.", level=3)
             self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=4)
         # Broadcast results
-        self._share_gpr_from_main()
+        self._share_gpr()
         self.progress.mpi_sync()
 
     def _eval_truth_parallel(self, new_X):
@@ -1085,7 +1085,7 @@ class Runner():
         # At lest rank 0 must run, even if not fitting the GPR/SVM, to add the points
         if fit_gpr_kwargs['n_restarts'] or mpi.is_main_process:
             what_hyper = (
-                f"fit with {fit_gpr_kwargs['n_restarts']} restarts" if
+                f"fit with {fit_gpr_kwargs['n_restarts']} restart(s) per MPI process." if
                 fit_gpr_kwargs['n_restarts'] else "kept constant."
             )
             self.log(
@@ -1114,7 +1114,7 @@ class Runner():
                 f"[{mpi.RANK}] Overall best log-marginal-likelihood {lmls[best_i][1]}",
                 level=4,
             )
-        mpi.share_attr(self, "gpr", root=best_i)
+        self._share_gpr(root=best_i)
         msg = None
         if mpi.is_main_process:
             msg = (
@@ -1248,7 +1248,7 @@ class Runner():
                     new_vals[i] = self.model.logpost(p)
                     self.gpr.append_to_data(points_to_evaluate, new_vals,
                             fit=True)
-                self._share_gpr_from_main()
+                self._share_gpr()
                 # self.save_checkpoint()
                 self.log("...done.")
 
