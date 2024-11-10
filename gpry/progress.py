@@ -177,8 +177,13 @@ class Progress:
         if not truth:
             cols_labels.pop("time_truth")
         cols_data = {
-            col: self.data[col].to_numpy(dtype=self._dtypes[col]) for col in cols_labels
+            col: self.data[col].to_numpy(dtype=self._dtypes[col]).copy()
+            for col in cols_labels
         }
+        # Sometimes this plot is done before the convergence criterion has run
+        # (inside callback or when max evals exhausted). Prevent nan's
+        if np.isnan(cols_data["time_convergence"][-1]):
+            cols_data["time_convergence"][-1] = 0
         cols_totals = {col: sum(data) for col, data in cols_data.items()}
         total = sum(cols_totals.values())
         for col, label in cols_labels.items():
