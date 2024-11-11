@@ -254,7 +254,7 @@ class GaussianKL(ConvergenceCriterion):
         self.limit = params.get("limit", 1e-2)
         d = len(self.prior_bounds)
         # Needs to at least encompass 2 full MC samples -- TODO: fix in run.py at init
-        self.limit_times = params.get("limit_times", d)
+        self.limit_times = int(np.round(params.get("limit_times", d)))
         self.convergence_policy = params.get("policy", "and")
         self.values = []
         self.thres = []
