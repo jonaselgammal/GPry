@@ -1339,12 +1339,3 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         assuming a :math:`\chi^2` distribution.
         """
         return delta_logp_of_1d_nstd(n_sigma, n_dimensions)
-
-    # TO BE DEPRECATED
-    @property
-    def account_for_inf(self):
-        warnings.warn(
-            "This attr has been renamed to 'infinities_classifier'. "
-            "This will raise an error soon."
-        )
-        return self.infinities_classifier

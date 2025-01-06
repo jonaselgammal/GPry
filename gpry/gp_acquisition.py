@@ -49,9 +49,6 @@ class GenericGPAcquisition():
                  acq_func="LogExp",
                  shrink_1d_nstd=None,
                  shrink_with_factor=None,
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  ):
         self.bounds = np.array(bounds)
         self.n_d = bounds.shape[0]
@@ -63,17 +60,6 @@ class GenericGPAcquisition():
         elif isinstance(acq_func, (Mapping, str)):
             if isinstance(acq_func, str):
                 acq_func = {acq_func: {}}
-            # DEPRECATED ON 13-09-2023:
-            if zeta is not None or zeta_scaling is not None:
-                print(
-                    "*Warning*: 'zeta' and 'zeta_scaling' have been deprecated as kwargs "
-                    "and should be passed inside the 'acq_func' arg dict, e.g. "
-                    "'acq_func={\"LogExp\": {\"zeta_scaling\": 0.85}}'. The given values "
-                    "are being used, but this will fail in the future."
-                )
-                acq_func[list(acq_func)[0]].update(
-                    {"zeta": zeta, "zeta_scaling": zeta_scaling})
-            # END OF DEPRECATION BLOCK
             acq_func_name = list(acq_func)[0]
             acq_func_args = acq_func[acq_func_name] or {}
             acq_func_args["dimension"] = self.n_d
@@ -255,9 +241,6 @@ class BatchOptimizer(GenericGPAcquisition):
                  acq_func="LogExp",
                  shrink_1d_nstd=None,
                  shrink_with_factor=None,
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  # Class-specific:
                  proposer=None,
                  acq_optimizer="fmin_l_bfgs_b",
@@ -563,17 +546,6 @@ class BatchOptimizer(GenericGPAcquisition):
         return theta_opt, func_min
 
 
-# DEPRECATED ON 13-09-2023:
-class GPAcquisition(BatchOptimizer):
-
-    def __init__(self, *args, **kwargs):
-        print(
-            "*Warning*: This class has been renamed to BatchOptimizer. "
-            "This will fail in the future."
-        )
-        super().__init__(*args, **kwargs)
-
-
 class NORA(GenericGPAcquisition):
     """
     Run Gaussian Process acquisition with NORA (Nested sampling Optimization for Ranked
@@ -665,9 +637,6 @@ class NORA(GenericGPAcquisition):
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  # Class-specific:
                  sampler=None,
                  mc_every="1d",

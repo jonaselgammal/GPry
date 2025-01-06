@@ -521,16 +521,6 @@ class CorrectCounter(ConvergenceCriterion):
     """
 
     def __init__(self, prior_bounds, params):
-        # DEPRECATED ON 19-11-2023:
-        from cobaya.prior import Prior  # pylint: disable=import-outside-toplevel
-        if isinstance(prior_bounds, Prior):
-            warn(
-                "The first argument at initialization should now be a list of bounds, "
-                "not a Cobaya Prior (to reduce Cobaya dependence). "
-                "This will fail in the future."
-            )
-            prior_bounds = prior_bounds.bounds()
-        # END OF DEPRECATION BLOCK
         d = len(prior_bounds)
         self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5 * d)))
         reltol = params.get("reltol", 0.01)

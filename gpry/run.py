@@ -191,8 +191,6 @@ class Runner():
                  seed=None,
                  plots=False,
                  verbose=3,
-                 # DEPRECATED ON 13-09-2023:
-                 convergence_options=None,
                  ):
         self.verbose = verbose
         if model is None:
@@ -264,28 +262,6 @@ class Runner():
                                    f"the model instance: {excpt}") from excpt
             # Construct the main loop elements:
             # GPR, GPAcquisition, InitialProposer and ConvergenceCriterion
-            # DEPRECATED ON 13-09-2023:
-            if convergence_options is not None and isinstance(convergence_criterion, str):
-                self.log(
-                    "*Warning*: 'convergence_options' has been deprecated. You can "
-                    "now speficy arguments for the convergence criterion passing it "
-                    "as a dict, e.g. 'convergence_criterion={\"CorrectCounter\": "
-                    "{\"kwarg\": value}'. Your arguments have been passed, but this "
-                    "will fail in the future."
-                )
-                convergence_criterion = {convergence_criterion: convergence_options}
-            zeta_scaling = (options or {}).pop("zeta_scaling", None)
-            if zeta_scaling is not None:
-                self.log(
-                    "*Warning*: Passing 'zeta_scaling' as part of the 'options' has been "
-                    "deprecated. It should be passed as a key of the 'acq_func' dict "
-                    "the GPAcquisition specification, e.g. '{\"BatchOptimizer\": "
-                    "{\"acq_func\": {\"zeta_scaling\": 0.85}}}'. The given 'zeta_scaling'"
-                    " is being used, but this will fail in the future."
-                )
-                if isinstance(gp_acquisition, str):
-                    gp_acquisition = {gp_acquisition: {"zeta_scaling": zeta_scaling}}
-            # END OF DEPRECATION BLOCK
             self._construct_gpr(gpr)
             self._construct_gp_acquisition(gp_acquisition)
             self._construct_initial_proposer(initial_proposer)
