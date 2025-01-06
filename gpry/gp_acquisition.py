@@ -216,7 +216,7 @@ class BatchOptimizer(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    zeta_scaling : float, optional (default: 1.1)
+    zeta_scaling : float, optional (default: 0.85)
         The scaling of the acquisition function's zeta parameter with dimensionality
         (Only if "LogExp" is passed as acquisition_function)
 
@@ -601,7 +601,7 @@ class NORA(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    zeta_scaling : float, optional (default: 1.1)
+    zeta_scaling : float, optional (default: 0.85)
         The scaling of the acquisition function's zeta parameter with dimensionality
         (Only if "LogExp" is passed as acquisition_function)
 
