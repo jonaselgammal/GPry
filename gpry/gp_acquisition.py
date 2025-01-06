@@ -50,7 +50,7 @@ class GenericGPAcquisition():
                  shrink_1d_nstd=None,
                  shrink_with_factor=None,
                  ):
-        self.bounds = np.array(bounds)
+        self.bounds_ = np.array(bounds).copy()
         self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
         self.verbose = verbose
@@ -114,14 +114,14 @@ class GenericGPAcquisition():
             A (d, 2) array representing the adjusted boundaries.
         """
         if self.shrink_with_factor is None:
-            return self.bounds
+            return self.bounds_
         X = gpr.X_train
         if self.shrink_1d_nstd is not None:
             X = X[
                 np.where(max(gpr.y_train) - gpr.y_train <
                          delta_logp_of_1d_nstd(self.shrink_1d_nstd, gpr.d))
             ]
-        return shrink_bounds(self.bounds, X, factor=self.shrink_with_factor)
+        return shrink_bounds(self.bounds_, X, factor=self.shrink_with_factor)
 
 
 class BatchOptimizer(GenericGPAcquisition):
@@ -253,7 +253,7 @@ class BatchOptimizer(GenericGPAcquisition):
         # If nothing is provided for the proposal, we use a centroids proposer with
         # a fraction of uniform samples.
         if self.proposer is None:
-            self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
+            self.proposer = PartialProposer(self.bounds_, CentroidsProposer(self.bounds_))
         else:
             if not isinstance(proposer, Proposer):
                 raise TypeError(
@@ -362,9 +362,9 @@ class BatchOptimizer(GenericGPAcquisition):
         # Preprocessing
         if self.preprocessing_X is not None:
             transformed_bounds = self.preprocessing_X.transform_bounds(
-                self.bounds)
+                self.bounds_)
         else:
-            transformed_bounds = self.bounds
+            transformed_bounds = self.bounds_
 
         if i == 0:
             # Perform first run from last training point
@@ -374,8 +374,8 @@ class BatchOptimizer(GenericGPAcquisition):
             return self._constrained_optimization(self.obj_func, x0,
                                                   transformed_bounds)
         else:
-            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
-            x0s = np.empty((self.n_repeats_propose + 1, self.bounds.shape[0]))
+            n_tries = 10 * self.bounds_.shape[0] * self.n_restarts_optimizer
+            x0s = np.empty((self.n_repeats_propose + 1, self.bounds_.shape[0]))
             values = np.empty(self.n_repeats_propose + 1)
             ifull = 0
             for n_try in range(n_tries):
@@ -761,7 +761,7 @@ class NORA(GenericGPAcquisition):
     def _do_MC_sample_uniform(self, gpr, random_state, bounds=None):
         if not mpi.is_main_process:
             return None, None, None, None
-        proposer = UniformProposer(self.bounds if bounds is None else bounds)
+        proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
         n_total = 8 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
@@ -777,7 +777,7 @@ class NORA(GenericGPAcquisition):
             return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
         # Update prior bounds
-        self.sampler_interface.set_prior(self.bounds if bounds is None else bounds)
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
         self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
         # Output folder
@@ -805,7 +805,7 @@ class NORA(GenericGPAcquisition):
         # Ultranest cannot deal with -np.inf
         old_minus_inf_value = gpr.minus_inf_value
         gpr.minus_inf_value = -1e300
-        bounds = self.bounds if bounds is None else bounds
+        bounds = self.bounds_ if bounds is None else bounds
         widths = bounds[:, 1] - bounds[:, 0]
         lowers = bounds[:, 0]
 
@@ -915,7 +915,7 @@ class NORA(GenericGPAcquisition):
                 lp = np.single(0.)
                 return lp
 
-        nessai_model = Nessai_model(gpr, self.bounds if bounds is None else bounds)
+        nessai_model = Nessai_model(gpr, self.bounds_ if bounds is None else bounds)
         updated_settings = self.update_NS_precision(gpr)
         if self.tmpdir is None:
             # TODO: add to checkpoint folder?
@@ -1041,7 +1041,7 @@ class NORA(GenericGPAcquisition):
             loglikes=-y if y is not None else None,
             names=params,
             labels=labels_list,
-            ranges=dict(zip(params, self.bounds)),
+            ranges=dict(zip(params, self.bounds_)),
             sampler="nested",
             ignore_rows=0,
         )
