@@ -11,7 +11,7 @@ from cobaya.collection import SampleCollection
 
 from gpry import mpi
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
-    UniformProposer
+    UniformProposer, MeanCovProposer
 from gpry.gpr import GaussianProcessRegressor
 from gpry.gp_acquisition import GenericGPAcquisition
 import gpry.gp_acquisition as gprygpacqs
@@ -484,15 +484,19 @@ class Runner():
                 initial_proposer = {initial_proposer: {}}
             initial_proposer_name = list(initial_proposer)[0]
             initial_proposer_args = initial_proposer[initial_proposer_name]
-            if initial_proposer_name.lower() == "reference":
+            propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
+            if propname_nosuffix == "reference":
                 self.initial_proposer = ReferenceProposer(
                     self.model, **initial_proposer_args)
-            elif initial_proposer_name.lower() == "prior":
+            elif propname_nosuffix == "prior":
                 self.initial_proposer = PriorProposer(
                     self.model, **initial_proposer_args)
-            elif initial_proposer_name.lower() == "uniform":
+            elif propname_nosuffix == "uniform":
                 self.initial_proposer = UniformProposer(
                     self.prior_bounds, **initial_proposer_args)
+            elif propname_nosuffix == "meancov":
+                self.initial_proposer = MeanCovProposer(
+                    **initial_proposer_args)
             else:
                 raise ValueError(
                     "Supported standard initial point proposers are "
@@ -839,7 +843,7 @@ class Runner():
                     for cc in self.convergence
                 )
                 self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
-                         "Evaluated convergence criterion to " + last_values, level=3)
+                         "Evaluated convergence criterion to " + last_values, level=2)
             mpi.sync_processes()
             # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
             # self.update_mean_cov()
