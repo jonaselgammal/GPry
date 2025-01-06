@@ -149,9 +149,11 @@ class BatchOptimizer(GenericGPAcquisition):
         of points drawn from an "UniformProposer" and from a "CentroidsProposer")
         Proposes points from which the acquisition function should be optimized.
 
-    acq_func : GPry Acquisition Function, optional (default: "LogExp")
+    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
         Acquisition function to maximize/minimize. If none is given the
-        `LogExp` acquisition function will be used
+        `LogExp` acquisition function will be used. Can also be a dictionary with the name
+        of the acquisition function as the single key, and as value a dict of its
+        arguments.
 
     acq_optimizer : string or callable, optional (default: "auto")
         Can either be one of the internally supported optimizers for optimizing
@@ -202,13 +204,6 @@ class BatchOptimizer(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    zeta_scaling : float, optional (default: 0.85)
-        The scaling of the acquisition function's zeta parameter with dimensionality
-        (Only if "LogExp" is passed as acquisition_function)
-
-    zeta: float, optional (default: None, uses zeta_scaling)
-        Specifies the value of the zeta parameter directly.
-
     shrink_with_factor: float, optional (default: None)
         If defined as a positive float, the nested sampling runs are restricted to the
         hypercube defined by the current (finite) GPR training set, enlarged by the given
@@ -249,8 +244,8 @@ class BatchOptimizer(GenericGPAcquisition):
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling,
-            shrink_1d_nstd=shrink_1d_nstd, shrink_with_factor=shrink_with_factor,
+            verbose=verbose, acq_func=acq_func, shrink_1d_nstd=shrink_1d_nstd,
+            shrink_with_factor=shrink_with_factor,
         )
         self.proposer = proposer
         self.obj_func = None
@@ -560,9 +555,11 @@ class NORA(GenericGPAcquisition):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    acq_func : GPry Acquisition Function, optional (default: "LogExp")
+    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
         Acquisition function to maximize/minimize. If none is given the
-        `LogExp` acquisition function will be used
+        `LogExp` acquisition function will be used. Can also be a dictionary with the name
+        of the acquisition function as the single key, and as value a dict of its
+        arguments.
 
     mc_every : int
         If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
@@ -572,13 +569,6 @@ class NORA(GenericGPAcquisition):
         The generator used to initialize the centers. If an integer is
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
-
-    zeta_scaling : float, optional (default: 0.85)
-        The scaling of the acquisition function's zeta parameter with dimensionality
-        (Only if "LogExp" is passed as acquisition_function)
-
-    zeta: float, optional (default: None, uses zeta_scaling)
-        Specifies the value of the zeta parameter directly.
 
     use_prior_sample: bool [CURRENTLY DISABLED!]
         Whether to use the initial prior sample from Nested Sampling for the ranking.
@@ -653,8 +643,8 @@ class NORA(GenericGPAcquisition):
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling,
-            shrink_1d_nstd=shrink_1d_nstd, shrink_with_factor=shrink_with_factor,
+            verbose=verbose, acq_func=acq_func, shrink_1d_nstd=shrink_1d_nstd,
+            shrink_with_factor=shrink_with_factor,
         )
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
