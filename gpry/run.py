@@ -397,7 +397,7 @@ class Runner():
                 "inf_threshold": "20s"
             }
             for k, default_value in gpr_defaults.items():
-                if gpr.get(k) is None:
+                if k not in gpr:
                     gpr[k] = default_value
             gpr["n_restarts_optimizer"] = get_Xnumber(
                 gpr["n_restarts_optimizer"], "d", self.d, int, "n_restarts_optimizer"
@@ -451,7 +451,7 @@ class Runner():
                 "verbose": self.verbose,
             }
             for k, default_value in gp_acquisition_defaults.items():
-                if gp_acquisition_args.get(k) is None:
+                if k not in gp_acquisition_args:
                     gp_acquisition_args[k] = default_value
             try:
                 gp_acquisition_class = getattr(gprygpacqs, gp_acquisition_name)
