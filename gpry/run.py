@@ -757,7 +757,7 @@ class Runner():
             # less than half of the number requested (or less than 2 if only 2 requested),
             # force the acquisition to re-sample until either getting more points or
             # breaking if n_resamples_before_giveup is reached.
-            if len(y_pred) < self.n_points_per_acq // 2:
+            if len(y_pred) < max(1, self.n_points_per_acq // 2):
                 self.resamples += 1
                 no_more_candidates = False
                 if self.resamples > self.n_resamples_before_giveup:
