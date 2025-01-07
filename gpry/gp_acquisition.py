@@ -25,9 +25,6 @@ from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
 import gpry.ns_interfaces as nsint
 
 
-# TODO: inconsistent use of random_state: passed at init, and also at acquisition time
-
-
 def builtin_names():
     """
     Lists all names of all built-in acquisition functions criteria.
@@ -1151,13 +1148,36 @@ class NORA(GenericGPAcquisition):
         mpi.sync_processes()
         if mpi.is_main_process:
             start_rank = time()
-        # TODO: still testing in realistic scenarios whether it is faster to rank in
-        #       parallel (doesn't matter a lot, since it's way faster than NS anyway)
-        # merged_pool = self._rank(this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
         args = (this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
-        method, merge_method = "bulk", "bulk"
-        merged_pool = self._parallel_rank_and_merge(
-            *args, method=method, merge_method=merge_method)
+        # TODO: facility to test speed of ranking methods
+        # CHECK: if no MPI, all methods starting with the same one should yield the same
+        # IMPLEMENT: non-parallel even if MPI
+        # TODO: update "auto" method default values
+        # if not hasattr(self, "totals"):
+        #     self.totals = {}
+        for method, merge_method in [
+                # ("bulk", "bulk"),
+                # ("bulk", "single sort acq"),
+                ("single sort acq", "bulk"), # seems to be the fastest
+                # ("bulk", "single sort y"),
+                # ("single sort acq", "single sort acq"),
+                # ("single sort y", "bulk"),
+                # ("single sort y", "single sort y"),
+                # ("single", "single"),
+        ]:
+            # start = time()
+            merged_pool = self._parallel_rank_and_merge(
+                *args, method=method, merge_method=merge_method)
+            # delta = time() - start
+            # if (method, merge_method) not in self.totals:
+            #     self.totals[(method, merge_method)] = 0
+            # self.totals[(method, merge_method)] += delta
+            # if mpi.is_main_process:
+            #     print(
+            #         f"TOOK: {delta:.2g} ; "
+            #         f"TOTAL: {self.totals[(method, merge_method)]:.2g}; "
+            #         f"methods: {(method, merge_method)}"
+            #    )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
         X_pool, y_pool = merged_pool.X[:n_points], merged_pool.y[:n_points]
