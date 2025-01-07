@@ -238,47 +238,6 @@ class Progress:
             plt.show(block=True)
         plt.close()
 
-    # pylint: disable=import-outside-toplevel,possibly-used-before-assignment
-    def plot_evals(self, show=False, save="progress_evals.png"):
-        """
-        Plots as stacked bars the number of evaluations of each part of each iteration.
-
-        In multiprocess runs, sum of the number of evaluations of all processes.
-
-        Pass ``truth=False`` (default: True) to exclude the number of evaluations of the
-        true posterior at training points, for e.g. overhead-only plots.
-        """
-        if "plt" not in globals():
-            import matplotlib.pyplot as plt
-        plt.set_loglevel("WARNING")  # avoids a useless message
-        fig, ax = plt.subplots()
-        # cast x values into list, to prevent finer x ticks
-        iters = [str(i) for i in self.data.index.to_numpy(int)]
-        bottom = np.zeros(len(self.data.index))
-        for col, label in {
-            "evals_acquire": "Acquisition",
-            "evals_fit": "GP fit",
-            "evals_convergence": "Convergence crit.",
-        }.items():
-            dtype = self._dtypes[col]
-            ax.bar(
-                iters,
-                self.data[col].astype(dtype, errors="ignore"),
-                label=label,
-                bottom=bottom,
-            )
-            bottom += self.data[col].astype(float).to_numpy(dtype=dtype, na_value=np.nan)
-        ax.set_xlabel("Iteration")
-        self._x_ticks_for_bar_plot(fig, ax)
-        multiprocess_str = " (summed over processes)" if mpi.multiple_processes else ""
-        plt.ylabel("Number of evaluations" + multiprocess_str)
-        plt.legend(loc="upper left")
-        if save:
-            plt.savefig(save)
-        if show:
-            plt.show(block=True)
-        plt.close()
-
 
 # pylint: disable=attribute-defined-outside-init
 class Timer:

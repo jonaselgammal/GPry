@@ -1130,7 +1130,6 @@ class Runner():
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=True, save=os.path.join(self.plots_path, "timing.svg"))
-        self.progress.plot_evals(save=os.path.join(self.plots_path, "evals.svg"))
         gpplt.plot_points_distribution(
             self.model, self.gpr, self.convergence, self.progress,
             reference=self.last_mc_samples()
