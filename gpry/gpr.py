@@ -60,6 +60,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         for Matern, pass a single-key dict as ``{"Matern": {"nu": 2.5}}"``. Note
         that the kernel's hyperparameters are optimized during fitting.
 
+    output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
+        Prior for the (non-squared) scale parameter, in normalised logp units.
+
+    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
+        Prior for the length parameters, as a fraction of the parameter priors sizes.
+
     noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
         during fitting. Larger values correspond to increased noise level in the
@@ -228,7 +234,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         predict
     """
 
-    def __init__(self, kernel="RBF", noise_level=1e-2,
+    def __init__(self, kernel="RBF", output_scale_prior=[1e-2, 1e3],
+                 length_scale_prior=[1e-3, 1e1], noise_level=1e-2,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
                  account_for_inf="SVM", inf_threshold="20s", bounds=None,
@@ -301,9 +308,19 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     f"supported as standard kernels. Got '{kernel_name}'."
                 ) from excpt
             # Build kernel
-            kernel = C(1.0, [0.001, 1e3**2]) \
-                * length_corr_kernel([0.01] * self.d, [0.001, 1],
-                                     prior_bounds=self.bounds_, **kernel_args)
+            output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
+            length_scale_init = np.sqrt(length_scale_prior[0] * length_scale_prior[1])
+            kernel = (
+                C(
+                    output_scale_init**2,
+                    [output_scale_prior[0]**2, output_scale_prior[1]**2],
+                ) * length_corr_kernel(
+                    [length_scale_init] * self.d,
+                    length_scale_prior,
+                    prior_bounds=self.bounds_,
+                    **kernel_args,
+                )
+            )
         sk_GaussianProcessRegressor.__init__(
             self, kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
