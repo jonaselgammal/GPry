@@ -1171,7 +1171,7 @@ class Runner():
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
         # Add a covariance matrix if it exists (e.g. from MC-based acquisition)
-        if self.cov is not None and "covmat" not in add_options:
+        if self.cov is not None and "covmat" not in (add_options or {}):
             if add_options is None:
                 add_options = {}
             add_options["covmat"] = self.cov

@@ -97,11 +97,11 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
         for p, l in zip(paramnames, paramlabels):
             info["params"][p]["latex"] = l
     # TODO :: this is very artificial and probably should be removed eventually.
-    # It was added here by Jonas, so I am leaving it for now until we discuss further
-    epsilon = [1e-8 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
-    for p, eps in zip(info["params"].values(), epsilon):
-        if "prior" in p:
-            p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
+    # # It was added here by Jonas, so I am leaving it for now until we discuss further
+    # epsilon = [1e-8 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
+    # for p, eps in zip(info["params"].values(), epsilon):
+    #     if "prior" in p:
+    #         p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
     log_prior_volume = np.sum(np.log(bounds[:,1] - bounds[:,0]))
 
     def lkl(**kwargs):
