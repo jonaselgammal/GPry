@@ -789,6 +789,8 @@ class NORA(GenericGPAcquisition):
             else:
                 tmpdir = os.path.join(self.tmpdir, str(self.i))
                 self.i += 1
+            if not tmpdir.endswith("/"):
+                tmpdir += "/"
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
             logp,

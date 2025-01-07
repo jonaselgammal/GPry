@@ -123,6 +123,8 @@ class InterfacePolyChord:
                 # If no slash in there, interpret as folder (since kwarg is 'out_dir')
                 if not base_dir:
                     base_dir, file_root = file_root, ""
+            if file_root == "":
+                file_root = "ns_samples"
             self.polychord_settings.base_dir = base_dir
             self.polychord_settings.file_root = file_root
         mpi.share_attr(self, "polychord_settings")
