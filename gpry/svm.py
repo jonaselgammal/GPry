@@ -211,6 +211,13 @@ class SVM(SVC):
         return self.X_train.shape[1]
 
     @property
+    def abs_threshold(self):
+        """
+        Current absolute threshold for y values, in the transformed space of the SVM.
+        """
+        return self._max_y - self.diff_threshold
+
+    @property
     def n(self):
         """Number of training points."""
         if self.y_train is None:
@@ -251,7 +258,6 @@ class SVM(SVC):
         # Update threshold value
         self.diff_threshold = diff_threshold
         self._max_y = max(self.y_train)
-        self.abs_threshold = self._max_y - self.diff_threshold
         # Turn into boolean categorial values
         self.y_finite = self._is_finite_raw(
             self.y_train, self.diff_threshold, max_y=self._max_y
@@ -269,43 +275,21 @@ class SVM(SVC):
         """
         Returns the indices of the finite points, depending on some delta-like threshold,
         in the same space (transformed or not) as the y's.
-        """
-        if max_y is None:
-            max_y = np.max(y)
-        return np.greater_equal(y, max_y - diff_threshold) & np.isfinite(y)
-
-    def is_finite(self, y=None):
-        """
-        Returns True for finite values above the current threshold, and False otherwise.
 
         Notes
         -----
-        This is not a predictor method, but a simple threshold check, i.e. it does not
+        This is *not* a predictor method, but a simple threshold check, i.e. it does not
         predict whether the value at some particular location is expected to be finite.
-        For that purpose, use the ``predict`` method.
+        For that purpose, use the ``predict`` method. This may lead to inconsistencies,
+        such as classifying as finite the ``y`` computed for an ``X`` for which an
+        infinite value is predicted, or vice versa.
         """
-        if y is None:
-            y = self.y_train
-        else:
-            warnings.warn(
-                "Calling '.is_finite_()' with an argument: its result is only consistent "
-                "when calling with the training set or a subset of it, but not when "
-                "calling with points not yet in the training set, since they may change "
-                "the threshold after addition."
-            )
-        if self.y_train is None:
-            raise ValueError(
-                "The SVM has not been trained yet, so no check can be performed, "
-                "since classifying thresholds are defined as a difference with the "
-                "maximum."
-            )
-        if not self.at_least_one_finite:
-            raise ValueError(
-                "The SVM has not received any finite training points yet, so no check can"
-                " be performed, since classifying thresholds are defined as a difference "
-                "with a finite maximum."
-            )
-        return np.atleast_1d(y) > self.abs_threshold
+        if max_y is None:
+            max_y = np.max(y)
+        # There are two corner cases here:
+        # - If y=inf and diff_threshold=inf --> True & False = False (needs the isfinite!)
+        # - If y=np.nan --> False & False = False
+        return np.greater_equal(y, max_y - diff_threshold) & np.isfinite(y)
 
     def predict(self, X, validate=True):
         """

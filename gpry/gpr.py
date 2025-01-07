@@ -453,6 +453,16 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 self.kernel_.k2.length_scale))
         )
 
+    @property
+    def abs_finite_threshold(self):
+        """
+        Absolute threshold for ``y`` values to be considered finite.
+        """
+        threshold = self.infinities_classifier.abs_threshold
+        if self.preprocessing_y is None:
+            return threshold
+        return self.preprocessing_y.inverse_transform_scale(threshold)
+
     def is_finite(self, y=None):
         """
         Returns the classification of y (target) values as finite (True) or not, by
@@ -468,9 +478,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         if self.infinities_classifier is None:
             return np.full(shape=len(y), fill_value=True)
-        return self.infinities_classifier.is_finite(
-            self.preprocessing_y.transform(y) if y is not None else None
-        )
+        return self.infinities_classifier._is_finite_raw(y, self.diff_threshold)
 
     def predict_is_finite(self, X, validate=True):
         """

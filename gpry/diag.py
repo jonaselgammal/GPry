@@ -50,9 +50,9 @@ def diagnosis(runner):
             y_finite == runner.gpr.predict_is_finite(runner.gpr.X_train_all)
         )
         min_finite_y = min(points[points["GP"]]["y_GP"])
-        consistent_threshold = min_finite_y > runner.gpr.infinities_classifier.abs_threshold_finite
+        consistent_threshold = min_finite_y > runner.gpr.abs_finite_threshold
         print(
-            f"THRESHOLD: {runner.gpr.infinities_classifier.abs_threshold_finite}. "
+            f"THRESHOLD: {runner.gpr.abs_finite_threshold}. "
             f"Min finite y is {min_finite_y}"
         )
         is_inf_self_consistent = (
