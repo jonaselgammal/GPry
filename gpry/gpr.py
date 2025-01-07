@@ -74,6 +74,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         data used for fitting and is used as datapoint-dependent noise level.
         Note that this is equivalent to adding a WhiteKernel with c=noise_level.
 
+    clip_factor : float, optional (default: 1.1)
+        Factor for upper clipping of the GPR predictions, to avoid overshoots.
+
     optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
         Can either be one of the internally supported optimizers for optimizing
         the kernel's parameters, specified by a string, or an externally
@@ -235,7 +238,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     """
 
     def __init__(self, kernel="RBF", output_scale_prior=[1e-2, 1e3],
-                 length_scale_prior=[1e-3, 1e1], noise_level=1e-2,
+                 length_scale_prior=[1e-3, 1e1], noise_level=1e-2, clip_factor=1.1,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
                  account_for_inf="SVM", inf_threshold="20s", bounds=None,
@@ -248,6 +251,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.preprocessing_y = \
             DummyPreprocessor if preprocessing_y is None else preprocessing_y
         self.noise_level = noise_level
+        if clip_factor < 1:
+            raise ValueError("'clip_factor' must be >= 1, or None for no clippling.")
+        self.clip_factor = clip_factor
         self.n_eval = 0
         self.n_eval_loglike = 0
         self.verbose = verbose
@@ -1080,9 +1086,17 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             y_mean = y_mean_
         else:
             y_mean = self.preprocessing_y.inverse_transform(y_mean_)
+        # Upper clipping to avoid overshoots
+        if self.clip_factor is not None:
+            y_mean = np.clip(
+                y_mean,
+                None,
+                (
+                    self.clip_factor * max(self.y_train) -
+                    (self.clip_factor - 1) * min(self.y_train)
+                )
+            )
         # Put together with SVM predictions
-        clip_factor = 0.1
-        y_mean = np.clip(y_mean, None, (1 + clip_factor) * max(self.y_train) - clip_factor * min(self.y_train))
         if self.infinities_classifier is not None:
             y_mean_full[finite] = y_mean
             y_mean = y_mean_full
