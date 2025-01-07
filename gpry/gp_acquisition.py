@@ -1018,6 +1018,19 @@ class NORA(GenericGPAcquisition):
             )
         return return_values
 
+    @property
+    def mean(self):
+        return None
+        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        print(np.average(Xs.T, weights=ws, axis=-1), np.average(Xs.T, weights=ws, axis=-1).shape)
+        return np.average(Xs.T, weights=ws, axis=-1)
+
+    @property
+    def cov(self):
+        return None
+        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        return np.cov(Xs.T, aweights=ws, ddof=0)
+
     def last_MC_sample_getdist(self, model, warn_reweight=True):
         """
         Returns the last MC sample as a ``getdist.MCSamples`` instance.

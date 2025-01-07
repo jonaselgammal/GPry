@@ -846,7 +846,7 @@ class Runner():
                          "Evaluated convergence criterion to " + last_values, level=2)
             mpi.sync_processes()
             # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
-            # self.update_mean_cov()
+            self.update_mean_cov()
             self.progress.mpi_sync()
             self.save_checkpoint()
             if mpi.is_main_process and self.plots:
@@ -1171,6 +1171,21 @@ class Runner():
                             "before you can generate an mc_sample")
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
+        # Add a covariance matrix if it exists (e.g. from MC-based acquisition)
+        if self.cov is not None and "covmat" not in add_options:
+            if add_options is None:
+                add_options = {}
+            add_options["covmat"] = self.cov
+            # No need to specify parameter names: same order bc same model param info
+        # Update the ref to the available info
+        # TODO: unused at the moment
+        best_point_per_mpi_rank = \
+            self.gpr.X_train[np.argsort(self.gpr.y_train)[-1 + mpi.RANK]]
+        ref = {
+            p: val for p, val in zip(
+                self.model.parameterization.sampled_params(), best_point_per_mpi_rank
+            )
+        }
         # Hack: reuse shrunk bounds from acquisition class
         # TODO: change this so that shrunk bounds are used at GPR model level
         bounds = None
