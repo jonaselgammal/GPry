@@ -479,7 +479,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.infinities_classifier is None:
             return np.full(shape=(len(self.y_train_all), ), fill_value=True)
         return self.infinities_classifier.predict(
-            self.preprocessing_X.transform(X), validate=validate
+            np.ascontiguousarray(self.preprocessing_X.transform(X)), validate=validate
         )
 
     def set_random_state(self, random_state):
@@ -1043,7 +1043,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             grad_mean_full = np.ones((n_samples, n_dims))
             grad_std_full = np.zeros((n_samples, n_dims))
             X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
-            finite = self.infinities_classifier.predict(X_, validate=validate)
+            finite = self.infinities_classifier.predict(
+                np.ascontiguousarray(X_), validate=validate
+            )
             # If all values are infinite there's no point in running the
             # prediction through the GP
             if np.all(~finite):
@@ -1197,7 +1199,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # and non-infinite values
             y_std_full = np.zeros(n_samples)  # std is zero when mu is -inf
             X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
-            finite = self.infinities_classifier.predict(X_, validate=validate)
+            finite = self.infinities_classifier.predict(
+                np.ascontiguousarray(X_), validate=validate
+            )
             # If all values are infinite there's no point in running the
             # prediction through the GP
             if np.all(~finite):
