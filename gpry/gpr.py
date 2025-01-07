@@ -435,15 +435,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 np.copy(self.y_train[-self.n_last_appended_finite:]))
 
     @property
-    def abs_threshold_finite(self):
-        """Current absolute threshold to decide if a target value is finite."""
-        if self.infinities_classifier is None:
-            return -np.info
-        return self.preprocessing_y.inverse_transform(
-            self.infinities_classifier.abs_threshold
-        )
-
-    @property
     def scales(self):
         """
         Kernel scales as ``(output_scale, (length_scale_1, ...))`` in non-transformed
