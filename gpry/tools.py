@@ -275,6 +275,32 @@ def check_candidates(gpr, new_X, tol=1e-8):
     return in_training_set, duplicates
 
 
+def is_in_bounds(points, bounds, check_shape=False):
+    """
+    Checks if a point or set of points is within the given bounds.
+
+    Parameters
+    ----------
+    bounds: numpy.ndarray
+        An (d, 2) array of parameter bounds
+    point: numpy.ndarray
+        An (N, d) array of points to check
+
+    Returns
+    -------
+    numpy.ndarray:
+        A boolean array of length N indicating whether each point is within the bounds.
+    """
+    points = np.atleast_2d(points)
+    if check_shape:
+        if bounds.shape[0] != points.shape[1]:
+            raise ValueError(
+                "bounds and point appear to have different dimensionalities: "
+                f"{bounds.shape[0]} for bounds and {points.shape[1]} for point."
+            )
+    return np.all((points >= bounds[:, 0]) & (points <= bounds[:, 1]), axis=1)
+
+
 def shrink_bounds(bounds, samples, factor=1):
     """
     Reduces the given bounds to the minimal hypercube containing a set of `samples`.
