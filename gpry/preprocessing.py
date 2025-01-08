@@ -524,9 +524,16 @@ class Normalize_y:
         inverse_transform
     """
 
-    def __init__(self):
+    def __init__(self, use_median=False):
         self.mean_ = None
         self.std_ = None
+        self.use_median = bool(use_median)
+        if self.use_median:
+            self.get_mean_std = lambda y: (
+                lambda y25, y50, y75: (y50, y75 - y25)
+            )(*np.percentile(y, [25, 50, 75]))
+        else:
+            self.get_mean_std = lambda y: (np.mean(y), np.std(y))
 
     @property
     def is_linear(self):
@@ -547,8 +554,7 @@ class Normalize_y:
             y-values (target values) that are used to
             determine the mean and std.
         """
-        self.mean_ = np.mean(y[np.isfinite(y)])
-        self.std_ = np.std(y[np.isfinite(y)])
+        self.mean_, self.std_ = self.get_mean_std(y[np.isfinite(y)])
 
     def transform_scale(self, scale, copy=True):
         if not self.fitted:
@@ -628,18 +634,32 @@ class NormalizeChi2_y(Normalize_y):
         inverse_transform
     """
 
+    def __init__(self, nsigma=1):
+        try:
+            assert isinstance(nsigma, Number) and nsigma > 0
+        except TypeError as excpt:
+            raise TypeError(
+                f"nsigma must be a positive number. Got {nsigma} of type {type(nsigma)}."
+            ) from excpt
+        self.nsigma = nsigma
+        self.delta_logp = None
+        super().__init__()
+
     def fit(self, X, y):
         """
-        Calculates the mean and standard deviation of y
-        and saves them.
+        Calculates the mean and standard deviation of y and saves them.
 
         Parameters
         ----------
-        y : array-like, shape = (n_samples,)
-            y-values (target values) that are used to
+        X : array-like, shape = (n_samples, dimension)
+            X-values (target values) that can be used to tune the transformation.
             determine the mean and std.
+
+        y : array-like, shape = (n_samples,)
+            y-values (target values) that are used to determine the mean and std.
+
         """
         dim = np.atleast_2d(X).shape[1]
-        delta_y = delta_logp_of_1d_nstd(1, dim)
-        self.mean_ = max(y) - delta_y
-        self.std_ = delta_y
+        self.delta_logp = delta_logp_of_1d_nstd(self.nsigma, dim)
+        self.mean_ = max(y) - self.delta_logp
+        self.std_ = self.delta_logp
