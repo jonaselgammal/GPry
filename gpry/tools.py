@@ -5,11 +5,11 @@ This module contains general tools used in different parts of the code.
 from copy import deepcopy
 from inspect import signature
 from typing import Mapping, Iterable
+from warnings import warn
 
 import numpy as np
 from numpy import trace as tr
-from numpy.linalg import det
-from scipy.linalg import eigh
+from numpy.linalg import det, eigh
 from scipy.special import gamma, erfc
 from scipy.stats import chi2
 from cobaya.model import get_model
@@ -25,9 +25,13 @@ def kl_norm(mean_0, cov_0, mean_1, cov_1):
     cov_1_inv = np.linalg.inv(cov_1)
     dim = len(mean_0)
     with NumpyErrorHandling(all="ignore") as _:
-        return 0.5 * (np.log(det(cov_1)) - np.log(det(cov_0)) - dim +
-                      tr(cov_1_inv @ cov_0) +
-                      (mean_1 - mean_0).T @ cov_1_inv @ (mean_1 - mean_0))
+        return 0.5 * (
+            np.log(det(cov_1))
+            - np.log(det(cov_0))
+            - dim
+            + tr(cov_1_inv @ cov_0)
+            + (mean_1 - mean_0).T @ cov_1_inv @ (mean_1 - mean_0)
+        )
 
 
 def kl_mc(X, logq_func, logp=None, logp_func=None, weight=None):
@@ -74,9 +78,10 @@ def gaussian_distance(points, mean, covmat):
     dim = np.atleast_2d(points).shape[1]
     mean = np.atleast_1d(mean)
     covmat = np.atleast_2d(covmat)
-    assert (mean.shape == (dim,) and covmat.shape == (dim, dim)), \
-        (f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
-         f"mean.shape={mean.shape} and covmat.shape={covmat.shape}.")
+    assert mean.shape == (dim,) and covmat.shape == (dim, dim), (
+        f"Mean and/or covmat have wrong dimensionality: dim={dim}, "
+        f"mean.shape={mean.shape} and covmat.shape={covmat.shape}."
+    )
     assert is_valid_covmat(covmat), "Covmat passed is not a valid covariance matrix."
     # Transform to normalised gaussian
     std_diag = np.diag(np.sqrt(np.diag(covmat)))
@@ -89,13 +94,16 @@ def gaussian_distance(points, mean, covmat):
     return np.sqrt(np.sum(points_transf**2, axis=1))
 
 
-def nstd_of_1d_nstd(n1, d):
+def nstd_of_1d_nstd(n1, d, warn_inf=True):
     """
     Radius of (hyper)volume in units of std's of a multivariate Gaussian of dimension
     ``d`` for a credible (hyper)volume defined by the equivalent 1-dimensional
     ``n1``-sigma interval.
     """
-    return np.sqrt(chi2.isf(erfc(n1 / np.sqrt(2)), d))
+    nstd = np.sqrt(chi2.isf(erfc(n1 / np.sqrt(2)), d))
+    if warn_inf and not np.isfinite(nstd):
+        warn(f"Got -inf for n1={n1} and d={d}. This may cause errors.")
+    return nstd
 
 
 def delta_logp_of_1d_nstd(n1, d):
@@ -104,7 +112,7 @@ def delta_logp_of_1d_nstd(n1, d):
     corresponding to the credible (hyper)volume defined by the equivalent 1-dimensional
     ``n1``-sigma interval in ``d`` dimensions.
     """
-    return 0.5 * nstd_of_1d_nstd(n1, d)**2
+    return 0.5 * nstd_of_1d_nstd(n1, d) ** 2
 
 
 def credibility_of_nstd(n, d):
@@ -117,7 +125,7 @@ def credibility_of_nstd(n, d):
 
 def volume_sphere(r, dim=3):
     """Volume of a sphere of radius ``r`` in dimension ``dim``."""
-    return np.pi**(dim / 2) / gamma(dim / 2 + 1) * r**dim
+    return np.pi ** (dim / 2) / gamma(dim / 2 + 1) * r**dim
 
 
 def check_random_state(seed, convert_to_random_state=False):
@@ -131,6 +139,7 @@ def check_random_state(seed, convert_to_random_state=False):
             seed = np.random.RandomState(seed.bit_generator)
         return seed
     from sklearn.utils import check_random_state
+
     return check_random_state(seed)
 
 
@@ -152,7 +161,7 @@ def generic_params_names(n, prefix="x_"):
 
 
 # TODO -- this will be inside Cobaya eventually -> remove
-def create_cobaya_model(likelihood, bounds, prefix="x_"):
+def create_cobaya_model(likelihood, bounds):
     """
     Creates a cobaya Model from a likelihood and some bounds.
 
@@ -162,7 +171,7 @@ def create_cobaya_model(likelihood, bounds, prefix="x_"):
         Function returning a log-likelihood. It needs to take at least as many parameters
         as contained in ``bounds``.
 
-    bounds: List of [min, max], or Dict {name: [min, max],...}
+    bounds : list of [min, max], or dict {name: [min, max],...}
         List or dictionary of parameter bounds. If it is a dictionary, the keys need to
         correspond to the argument names of the ``likelihood`` function.
 
@@ -190,8 +199,7 @@ def create_cobaya_model(likelihood, bounds, prefix="x_"):
             f"depends on {len(params_names)} parameter(s) only (namely {params_names})."
         )
         params_input = {
-            params_names[i]: {"prior": bound}
-            for i, bound in enumerate(bounds)
+            params_names[i]: {"prior": bound} for i, bound in enumerate(bounds)
         }
     else:
         raise TypeError(
@@ -202,13 +210,14 @@ def create_cobaya_model(likelihood, bounds, prefix="x_"):
     return get_model({"params": params_input, "likelihood": likelihood_input})
 
 
-class NumpyErrorHandling():
+class NumpyErrorHandling:
     """
     Context for manual handling of numpy errors (e.g. ignoring, just printing...).
 
     NB: the call to ``deepcopy`` at init can become expensive if this ``with`` context
         is used repeatedly. One may want to put it at an upper level then.
     """
+
     def __init__(self, all):
         self.all = all
         self.error_handler = deepcopy(np.geterr())
@@ -268,7 +277,9 @@ def check_candidates(gpr, new_X, tol=1e-8):
     X_train_r = np.round(X_train, decimals=int(-np.log10(tol)))
     in_training_set = np.any(np.all(X_train_r[:, None, :] == new_X_r, axis=2), axis=0)
 
-    unique_rows, indices, counts = np.unique(new_X_r, axis=0, return_index=True, return_counts=True)
+    unique_rows, indices, counts = np.unique(
+        new_X_r, axis=0, return_index=True, return_counts=True
+    )
     is_duplicate = counts > 1
     duplicates = np.isin(new_X_r, unique_rows[is_duplicate]).all(axis=1)
     duplicates[indices[is_duplicate]] = False
@@ -281,10 +292,12 @@ def is_in_bounds(points, bounds, check_shape=False):
 
     Parameters
     ----------
+    points: numpy.ndarray
+        An (N, d) array of points to check
     bounds: numpy.ndarray
         An (d, 2) array of parameter bounds
-    point: numpy.ndarray
-        An (N, d) array of points to check
+    check_shape : bool (default: False)
+        Whether to check for consistency of array shapes.
 
     Returns
     -------
@@ -305,8 +318,8 @@ def shrink_bounds(bounds, samples, factor=1):
     """
     Reduces the given bounds to the minimal hypercube containing a set of `samples`.
 
-    If ``factor != 1``, the width is multiplied by that factor, while keeping the hypercube
-    centered.
+    If ``factor != 1``, the width is multiplied by that factor, while keeping the
+    hypercube centered.
 
     If the samples span a longer region that that defined by the bounds, the given
     bounds are preferred.
