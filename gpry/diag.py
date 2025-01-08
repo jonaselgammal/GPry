@@ -106,14 +106,14 @@ def diagnosis(runner):
     # Do not plot if sample reweighted, to save time
     if not runner.acquisition.is_last_MC_reweighted:
         try:
-            plot_points_distribution(
+            plot_trace(
                 runner.model, runner.gpr, runner.convergence,
                 runner.progress,
                 reference=reference)
         except ValueError as e:
             print(f"Could not plot points distributions (yet). Err msg: {e}")
         else:
-            plt.savefig(os.path.join(runner.plots_path, "points_dist.svg"))
+            plt.savefig(os.path.join(runner.plots_path, "trace.svg"))
         plt.close()
 
     # Plot mean GP and acq func slices

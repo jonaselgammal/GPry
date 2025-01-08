@@ -488,7 +488,7 @@ def _prepare_reference(
     return reference
 
 
-def plot_points_distribution(
+def plot_trace(
     model,
     gpr,
     convergence_criterion,

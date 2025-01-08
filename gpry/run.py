@@ -1133,7 +1133,7 @@ class Runner():
                 setattr(self, attr, value)
             mpi.share_attr(self, attr)
 
-    def plot_progress(self):
+    def plot_progress(self, format="svg"):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
@@ -1146,13 +1146,13 @@ class Runner():
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         self.progress.plot_timing(
             truth=True, save=os.path.join(self.plots_path, "timing.svg"))
-        gpplt.plot_points_distribution(
+        gpplt.plot_trace(
             self.model, self.gpr, self.convergence, self.progress,
             reference=self.last_mc_samples()
         )
-        plt.savefig(os.path.join(self.plots_path, "points_dist.svg"))
         gpplt.plot_slices(self.model, self.gpr, self.acquisition)
         plt.savefig(os.path.join(self.plots_path, "slices.svg"))
+        plt.savefig(os.path.join(self.plots_path, f"trace.{format}"))
 
     def generate_mc_sample(
             self, sampler="mcmc", output=None, add_options=None, resume=False
