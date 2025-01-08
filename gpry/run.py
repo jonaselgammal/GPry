@@ -23,7 +23,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
 import gpry.plots as gpplt
-from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates
+from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds
 
 
 global _plots_path
