@@ -447,7 +447,7 @@ class Runner():
             gp_acquisition_args = gp_acquisition[gp_acquisition_name] or {}
             gp_acquisition_defaults = {
                 "bounds": self.prior_bounds,
-                "preprocessing_X": Normalize_bounds(self.prior_bounds),
+                "preprocessing_X": self.gpr.preprocessing_X,
                 "random_state": self.random_state,
                 "acq_func": {"LogExp": {"zeta_scaling": 0.85}},
                 "verbose": self.verbose,
@@ -740,14 +740,32 @@ class Runner():
                     in_training_set, duplicates = check_candidates(self.gpr, new_X)
                     if mpi.is_main_process:
                         if np.any(in_training_set):
-                            self.log(f"{np.sum(in_training_set)} of the proposed points are already "
-                                    "in the training set. Skipping them.", level=2)
+                            self.log(
+                                f"{np.sum(in_training_set)} of the proposed points are "
+                                "already in the training set. Skipping them."
+                                , level=2
+                            )
                         if np.any(duplicates):
-                            self.log(f"{np.sum(duplicates)} of the proposed points appear multiple "
-                                    "times. Skipping them.", level=2)
+                            self.log(
+                                f"{np.sum(duplicates)} of the proposed points appear "
+                                "multiple times. Skipping them.",
+                                level=2
+                            )
                     # make boolean mask of points to keep
                     keep = np.logical_not(np.logical_or(in_training_set, duplicates))
-                    # remove points that are not to be kept from new_X, y_pred, acq_vals
+                    # TODO: test for points that will not add much: cut list when
+                    #       acq(top) - acq(i) is large enough.
+                    #       Maybe integrate in check_candidates
+                    # # Do not evaluate points that are not expected to be useful
+                    # delta_acq = 0.75
+                    # i_small_acq = acq_vals - acq_vals[0] < -delta_acq
+                    # make boolean mask of points to keep
+                    # # keep = np.logical_not(
+                    #     np.logical_or(
+                    #         np.logical_or(in_training_set, duplicates), i_small_acq
+                    #     )
+                    # )
+                    # Remove points that are not to be kept from new_X, y_pred, acq_vals
                     new_X = new_X[keep]
                     y_pred = y_pred[keep]
                     acq_vals = acq_vals[keep]
@@ -909,7 +927,11 @@ class Runner():
         # We will compare it against y - max(y)
         if isinstance(self.gpr.infinities_classifier, SVM):
             # Check by hand against the threshold (in the non-transformed space)
-            is_finite = lambda ymax_minus_y: ymax_minus_y < self.gpr.diff_threshold
+            is_finite = lambda ymax_minus_y: (
+                self.gpr.infinities_classifier._is_finite_raw(
+                    -ymax_minus_y, self.gpr.diff_threshold, max_y=0
+                )
+            )
         else:
             is_finite = np.isfinite
         if mpi.is_main_process:
@@ -1246,6 +1268,7 @@ class Runner():
             return self._last_mc_samples.to_getdist(model=self.model)
         return self._last_mc_samples
 
+    # TODO: recover, for tests about sampling overshoots
     def diagnose(self):
         if mpi.is_main_process:
             lines = "Starting diagnosis\n"
