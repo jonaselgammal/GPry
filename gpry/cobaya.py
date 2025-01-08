@@ -25,7 +25,7 @@ from gpry.run import Runner
 
 # pylint: disable=no-member,access-member-before-definition
 # pylint: disable=attribute-defined-outside-init
-class CobayaSampler(Sampler):
+class CobayaWrapper(Sampler):
     """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
 
     # Other options
@@ -52,6 +52,14 @@ class CobayaSampler(Sampler):
         self.mc_sampler_upd_info = None
         self.mc_sampler_instance = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
+        # Default to Runner's defaults: (recusively) remove keys with None value:
+        for k, v in list(self.gpr.items()):
+            if v is None:
+                self.gpr.pop(k)
+        gp_acquisition_algo = list(self.gp_acquisition)[0]
+        for k, v in list((self.gp_acquisition[gp_acquisition_algo] or {}).items()):
+            if v is None:
+                self.gp_acquisition[gp_acquisition_algo].pop(k)
         # Initialize the runner
         try:
             self.gpry_runner = Runner(
@@ -152,6 +160,7 @@ class CobayaSampler(Sampler):
         self.gpry_runner.plot_distance_distribution()
         if self.is_mc_sampled:
             self.gpry_runner.plot_mc()
+
     def products(
         self,
         combined: bool = False,

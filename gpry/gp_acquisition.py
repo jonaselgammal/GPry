@@ -1020,7 +1020,6 @@ class NORA(GenericGPAcquisition):
     @property
     def mean(self):
         Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
-        print(np.average(Xs.T, weights=ws, axis=-1), np.average(Xs.T, weights=ws, axis=-1).shape)
         return np.average(Xs.T, weights=ws, axis=-1)
 
     @property

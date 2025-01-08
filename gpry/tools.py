@@ -9,7 +9,8 @@ from warnings import warn
 
 import numpy as np
 from numpy import trace as tr
-from numpy.linalg import det, eigh
+from numpy.linalg import det
+from scipy.linalg import eigh
 from scipy.special import gamma, erfc
 from scipy.stats import chi2
 from cobaya.model import get_model
