@@ -1,29 +1,27 @@
-# general purpose stuff
+# Builtin
 import warnings
 from copy import deepcopy
 from operator import itemgetter
 from typing import Mapping
 from numbers import Number
 
-# numpy and scipy
+# External
 import numpy as np
 from scipy.linalg import cholesky, solve_triangular, cho_solve
 from scipy.linalg.blas import dtrmm as tri_mul
 import scipy.optimize
-
-# sklearn GP and kernel utilities
+import pandas as pd
 from sklearn.gaussian_process import GaussianProcessRegressor \
     as sk_GaussianProcessRegressor
 from sklearn.base import clone, BaseEstimator as BE
-
-# sklearn utilities
 from sklearn.utils.validation import check_array
 
-# gpry kernels and SVM
+# Local
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, DummyPreprocessor
-from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd
+from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd, \
+    generic_params_names
 
 
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
@@ -462,6 +460,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.preprocessing_y is None:
             return threshold
         return self.preprocessing_y.inverse_transform_scale(threshold)
+
+    def training_set_as_df(self):
+        """
+        Returns the training set as a pandas DataFrame (created on-the-fly and not saved).
+        """
+        data = {
+            p: vals for p, vals in zip(
+                generic_params_names(self.d),
+                self.X_train_all.copy().T
+            )
+        }
+        data["y"] = self.y_train_all.copy()
+        data["is_finite"] = self.is_finite(data["y"])
+        print(data)
+        return pd.DataFrame(data)
 
     def is_finite(self, y=None):
         """

@@ -688,6 +688,9 @@ class Runner():
             if mpi.is_main_process:
                 self.banner("Drawing initial samples.")
             self.do_initial_training()
+            if mpi.is_main_process and self.verbose >= 4:
+                print("Initial training set")
+                print(self.gpr.training_set_as_df())
             # Check if any of the points in X_train are close to each other
             if len(self.gpr.X_train) > 1:
                 distances = np.linalg.norm(
