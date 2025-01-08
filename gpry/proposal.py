@@ -179,13 +179,23 @@ class MeanCovProposer(Proposer, InitialPointProposer):
             We conduct no explicit checks on whether the covariance matrix you
             provide is singular. Make sure that your matrix is a valid
             covariance matrix!
+
+    include_mean : bool (defaulf: False)
+        If True, returns the mean in the first call to ``get`` (only for the 1st MPI rank)
     """
 
-    def __init__(self, mean, cov):
+    def __init__(self, mean, cov, include_mean=False):
+        self._mean_used = not include_mean
+        self._mean = np.array(mean)
         self.proposal_function = scipy.stats.multivariate_normal(
             mean=mean, cov=cov, allow_singular=True).rvs
 
     def get(self, random_state=None):
+        if not self._mean_used:
+            self._mean_used = True
+            from gpry.mpi import is_main_process
+            if is_main_process:
+                return self._mean
         return self.proposal_function(random_state=random_state)
 
 
