@@ -1,3 +1,9 @@
+"""
+Module gathering general plots.
+
+(Other plots are in methods of some classes, e.g. Progress contains the timings plot.)
+"""
+
 import warnings
 from typing import Sequence, Mapping
 from numbers import Number
@@ -6,7 +12,6 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from matplotlib.patches import FancyArrowPatch
 
 from gpry.gpr import GaussianProcessRegressor
 from gpry.tools import (
@@ -31,11 +36,11 @@ def simple_latex_sci_notation(string):
 
     NB: it assumes that the string passed contains a single number, and nothing else.
     """
-    if not "e" in string:
+    if "e" not in string:
         return string
     sigfigs, exp = string.split("e")
     sign = "" if exp.startswith("+") else "-"
-    return f"{sigfigs}\cdot 10^{{{sign}{exp[1:].lstrip('0')}}}"
+    return f"{sigfigs}\\cdot 10^{{{sign}{exp[1:].lstrip('0')}}}"
 
 
 def param_samples_for_slices(X, i, bounds, n=200):
@@ -142,7 +147,7 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
             raise ValueError("Needs at least a reference point or a reference sample.")
         # TODO: if reference given as a sample, take best point from it.
     X_array = np.array([X[p] for p in model.parameterization.sampled_params()])
-    y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
+    # y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
     if truth:
         y_truth_centre = model.logpost(X_array)
     Xs_for_plots, ys_gpr_for_plot, sigmas_gpr_for_plot, ys_truth_for_plot = {}, {}, {}, {}
@@ -191,15 +196,17 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
                 max_y = max(ys_gpr_for_plot[p])
                 upper_y = max_y
                 if truth:
-                    upper_y = max(max_y, max(ys_truth_for_plot[p]))
+                    upper_y = max(max_y, *ys_truth_for_plot[p])
                 axes[i].set_ylim(
                     max_y - 1.05 * diff_min_logp, upper_y + 0.05 * diff_min_logp
                 )
             except ValueError as e:
                 print(
-                    f"ERROR when setting y-lims for '{p}': max(y) was {max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, upper bound was {upper_y}, MSG was {e}"
+                    f"ERROR when setting y-lims for '{p}': max(y) was "
+                    f"{max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, "
+                    f"lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, "
+                    f"upper bound was {upper_y}, MSG was {e}"
                 )
-                pass
         # Add training set
         dists = np.sqrt(np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1))
         dists_relative = dists / max(dists)
@@ -296,9 +303,9 @@ def getdist_add_training(
             i_within_last = np.argwhere(
                 np.logical_and(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
             )
-            X_last = np.atleast_2d(np.squeeze(Xs_last[i_within_last]))
+            Xs_last = np.atleast_2d(np.squeeze(Xs_last[i_within_last]))
     if len(Xs_finite) == 0 and len(Xs_infinite) == 0:  # no points within plotting ranges
-        return
+        return getdist_plot
     # Create colormap with appropriate limits
     cmap = matplotlib.colormaps[colormap]
     if len(Xs_finite):
@@ -316,7 +323,7 @@ def getdist_add_training(
             )
         if len(Xs_finite) > 0:
             points_finite = Xs_finite[:, [i, j]]
-            sc = ax.scatter(
+            ax.scatter(
                 *points_finite.T, marker=marker, c=norm(ys_finite), alpha=0.3, cmap=cmap
             )
         if highlight_last and len(Xs_last) > 0:
@@ -522,7 +529,7 @@ def plot_points_distribution(
             marker="",
             axes=axes[0],
             ax_labels=False,
-            legend_loc="upper left",
+            legend_loc="lower left",
         )
     except ValueError:  # no criterion computed yet
         pass
@@ -556,15 +563,15 @@ def plot_points_distribution(
     axes[1].legend(loc="lower left", prop={"size": _plot_dist_fontsize})
     # Kernel scales
     output_scale, length_scales = gpr.scales
-    scales_kwargs = dict(
-        verticalalignment="center",
-        horizontalalignment="right",
-        fontsize=_plot_dist_fontsize,
-        bbox=dict(
-            facecolor="white",
-            alpha=0.5,
-        ),
-    )
+    scales_kwargs = {
+        "verticalalignment": "center",
+        "horizontalalignment": "right",
+        "fontsize": _plot_dist_fontsize,
+        "bbox": {
+            "facecolor": "white",
+            "alpha": 0.5,
+        },
+    }
     axes[1].text(
         0.965,
         0.12,
@@ -674,7 +681,7 @@ def plot_distance_distribution(
     title_str = f"{num_or_dens} of points per standard deviation"
     if show_added:
         title_str += " (bluer=newer)"
-        cmap = cm.Spectral
+        cmap = plt.get_cmap("Spectral")
         colors = [cmap(i / len(points)) for i in range(len(points))]
         ax.hist(
             np.atleast_2d(radial_distances),
@@ -686,7 +693,7 @@ def plot_distance_distribution(
     else:
         ax.hist(radial_distances, bins=bins, weights=weights)
     ax.set_title(title_str)
-    cls = [credibility_of_nstd(s, 1) for s in [1, 2, 3, 4]]  # using 1d cl's as reference
+    # cls = [credibility_of_nstd(s, 1) for s in [1, 2, 3, 4]]  # use 1d cl's as reference
     nstds = [1, 2, 3, 4]
     linestyles = ["-", "--", "-.", ":"]
     for nstd, ls in zip(nstds, linestyles):
@@ -697,7 +704,7 @@ def plot_distance_distribution(
                 c="0.75",
                 ls=ls,
                 zorder=-99,
-                label=f"${100 * credibility_of_nstd(std_of_cl, dim):.2f}\%$ prob mass",
+                label=f"${100 * credibility_of_nstd(std_of_cl, dim):.2f}\\%$ prob mass",
             )
     ax.set_ylabel(f"{num_or_dens} of points")
     ax.set_xlabel("Number of standard deviations")
@@ -727,7 +734,7 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-    cmap = [cm.magma, cm.viridis]
+    cmap = [plt.get_cmap("magma"), plt.get_cmap("viridis")]
     label = ["Model mean (log-posterior)", "Acquisition function value"]
     for i, Z in enumerate([model_mean, acq_value]):
         ax[i].set_title(label[i])
@@ -738,7 +745,7 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
         norm = cm.colors.Normalize(vmax=Z.max(), vmin=Z.min())
         # # Background of the same color as the bottom of the colormap, to avoid "gaps"
         # plt.gca().set_facecolor(cmap[i].colors[0])
-        ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
+        ax[i].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
             *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
         )
@@ -786,14 +793,14 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-    cmap = [cm.magma, cm.viridis]
+    cmap = [plt.get_cmap("magma"), plt.get_cmap("viridis")]
     label = ["Model mean (log-posterior)", "Acquisition function value"]
     for i, Z in enumerate([model_mean, acq_value]):
         ax[i].set_title(label[i])
         # Boost the upper limit to avoid truncation errors.
         Z_finite = Z[np.isfinite(Z)]
         # Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
-        Z_sort = np.sort(Z_finite)[::-1]
+        # Z_sort = np.sort(Z_finite)[::-1]
         top_x_perc = np.sort(Z_finite)[::-1][: int(len(Z_finite) * 0.5)]
         relevant_range = max(top_x_perc) - min(top_x_perc)
         levels = np.linspace(
@@ -855,14 +862,14 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    cmap = [cm.magma, cm.viridis, cm.magma]
+    cmap = [plt.get_cmap("magma"), plt.get_cmap("viridis"), plt.get_cmap("magma")]
     label = ["Model mean (log-posterior)", "Acquisition function value", "Model std dev."]
     for i, Z in enumerate([model_mean, acq_value]):
         ax[i].set_title(label[i])
         # Boost the upper limit to avoid truncation errors.
         Z_finite = Z[np.isfinite(Z)]
         # Z_clipped = np.clip(Z_finite, min(Z[np.isfinite(Z)]), max(Z[np.isfinite(Z)]))
-        Z_sort = np.sort(Z_finite)[::-1]
+        # Z_sort = np.sort(Z_finite)[::-1]
         top_x_perc = np.sort(Z_finite)[::-1][: int(len(Z_finite) * 0.5)]
         relevant_range = max(top_x_perc) - min(top_x_perc)
         levels = np.linspace(
@@ -903,7 +910,7 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     Z = Z.reshape(*X.shape)
     norm = cm.colors.Normalize(vmax=max(levels), vmin=min(levels))
     ax[2].set_facecolor("grey")
-    ax[2].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[2], 256), norm=norm)
+    ax[2].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[2], 256), norm=norm)
     points = ax[2].scatter(*gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
     # Plot position of next best sample
     point_max = ax[2].scatter(*acq_max, marker="x", color="k")
