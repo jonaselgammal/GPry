@@ -806,7 +806,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_eval_loglike += 1
         return super().log_marginal_likelihood(*args, **kwargs)
 
-
     def fit_gpr_hyperparameters(
             self, simple=False, start_from_current=True, n_restarts=None,
             hyperparameter_bounds=None

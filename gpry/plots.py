@@ -511,29 +511,27 @@ def plot_points_distribution(
                 zorder=-1,
                 label=f"{ns}-$\\sigma$ (Gauss. approx.)",
             )
-    # Output scale
-    logp_scale, _ = gpr.scales
-    x_arrow = (lambda l: l[0] + 0.90 * (l[1] - l[0]))(axes[1].get_xlim())
-    centre = (y_max_plot + y_min_plot) / 2
-    scale_arrow_kwargs = {
-        "mutation_scale": 10,
-        "shrinkA": 0,
-        "shrinkB": 0,
-        "facecolor": "none",
-        "edgecolor": "r",
-        "arrowstyle": "<->",
-    }
-    logp_arrow = FancyArrowPatch(
-        (x_arrow, centre - logp_scale / 2),
-        (x_arrow, centre + logp_scale / 2),
-        label=f"Output scale = {logp_scale:.2g}",
-        **scale_arrow_kwargs,
-    )
-    axes[1].add_patch(logp_arrow)
-    axes[1].set_ylim(y_min_plot, y_max_plot)  # restore original limits
     axes[1].set_ylabel(r"$\log(p)$")
     axes[1].grid(axis="y")
     axes[1].legend(loc="lower left", prop={"size": _plot_dist_fontsize})
+    # Kernel scales
+    output_scale, length_scales = gpr.scales
+    scales_kwargs = dict(
+        verticalalignment="center",
+        horizontalalignment="right",
+        fontsize=_plot_dist_fontsize,
+        bbox=dict(
+            #boxstyle="round",
+            facecolor="white",
+            alpha=0.5
+        ),
+    )
+    axes[1].text(
+        0.965, 0.12,
+        f"Output scale: ${simple_latex_sci_notation(f'{output_scale:.2g}')}$",
+        transform=axes[1].transAxes,
+        **scales_kwargs
+    )
     # NEXT: parameters plots
     for i, p in enumerate(model.parameterization.sampled_params()):
         label = model.parameterization.labels()[p]
@@ -568,22 +566,12 @@ def plot_points_distribution(
         ax.set_ylabel("$" + label + "$" if label != p else p)
         ax.grid(axis="y")
         # Length scales
-        y_min_plot, y_max_plot = ax.get_ylim()
-        length_scale = gpr.scales[1][i]
-        centre = (y_max_plot + y_min_plot) / 2
-        label = f"Length scale = {length_scale:.2g}"
-        if bounds is not None and len(bounds) == 5:
-            ratio_to_bounds = length_scale / (bounds[4] - bounds[0])
-            label += f" ({100 * ratio_to_bounds:.2f}\% of ref. bounds)"
-        length_arrow = FancyArrowPatch(
-            (x_arrow, centre - length_scale / 2),
-            (x_arrow, centre + length_scale / 2),
-            label=label,
-            **scale_arrow_kwargs,
+        ax.text(
+            0.965, 0.12,
+            f"Length scale: ${simple_latex_sci_notation(f'{length_scales[i]:.2g}')}$",
+            transform=ax.transAxes,
+            **scales_kwargs
         )
-        ax.add_patch(length_arrow)
-        ax.set_ylim(y_min_plot, y_max_plot)  # restore original limits
-        ax.legend(loc="lower left", prop={"size": _plot_dist_fontsize})
     # Format common x-axis
     axes[0].set_xlim(0, len(X) + 0.5)
     axes[-1].set_xlabel("Number of posterior evaluations")
