@@ -22,6 +22,22 @@ plt.rcParams["text.usetex"] = True
 _plot_dist_fontsize = 7
 
 
+def simple_latex_sci_notation(string):
+    """
+    If ``string`` contains a ``%g`` or ``%e`` number representation, substitutes the ``e``
+    for a power of 10.
+
+    It does *not* add dollars around the string.
+
+    NB: it assumes that the string passed contains a single number, and nothing else.
+    """
+    if not "e" in string:
+        return string
+    sigfigs, exp = string.split("e")
+    sign = "" if exp.startswith("+") else "-"
+    return f"{sigfigs}\cdot 10^{{{sign}{exp[1:].lstrip('0')}}}"
+
+
 def param_samples_for_slices(X, i, bounds, n=200):
     """
     From an array of points `X = [X^i] = [[X^1_1, X^1_2,...], [X^2_1,...], ...]`, it
