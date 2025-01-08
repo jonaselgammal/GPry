@@ -149,8 +149,7 @@ class Pipeline_X:
         return X_transformed
 
 
-# See https://www.projectrhea.org/rhea/images/1/15/
-#         Slecture_ECE662_Whitening_and_Coloring_Transforms_S14_MH.pdf
+# TODO: finish and fix
 class Whitening:
     r"""
     A class which can pre-transform the posterior in a way
@@ -177,87 +176,109 @@ class Whitening:
     a high dynamical range. An anisotropic kernel may be preferred.
     """
 
-    def __init__(self, mean=None, cov=None, learn=False):
-        self.mean = mean
+    def __init__(self, bounds, mean=None, cov=None, learn=False):
+        self.transf_matrix, self.inv_transf_matrix = None, None
+        if cov is None:
+            if not learn:
+                raise ValueError("Needs a cov, or to be able to learn it `learn=True`.")
+        else:
+            try:
+                self.transf_matrix, self.inv_transf_matrix = self.prepare_transform(cov)
+            except ValueError as excpt:
+                raise ValueError(
+                    f"Cannot initialize whitening transform: {excpt}"
+                ) from excpt
         self.cov = cov
         self.learn = learn
-        self.direct_transf_matrix = None
-        self.inverse_transf_matrix = None
-        if self.mean is None or self.cov is None:
-            if not self.learn:
-                raise ValueError(
-                    "Needs a mean and a covariance matrix, or to be `learn=True`."
+        # If mean is None at the beginning, but cov is defined, assume central point.
+        # NB: if cov undefined, mean is ignored.
+        if mean is None:
+            if self.cov is not None:
+                warnings.warn(
+                    "Cov passed but not mean. Using the center of the prior hypercube."
                 )
-        else:  # has mean and covmat
-            try:
-                self.prepare_transform(self.mean, self.cov)
-            except LinAlgError as excpt:
-                raise ValueError(
-                    "Cannot compute eigenvalues and eigenvectors of the given mean and "
-                    f"cov: {excpt}"
-                ) from excpt
+                bounds_arr = np.array(bounds)
+                mean = (bounds_arr[:, 0] + bounds_arr[:, 1]) / 2
+        self.mean = mean
 
-    def transform_bounds(self, bounds):
-        if self.learn and not self.cov:
-            return bounds
-        vertices = np.array(list(product(*bounds)))
-        transf_vertices = self.transform(vertices)
-        return np.array(
-            [np.min(transf_vertices.T, axis=1), np.max(transf_vertices.T, axis=1)]
-        ).T
-
-    def prepare_transform(self, mean, cov):
+    @staticmethod
+    def prepare_transform(cov):
         """
         Compute the relevant elements for the transform from the mean and covmat.
 
-        Raises `np.linalg.LinAlgError` if it fails.
+        Raises `ValueError` if it fails at the eigen-decomposition.
         """
-        self.eigenvals, self.eigenvecs = eigh(cov)
-        self.direct_transf_matrix = np.diag(self.eigenvals**-0.5) @ self.eigenvecs.T
-        self.inverse_transf_matrix = self.eigenvecs @ np.diag(self.eigenvals**0.5)
+        try:
+            eigenvals, eigenvecs = eigh(cov)
+        except LinAlgError as excpt:
+            raise ValueError(
+                f"Could not compute the eigen-decomposition of the covmat: {excpt}"
+            ) from excpt
+        transf_matrix = np.diag(eigenvals**-0.5) @ eigenvecs.T
+        inv_transf_matrix = eigenvecs @ np.diag(eigenvals**0.5)
+        return transf_matrix, inv_transf_matrix
+
+    @staticmethod
+    def compute_mean_cov(X, logp):
+        """
+        Computes mean and cov using the given points weighted by the given
+        log-probabilities.
+
+        Raises ValueError if failed to get a non-singular covmat.
+        """
+        with warnings.catch_warnings():
+            # Raise exception for all warnings to catch them.
+            warnings.filterwarnings("error")
+            try:
+                logp_exp = np.exp(logp - np.max(logp))
+                mean = np.average(X, axis=0, weights=logp_exp)
+                cov = np.cov(X, aweights=logp_exp, ddof=0)
+            except (ZeroDivisionError, TypeError, ValueError, RuntimeWarning) as excpt:
+                raise ValueError(
+                    f"Could not compute covmat with the given points: {excpt}"
+                ) from excpt
+        return mean, cov
 
     def fit(self, X, y):
         """
         Fits the whitening transformation, if initialised with `learn=True`.
+
+        If an error is encountered, keeps the previous transform.
         """
         if not self.learn:
             return self
-        warn_msg = "Could not fit a whitening transformation. Keeping previous one."
-        with warnings.catch_warnings():
-            # Raise exception for all warnings to catch them.
-            warnings.filterwarnings("error")
-            # First try to calculate the mean and covariance matrix
-            try:
-                # Calculate mean and cov for KL div and to fit the transformation.
-                # Weighting with probability = exp(y)
-                y_exp = np.exp(y - np.max(y))
-                mean = np.average(X, axis=0, weights=y_exp)
-                cov = np.cov(X, aweights=y_exp)
-            except (ZeroDivisionError, TypeError, ValueError, RuntimeWarning) as excpt:
-                warnings.warn(warn_msg + "Reason:" + str(excpt))
-                return self
+        warn_msg = "Could not fit a whitening transformation."
+        warn_msg_end = "Keeping previous transfrom."
         try:
-            self.prepare_transform(mean, cov)
-            # Assign if no errors only
-            self.mean = mean
-            self.cov = cov
-        except LinAlgError as excpt:
-            warnings.warn(warn_msg + "Reason:" + str(excpt))
+            self.mean, self.cov = self.compute_mean_cov(X, y)
+            self.transf_matrix, self.inv_transf_matrix = self.prepare_transform(self.cov)
+        except ValueError as excpt:
+            warnings.warn(warn_msg + str(excpt) + warn_msg_end)
         return self
 
     def transform(self, X, copy=True):
-        if self.learn and not self.cov:
-            return X
-        if copy:
-            X = np.copy(X)
-        return (self.direct_transf_matrix @ (X - self.mean).T).T
+        if self.cov is None:  # adaptive (or could not initialise), but not fitted yet
+            return np.copy(X) if copy else X
+        return (self.transf_matrix @ (X - self.mean).T).T
 
     def inverse_transform(self, X, copy=True):
-        if self.learn and not self.cov:
-            return X
-        if copy:
-            X = np.copy(X)
-        return (self.inverse_transf_matrix @ X.T).T + self.mean
+        if self.cov is None:  # adaptive (or could not initialise), but not fitted yet
+            return np.copy(X) if copy else X
+        return (self.inv_transf_matrix @ X.T).T + self.mean
+
+    def transform_bounds(self, bounds):
+        if self.cov is None:  # adaptive (or could not initialise), but not fitted yet
+            return bounds
+        vertices = np.array(list(product(*bounds)))
+        transf_vertices = self.transform(vertices)
+        transf_bounds = np.array(
+            [np.min(transf_vertices.T, axis=1), np.max(transf_vertices.T, axis=1)]
+        ).T
+        print("bounds:", bounds)
+        print("vertices:", vertices)
+        print("transf_vertices:", transf_vertices)
+        print("transf_bounds:", transf_bounds)
+        return transf_bounds
 
 
 class Normalize_bounds:
