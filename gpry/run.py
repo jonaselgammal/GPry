@@ -139,8 +139,10 @@ class Runner():
     seed: int, optional
         Seed for the random number generator. Allows for reproducible runs.
 
-    plots : bool (default: True)
-        If True, produces some progress plots.
+    plots : bool, dict (default: True)
+        If True, produces some progress plots. One can also pass the arguments of
+        ``Runner.plot_progress`` as a dict for finer control, e.g.
+        ``{"timing": True, "convergence": True, "trace": False, "slices": False}``.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -854,10 +856,11 @@ class Runner():
             self.save_checkpoint()
             if mpi.is_main_process and self.plots:
                 try:
-                    self.plot_progress()
-                except:
-                    self.log("Failed to plot progress.", level=2)
-                    pass
+                    self.plot_progress(
+                        **(self.plots if isinstance(self.plots, Mapping) else {})
+                    )
+                except Exception as excpt:
+                    self.log(f"Failed to plot progress: {excpt}", level=2)
         else:  # check "while" ending condition
             mpi.sync_processes()
             if mpi.is_main_process:
@@ -1133,26 +1136,37 @@ class Runner():
                 setattr(self, attr, value)
             mpi.share_attr(self, attr)
 
-    def plot_progress(self, format="svg"):
+    def plot_progress(
+            self,
+            timing=True,
+            convergence=True,
+            trace=True,
+            slices=False,
+            format="svg"):
         """
         Creates some progress plots and saves them at path (assumes path exists).
         """
         if not mpi.is_main_process:
-            warnings.warn(
-                "Running plotting function from non-root MPI process. Doing nothing."
-            )
             return
         self.ensure_paths(plots=True)
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
-        self.progress.plot_timing(
-            truth=True, save=os.path.join(self.plots_path, "timing.svg"))
-        gpplt.plot_trace(
-            self.model, self.gpr, self.convergence, self.progress,
-            reference=self.last_mc_samples()
-        )
-        gpplt.plot_slices(self.model, self.gpr, self.acquisition)
-        plt.savefig(os.path.join(self.plots_path, "slices.svg"))
-        plt.savefig(os.path.join(self.plots_path, f"trace.{format}"))
+        if timing:
+            self.progress.plot_timing(
+                truth=True, save=os.path.join(self.plots_path, f"timing.{format}")
+            )
+        if convergence:
+            fig, ax = gpplt.plot_convergence(self.convergence)
+            plt.savefig(os.path.join(self.plots_path, f"convergence.{format}"))
+        if trace:
+            gpplt.plot_trace(
+                self.model, self.gpr, self.convergence, self.progress,
+                reference=self.last_mc_samples()
+            )
+            plt.savefig(os.path.join(self.plots_path, f"trace.{format}"))
+        if slices:
+            gpplt.plot_slices(self.model, self.gpr, self.acquisition)
+            plt.savefig(os.path.join(self.plots_path, f"slices.{format}"))
+        plt.close("all")
 
     def generate_mc_sample(
             self, sampler="mcmc", output=None, add_options=None, resume=False
