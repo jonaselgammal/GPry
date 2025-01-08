@@ -938,8 +938,23 @@ class Runner():
                 X_init_loop = np.empty((0, self.d))
                 y_init_loop = np.empty(0)
                 for j in range(n_to_sample_per_process):
-                    # Draw point from prior and evaluate logposterior at that point
-                    X = self.initial_proposer.get(random_state=self.random_state)
+                    # Draw a point from prior and evaluate logposterior at that point.
+                    # But check first if the point is within the priors.
+                    X_in_bounds = False
+                    proposer_tries = 0
+                    warn_multiple = 10 * self.gpr.d
+                    while not X_in_bounds:
+                        X = self.initial_proposer.get(random_state=self.random_state)
+                        X_in_bounds = is_in_bounds(X, self.prior_bounds)[0]
+                        proposer_tries += 1
+                        if proposer_tries > 0 and proposer_tries > warn_multiple:
+                            self.log(
+                                "The initial proposer is having trouble finding "
+                                "points within the prior bounds "
+                                f"(#attempts={proposer_tries}). Consider changing "
+                                "the initial proposer or the prior bounds.",
+                                level=1
+                            )
                     y = self.logpost_eval_and_report(X, level=4)
                     X_init_loop = np.append(X_init_loop, np.atleast_2d(X), axis=0)
                     y_init_loop = np.append(y_init_loop, y)
