@@ -140,14 +140,19 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
     if X is None:
         if reference is None:
             raise ValueError("Needs at least a reference point or a reference sample.")
+        # TODO: if reference given as a sample, take best point from it.
     X_array = np.array([X[p] for p in model.parameterization.sampled_params()])
     y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
     if truth:
         y_truth_centre = model.logpost(X_array)
     Xs_for_plots, ys_gpr_for_plot, sigmas_gpr_for_plot, ys_truth_for_plot = {}, {}, {}, {}
     for i, p in enumerate(params):
-        Xs_for_plots[p] = param_samples_for_slices([X_array], i, prior_bounds[i], n=200)[0]
-        ys_gpr_for_plot[p], sigmas_gpr_for_plot[p] = gpr.predict(Xs_for_plots[p], return_std=True)
+        Xs_for_plots[p] = param_samples_for_slices([X_array], i, prior_bounds[i], n=200)[
+            0
+        ]
+        ys_gpr_for_plot[p], sigmas_gpr_for_plot[p] = gpr.predict(
+            Xs_for_plots[p], return_std=True
+        )
         if truth:
             ys_truth_for_plot[p] = np.array([model.logpost(x) for x in Xs_for_plots[p]])
     # Training set referenced to X and div by X, for distance-based transparency
@@ -155,8 +160,22 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
     if reference is not None:
         reference = _prepare_reference(reference, model)
     for i, p in enumerate(params):
-        axes[i].fill_between(Xs_for_plots[p][:, i], ys_gpr_for_plot[p] - 2 * sigmas_gpr_for_plot[p], ys_gpr_for_plot[p] + 2 * sigmas_gpr_for_plot[p], color="0.5", alpha=0.25, edgecolor="none")
-        axes[i].fill_between(Xs_for_plots[p][:, i], ys_gpr_for_plot[p] - 1 * sigmas_gpr_for_plot[p], ys_gpr_for_plot[p] + 1 * sigmas_gpr_for_plot[p], color="0.5", alpha=0.25, edgecolor="none")
+        axes[i].fill_between(
+            Xs_for_plots[p][:, i],
+            ys_gpr_for_plot[p] - 2 * sigmas_gpr_for_plot[p],
+            ys_gpr_for_plot[p] + 2 * sigmas_gpr_for_plot[p],
+            color="0.5",
+            alpha=0.25,
+            edgecolor="none",
+        )
+        axes[i].fill_between(
+            Xs_for_plots[p][:, i],
+            ys_gpr_for_plot[p] - 1 * sigmas_gpr_for_plot[p],
+            ys_gpr_for_plot[p] + 1 * sigmas_gpr_for_plot[p],
+            color="0.5",
+            alpha=0.25,
+            edgecolor="none",
+        )
         if truth:
             axes[i].plot(Xs_for_plots[p][:, i], ys_truth_for_plot[p], ls="--")
             axes[i].scatter(X[p], y_truth_centre, marker="*")
@@ -177,15 +196,19 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
                     max_y - 1.05 * diff_min_logp, upper_y + 0.05 * diff_min_logp
                 )
             except ValueError as e:
-                print(f"ERROR when setting y-lims for '{p}': max(y) was {max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, upper bound was {upper_y}, MSG was {e}")
+                print(
+                    f"ERROR when setting y-lims for '{p}': max(y) was {max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, upper bound was {upper_y}, MSG was {e}"
+                )
                 pass
         # Add training set
-        dists = np.sqrt(
-            np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1)
-        )
+        dists = np.sqrt(np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1))
         dists_relative = dists / max(dists)
         axes[i].scatter(
-            gpr.X_train[:, i], gpr.y_train, marker=".", alpha=1 - dists_relative, zorder=-9
+            gpr.X_train[:, i],
+            gpr.y_train,
+            marker=".",
+            alpha=1 - dists_relative,
+            zorder=-9,
         )
         bounds = (reference or {}).get(p)
         if bounds is not None:
@@ -405,6 +428,7 @@ def _prepare_reference(
     # Ensure it is a dict
     try:
         from getdist import MCSamples  # pylint: disable=import-outside-toplevel
+
         if isinstance(reference, MCSamples):
             means = reference.getMeans()
             margstats = reference.getMargeStats()
@@ -537,16 +561,16 @@ def plot_points_distribution(
         horizontalalignment="right",
         fontsize=_plot_dist_fontsize,
         bbox=dict(
-            #boxstyle="round",
             facecolor="white",
-            alpha=0.5
+            alpha=0.5,
         ),
     )
     axes[1].text(
-        0.965, 0.12,
+        0.965,
+        0.12,
         f"Output scale: ${simple_latex_sci_notation(f'{output_scale:.2g}')}$",
         transform=axes[1].transAxes,
-        **scales_kwargs
+        **scales_kwargs,
     )
     # NEXT: parameters plots
     for i, p in enumerate(model.parameterization.sampled_params()):
@@ -583,10 +607,11 @@ def plot_points_distribution(
         ax.grid(axis="y")
         # Length scales
         ax.text(
-            0.965, 0.12,
+            0.965,
+            0.12,
             f"Length scale: ${simple_latex_sci_notation(f'{length_scales[i]:.2g}')}$",
             transform=ax.transAxes,
-            **scales_kwargs
+            **scales_kwargs,
         )
     # Format common x-axis
     axes[0].set_xlim(0, len(X) + 0.5)
