@@ -1024,9 +1024,7 @@ class Runner():
         Returns all y's at rank 0 (None otherwise), and a short report msg.
         """
         # Select locations that will be evaluated by this process
-        n_evals_per_process = mpi.split_number_for_parallel_processes(
-            self.n_points_per_acq
-        )
+        n_evals_per_process = mpi.split_number_for_parallel_processes(len(new_X))
         n_this_process = n_evals_per_process[mpi.RANK]
         i_this_process = sum(n_evals_per_process[:mpi.RANK])
         new_X_this_process = new_X[i_this_process: i_this_process + n_this_process]
