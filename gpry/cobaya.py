@@ -28,6 +28,9 @@ from gpry.run import Runner
 class CobayaWrapper(Sampler):
     """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
 
+    # Resume:
+    _at_resume_prefer_new = ["plots", "callback", "callback_is_MPI_aware", "verbose"]
+
     # Other options
     _gpry_output_dir = "gpry_output"
     _surrogate_suffix = "gpr"
