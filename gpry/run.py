@@ -221,7 +221,7 @@ class Runner():
         self.ensure_paths(plots=self.plots)
         self.random_state = mpi.get_random_state(seed)
         if mpi.is_main_process:
-            self.options = options or {}
+            self.options = deepcopy(options) or {}
             # Check if a checkpoint exists already and if so resume from there
             self.loaded_from_checkpoint = False
             if checkpoint is not None:
@@ -387,6 +387,8 @@ class Runner():
         elif isinstance(gpr, (Mapping, str)):
             if isinstance(gpr, str):
                 gpr = {"kernel": gpr}
+            else:  # Mapping
+                gpr = deepcopy(gpr)
             gpr_defaults = {
                 "kernel": "RBF",
                 "n_restarts_optimizer": 10 + 2 * self.d,
@@ -434,11 +436,13 @@ class Runner():
         default_gq_acquisition = "BatchOptimizer"
         if isinstance(gp_acquisition, GenericGPAcquisition):
             self.acquisition = gp_acquisition
-        elif isinstance(gp_acquisition, (Mapping, str)) or gp_acquisition is None:
+        elif isinstance(gp_acquisition, (Mapping, str, type(None))):
             if gp_acquisition is None:
                 gp_acquisition = {default_gq_acquisition: {}}
             elif isinstance(gp_acquisition, str):
                 gp_acquisition = {gp_acquisition: {}}
+            else:  # Mapping
+                gp_acquisition = deepcopy(gp_acquisition)
             # If an acq_func name was passed, use the standard batch-optimization one
             if list(gp_acquisition)[0] in gpryacqfuncs.builtin_names():
                 gp_acquisition = {
@@ -484,6 +488,8 @@ class Runner():
         elif isinstance(initial_proposer, (Mapping, str)):
             if isinstance(initial_proposer, str):
                 initial_proposer = {initial_proposer: {}}
+            else:  # Mapping
+                initial_proposed = deepcopy(initial_proposer)
             initial_proposer_name = list(initial_proposer)[0]
             initial_proposer_args = initial_proposer[initial_proposer_name]
             propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
@@ -521,6 +527,15 @@ class Runner():
             convergence_criterion = ["CorrectCounter"]
             if acq_has_mc:
                 convergence_criterion += ["GaussianKL"]
+        elif isinstance(convergence_criterion, Mapping):
+            # In principle, deepcopy, but keep values that are ConvergenceCriterion as is!
+            convergence_criterion_copy = {}
+            for k, v in convergence_criterion.items():
+                if isinstance(v, gpryconv.ConvergenceCriterion):
+                    convergence_criterion_copy[k] = v
+                else:
+                    convergence_criterion_copy[k] = deepcopy(v)
+            convergence_criterion = convergence_criterion_copy
         # Make sure it is a list or a dict
         if (
                 (not isinstance(convergence_criterion, Sequence) and
