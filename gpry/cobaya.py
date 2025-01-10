@@ -13,12 +13,15 @@ import re
 import logging
 from tempfile import gettempdir
 from inspect import cleandoc
+from typing import Union
 
 from cobaya.sampler import Sampler
 from cobaya.component import get_component_class
 from cobaya.log import LoggedError
 from cobaya.output import get_output, split_prefix, OutputReadOnly
 from cobaya.tools import get_external_function
+from cobaya.collection import SampleCollection
+
 from gpry import mpi
 from gpry.run import Runner
 
@@ -104,8 +107,7 @@ class CobayaWrapper(Sampler):
             self.log.info("Learning stage finished successfully!")
             self.log.info("Starting MC-sampling stage...")
         try:
-            self.mc_sampler_upd_info, self.mc_sampler_instance = \
-                self.do_surrogate_sample(resume=self.output.is_resuming())
+            self.do_surrogate_sample(resume=self.output.is_resuming())
         except Exception as excpt:
             raise LoggedError(
                 self.log,
@@ -150,7 +152,8 @@ class CobayaWrapper(Sampler):
         self.gpry_runner.generate_mc_sample(
             sampler=self.mc_sampler, output=prefix, resume=resume
         )
-        return self.gpry_runner.last_mc_surr_info, self.gpry_runner.last_mc_sampler
+        self.mc_sampler_upd_info = self.gpry_runner.last_mc_surr_info
+        self.mc_sampler_instance = self.gpry_runner.last_mc_sampler
 
     @property
     def is_mc_sampled(self):
@@ -168,6 +171,21 @@ class CobayaWrapper(Sampler):
         if self.is_mc_sampled:
             self.gpry_runner.plot_mc(format=format)
 
+    def samples(
+            self,
+            combined: bool = False,
+            skip_samples: float = 0,
+            to_getdist: bool = False,
+    ) -> Union[SampleCollection, "MCSamples"]:
+        """
+        Returns the last sample from the surrogate model.
+        """
+        return self.mc_sampler_instance.samples(
+            combined=combined,
+            skip_samples=skip_samples,
+            to_getdist=to_getdist,
+        )
+
     def products(
         self,
         combined: bool = False,
@@ -178,12 +196,10 @@ class CobayaWrapper(Sampler):
         Returns the products of the run: an MC sample of the surrogate posterior under
         ``sample``, and the GPRy ``Runner`` object under ``runner``.
         """
-        products = {"runner": self.gpry_runne}
+        products = {"runner": self.gpry_runner}
         products.update(
             self.mc_sampler_instance.products(
-                combined=combined,
-                skip_samples=skip_samples,
-                to_getdist=to_getdist,
+                combined=combined, skip_samples=skip_samples, to_getdist=to_getdist
             )
         )
         return products
@@ -227,9 +243,7 @@ class CobayaWrapper(Sampler):
         if output:
             return (output.add_suffix(cls._gpry_output_dir, separator="_"),
                     output.add_suffix(cls._surrogate_suffix, separator="_"))
-        tmpdir = gettempdir()
-        return (os.path.join(tmpdir, cls._gpry_output_dir),
-                os.path.join(tmpdir, cls._surrogate_suffix))
+        return None, None
 
     @classmethod
     def output_files_regexps(cls, output, info=None, minimal=False):
