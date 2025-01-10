@@ -17,7 +17,7 @@ from inspect import cleandoc
 from cobaya.sampler import Sampler
 from cobaya.component import get_component_class
 from cobaya.log import LoggedError
-from cobaya.output import get_output, OutputReadOnly
+from cobaya.output import get_output, split_prefix, OutputReadOnly
 from cobaya.tools import get_external_function
 from gpry import mpi
 from gpry.run import Runner
@@ -92,7 +92,11 @@ class CobayaWrapper(Sampler):
         try:
             self.gpry_runner.run()
         except Exception as excpt:
-            raise LoggedError(self.log, "GPry failed during learning: %s", str(excpt))
+            raise LoggedError(
+                self.log,
+                "GPry failed during learning: %s",
+                str(excpt)
+            ) from excpt
         if mpi.is_main_process:
             self.log.info("Learning stage finished successfully!")
             self.log.info("Starting MC-sampling stage...")
@@ -150,16 +154,16 @@ class CobayaWrapper(Sampler):
         """
         Returns True if the MC sampling of the surrogate process has run and converged.
         """
-        return self.mc_sampler_instance is not None
+        return bool(getattr(self.gpry_runner, "_last_mc_samples", False))
 
-    def do_plots(self):
+    def do_plots(self, format="svg"):
         """
         Produces some results and diagnosis plots.
         """
-        self.gpry_runner.plot_progress()
-        self.gpry_runner.plot_distance_distribution()
+        self.gpry_runner.plot_progress(format=format)
+        self.gpry_runner.plot_distance_distribution(format=format)
         if self.is_mc_sampled:
-            self.gpry_runner.plot_mc()
+            self.gpry_runner.plot_mc(format=format)
 
     def products(
         self,
@@ -171,14 +175,15 @@ class CobayaWrapper(Sampler):
         Returns the products of the run: an MC sample of the surrogate posterior under
         ``sample``, and the GPRy ``Runner`` object under ``runner``.
         """
-        return {
-            "sample": self.mc_sampler_instance.products(
+        products = {"runner": self.gpry_runne}
+        products.update(
+            self.mc_sampler_instance.products(
                 combined=combined,
                 skip_samples=skip_samples,
                 to_getdist=to_getdist,
-            ),
-            "runner": self.gpry_runner,
-        }
+            )
+        )
+        return products
 
     @classmethod
     def get_checkpoint_dir_and_surr_prefix(cls, output=None):
@@ -241,10 +246,9 @@ class CobayaWrapper(Sampler):
             for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
         ]
         # MC sample from surrogate -- more precise if we know the sampler
-        # Using OutputReadOnly and not Output here bc it's sometimes called just from rank 0,
+        # Using OutputReadOnly and not Output here bc it can be  called just from rank 0,
         # and it's never used except as an aux object to get correct surrogate MC prefixes
         surr_mc_output = OutputReadOnly(prefix=surrogate_prefix)
-        from cobaya.output import split_prefix
         surr_mc_folder, _ = split_prefix(surrogate_prefix)
         surr_mc_sampler = (info or {}).get("mc_sampler")
         if surr_mc_sampler:
@@ -262,18 +266,26 @@ class CobayaWrapper(Sampler):
     @staticmethod
     def is_nora(info):
         """Returns True if NORA is being used."""
-        acq_method = list(((info or {}).get("gp_acquisition", {}) or {}).keys())
-        print("a", (acq_method and isinstance(acq_method[0], str) and
-                    acq_method[0].lower() == "nora"), acq_method)
-        return (len(acq_method) > 0 and isinstance(acq_method[0], str) and
-                acq_method[0].lower() == "nora")
+        acq_method = list((info or {}).get("gp_acquisition", {}) or {})
+        return (
+            len(acq_method) > 0 and isinstance(acq_method[0], str) and
+            acq_method[0].lower() == "nora"
+        )
 
     @classmethod
     def get_desc(cls, info=None):
-        return ("GPry: a package for Bayesian inference of expensive likelihoods "
-                r"with Gaussian Processes \cite{Gammal:2022eob}" +
-                (", using the NORA acquisition approach \cite{Torrado:2023cbj}."
-                 if cls.is_nora(info) else "."))
+        nora_string = (
+            r"using the NORA parallelised acquisition approach \cite{Torrado:2023cbj}"
+        )
+        if info is None:
+            # Unknown case (no info passed)
+            nora_string = f" [(if gp_acquisition: NORA) {nora_string}]"
+        else:
+            nora_string = " " + nora_string if cls.is_nora(info) else ""
+        return (
+            "GPry: a package for Bayesian inference of expensive likelihoods "
+            r"with Gaussian Processes \cite{Gammal:2022eob}" + nora_string + "."
+        )
 
     @classmethod
     def get_bibtex(cls):
@@ -286,6 +298,8 @@ class CobayaWrapper(Sampler):
                 primaryClass = "astro-ph.CO",
                 month = "11",
                 year = "2022"
+
+            # Cite only if using NORA as gp_acquisition (see desc.)
             @article{Torrado:2023cbj,
                 author = {Torrado, Jes\'us and Sch\"oneberg, Nils and Gammal, Jonas El},
                 title = "{Parallelized Acquisition for Active Learning using Monte Carlo Sampling}",
