@@ -1301,7 +1301,7 @@ class Runner():
 
     # pylint: disable=import-outside-toplevel
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
-                add_samples=None, output=None, output_dpi=200):
+                add_samples=None, output=None, output_dpi=200, format="svg"):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.
@@ -1329,6 +1329,8 @@ class Runner():
 
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
+
+        format : str (default: "svg" if `output` not defined; else ignore)
         """
         if not mpi.is_main_process:
             warnings.warn(
@@ -1365,13 +1367,13 @@ class Runner():
         if add_training and self.d > 1:
             getdist_add_training(gdplot, self.model, self.gpr)
         if output is None:
-            output = os.path.join(self.plots_path, "Surrogate_triangle.png")
+            output = os.path.join(self.plots_path, f"Surrogate_triangle.{format}")
         plt.savefig(output, dpi=output_dpi)
         return gdplot
 
     def plot_distance_distribution(
             self, samples_or_samples_folder=None, show_added=True, output=None,
-            output_dpi=200):
+            output_dpi=200, format="svg"):
         """
         Plots the distance distribution of the training points with respect to the
         confidence ellipsoids (in a Gaussian approx) derived from an MC sample of the
@@ -1396,6 +1398,8 @@ class Runner():
 
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
+
+        format : str (default: "svg" if `output` not defined; else ignore)
         """
         if not mpi.is_main_process:
             warnings.warn(
@@ -1418,8 +1422,12 @@ class Runner():
         covmat = gdsample.getCovMat().matrix[:n_params, :n_params]
         self.ensure_paths(plots=True)
         if output is None:
-            output_1 = os.path.join(self.plots_path, "Distance_distribution.png")
-            output_2 = os.path.join(self.plots_path, "Distance_distribution_density.png")
+            output_1 = os.path.join(
+                self.plots_path, f"Distance_distribution.{format}"
+            )
+            output_2 = os.path.join(
+                self.plots_path, f"Distance_distribution_density.{format}"
+            )
         else:
             output_1 = output
             # We need to change the 2nd NameError
