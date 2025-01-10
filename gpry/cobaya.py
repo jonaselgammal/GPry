@@ -247,7 +247,7 @@ class CobayaWrapper(Sampler):
         regexps_tuples = [
             (re.compile(re.escape(name + ".pkl")), path_checkpoint)
             for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
-        ]
+        ] + [(None, os.path.join(path_checkpoint, "images"))]
         # MC sample from surrogate -- more precise if we know the sampler
         # Using OutputReadOnly and not Output here bc it can be  called just from rank 0,
         # and it's never used except as an aux object to get correct surrogate MC prefixes
