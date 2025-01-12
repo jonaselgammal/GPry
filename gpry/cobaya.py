@@ -104,7 +104,10 @@ class CobayaWrapper(Sampler):
                 str(excpt)
             ) from excpt
         if mpi.is_main_process:
-            self.log.info("Learning stage finished successfully!")
+            if self.gpry_runner.has_converged:
+                self.log.info("Learning stage finished successfully!")
+            else:
+                self.log.info("Learning stage failed to converge! Will MC sample anyway.")
             self.log.info("Starting MC-sampling stage...")
         try:
             self.do_surrogate_sample(resume=self.output.is_resuming())
@@ -115,13 +118,22 @@ class CobayaWrapper(Sampler):
                 str(excpt)
             ) from excpt
         if mpi.is_main_process:
-            self.log.info("MC-sampling finished successfully!")
+            if self.gpry_runner.has_converged:
+                self.log.info("MC-sampling finished successfully!")
+            else:
+                self.log.info("MC-sampling finished, but model *DID NOT CONVERGE*!")
             if self.plots:
                 self.log.info("Doing some plots...")
                 self.do_plots()
         return self.mc_sampler_upd_info, self.mc_sampler_instance
 
-    def do_surrogate_sample(self, resume=False, prefix=None):
+    def do_surrogate_sample(
+            self,
+            sampler=None,
+            add_options=None,
+            resume=False,
+            prefix=None,
+    ):
         """
         Perform an MC sample of the surrogate model.
 
@@ -130,6 +142,10 @@ class CobayaWrapper(Sampler):
 
         Parameters
         ----------
+        sampler: str
+            An anternative sampler, if different from the one specified at initialisation
+        add_options: dict
+            Configuration to be passed to the sampler.
         resume: bool (default: False)
             Whether to try to resume a previous run
         prefix: str, optional
@@ -150,7 +166,10 @@ class CobayaWrapper(Sampler):
         if prefix is None:
             prefix = self.surrogate_prefix
         self.gpry_runner.generate_mc_sample(
-            sampler=self.mc_sampler, output=prefix, resume=resume
+            sampler=self.mc_sampler if sampler is None else sampler,
+            add_option=add_options,
+            output=prefix,
+            resume=resume,
         )
         self.mc_sampler_upd_info = self.gpry_runner.last_mc_surr_info
         self.mc_sampler_instance = self.gpry_runner.last_mc_sampler
