@@ -236,23 +236,43 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
     """
     Reads a value out of an X-number, e.g.: "5X" as 5 times the value of X.
 
-    If ``X_value`` is not defined, returns a tuple ``(value, value.endswith(X))``.
+    If ``X_value`` is not defined, returns a tuple ``(value, has_X, X_power)``.
     """
+    not_allowed = [" ", ".", "-", "+", "e", "E", ",", ";"]
+    if X_letter in not_allowed:
+        raise ValueError(
+            f"X_letter not allowed: '{X_letter}'. It cannot any of {not_allowed}"
+        )
     if not isinstance(dtype, type):
         raise ValueError(f"'dtype' arg must be a type, not {type(dtype)}.")
     if value == X_letter:
         value = "1" + X_letter
-    if isinstance(value, str) and value.endswith(X_letter):
-        num_value = value.rstrip(X_letter)
+    # Avoid exceptions until the 'try' block
+    if isinstance(value, str) and X_letter in value:
         has_X = True
+        num_value, X_power = value.split(X_letter)
+        if not num_value:
+            num_value = 1
+        if not X_power:
+            X_power = None
     else:
-        num_value = value
         has_X = False
+        num_value = value
+        X_power = None
     try:
-        num_value = dtype(num_value)
-        if X_value is None:
-            return (num_value, has_X)
-        return dtype(num_value * (1 if not has_X else X_value))
+        # Start with float. Impose dtype only at return
+        num_value = float(num_value)
+        if X_value is None:  # special case: X value undefined (see docstring)
+            return (
+                dtype(num_value), has_X, X_power if X_power is None else float(X_power)
+            )
+        if has_X:
+            X_multiplier = X_value
+            if X_power is not None:
+                X_multiplier = X_multiplier**float(X_power)
+        else:
+            X_multiplier = 1
+        return dtype(num_value * X_multiplier)
     except (ValueError, TypeError) as excpt:
         pre = f"Error setting variable '{varname}': " if varname else ""
         raise ValueError(

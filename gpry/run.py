@@ -25,7 +25,6 @@ from gpry.mc import mc_sample_from_gp, process_gdsamples
 import gpry.plots as gpplt
 from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds
 
-
 global _plots_path
 _plots_path = "images"
 
@@ -93,28 +92,30 @@ class Runner():
         The available options are:
 
             * n_initial : Number of finite initial truth evaluations before starting the
-              BO loop (default: 3*number of dimensions)
+              BO loop (default: 3 * number of dimensions)
             * max_initial : Maximum number of truth evaluations at initialization. If it
               is reached before `n_initial` finite points have been found, the run will
-              fail. To avoid that, try decreasing the volume of your prior
-              (default: 10 * number of dimensions * n_initial).
-            * n_points_per_acq : Number of points which are aquired with
-              Kriging believer for every acquisition step (default: equals the
-              number of parallel processes)
+              fail. To avoid that, try decreasing the volume of your prior (default:
+              30 * (number of dimensions)**1.5).
             * max_total : Maximum number of attempted sampling points before the run
-              fails. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: 70 * (number of dimensions)**1.5)).
+              stops. This is useful if you e.g. want to restrict the maximum computation
+              resources (default: 70 * (number of dimensions)**1.5).
             * max_finite : Maximum number of sampling points accepted into the GP training
-              set before the run fails. This might be useful if you use the DontConverge
+              set before the run stops. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
               in your GP. If you set this limit by hand and find that it is easily
               saturated, try decreasing the volume of your prior (default: max_total).
-            * fit_full_every : The GP hyperparameters will be fit every ``fit_full_every``
-              iterations (default : 2 * sqrt(number of dimensions), at least 1). Pass
-              ``False`` to never refit with restarts.
-            * fit_simple_every : The GP hyperparameters will be fit from the last optimum
-              only every ``fit_simple_every`` iterations (default : 1, i.e. every iter.).
-              Pass ``False`` to never refit with restarts.
+            * n_points_per_acq : Number of points which are aquired with Kriging believer
+              for every acquisition step. It will be adjusted within a 20% tolerance to
+              match a multiple of the number of parallel processes (default: number of
+              dimensions).
+            * fit_full_every : Number of iterations between full GP hyperparameters fits,
+              including several restarts of the optimiser. Pass 'np.inf' or a large number
+              to never refit with restarts (default : 2 * sqrt(number of dimensions)).
+            * fit_simple_every : Similar to ``fit_full_every``, but with a single
+              optimiser run from the last optimum hyperparameters. Overridden by
+              ``fit_full_every`` where it matches its periodicity. Pass np.inf or a large
+              number to never refit from last optimum (default : 1, i.e. every iteration).
 
     callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
@@ -262,7 +263,7 @@ class Runner():
             except Exception as excpt:
                 raise RuntimeError("There seems to be something wrong with "
                                    f"the model instance: {excpt}") from excpt
-            # Construct the main loop elements:
+            # Construct the main loop elements (and options):
             # GPR, GPAcquisition, InitialProposer and ConvergenceCriterion
             self._construct_gpr(gpr)
             self._construct_gp_acquisition(gp_acquisition)
@@ -271,73 +272,7 @@ class Runner():
                 convergence_criterion,
                 acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
             )
-
-
-
-
-            # Read in options for the run
-            if options is None:
-                self.log(
-                    "No options dict found. Defaulting to standard parameters.", level=3)
-                options = {}
-            self.n_initial = get_Xnumber(
-                options.get("n_initial", 3 * self.d), "d", self.d, int, "n_initial",
-            )
-            self.n_initial = max(self.n_initial, 2)  # we need at least 2 points to start
-            self.max_initial = options.get("max_initial", 10 * self.d * self.n_initial)
-            self.max_total = options.get("max_total", int(70 * self.d**1.5))
-            self.max_finite = options.get("max_finite", self.max_total)
-            self.n_points_per_acq = get_Xnumber(
-                options.get("n_points_per_acq", min(mpi.SIZE, self.d)),
-                 "d", self.d, int, "n_points_per_acq",
-            )
-            self.n_resamples_before_giveup = options.get(
-                "n_resamples_before_giveup", 2
-            )
-            self.resamples = 0
-            if options.get("fit_full_every"):
-                self.fit_full_every = get_Xnumber(
-                    options.get("fit_full_every"), "d", self.d, int, "fit_full_every",
-                )
-            elif options.get("fit_full_every") is not False:
-                self.fit_full_every = max(int(2 * np.sqrt(self.d)), 1)
-            else:
-                self.fit_full_every = False
-            if options.get("fit_simple_every"):
-                self.fit_simple_every = get_Xnumber(
-                    options.get("fit_simple_every"), "d", self.d, int, "fit_simple_every",
-                )
-            elif options.get("fit_simple_every") is not False:
-                self.fit_simple_every = 1
-            else:
-                self.fit_simple_every = False
-            if self.n_points_per_acq > self.d:
-                self.log("Warning: The number kriging believer samples per "
-                         "acquisition step is larger than the number of dimensions of "
-                         "the feature space. This may lead to slow convergence."
-                         "Consider running it with less cores or decreasing "
-                         "n_points_per_acq manually.", level=2)
-            elif (self.n_points_per_acq < mpi.SIZE and self.n_points_per_acq < mpi.SIZE and
-                  self.n_points_per_acq < self.d):
-                self.log("Warning: parallellisation not fully utilised! It is advised to "
-                         "make ``n_points_per_acq`` equal to the number of MPI processes "
-                         "(default when not specified).", level=2)
-            # Sanity checks
-            if self.n_initial <= 0:
-                raise ValueError("The number of initial samples needs to be bigger "
-                                 "than 0")
-            for attr in ["n_initial", "max_initial", "max_finite",
-                         "max_total", "n_points_per_acq"]:
-                if getattr(self, attr) < 0 or \
-                   getattr(self, attr) != int(getattr(self, attr)):
-                    raise ValueError(f"'{attr}' must be a positive integer.")
-            if self.n_initial >= self.max_finite:
-                raise ValueError("The number of initial samples needs to be smaller than "
-                                 "the maximum number of finite and total points.")
-            if self.max_finite > self.max_total:
-                raise ValueError("The maximum number of initial truth evaluations needs "
-                                 "to be smaller than the maximum total number of "
-                                 "evaluations.")
+            self._construct_options(options)
             # Diagnosis
             self.diagnosis = options.get("diagnosis", None)
             # Callback
@@ -574,6 +509,79 @@ class Runner():
                     f"{str(excpt)}"
                 ) from excpt
 
+    def _construct_options(self, options):
+        if options is None:
+            options = {}
+        _get_opt = lambda optname, default: get_X_number(
+            options.get(optname, default), "d", self.d, dtype=int, varname=optname
+        )
+        self.n_initial = max(_get_opt("n_initial", 3 * self.d), 2)  # at least 2 points!
+        self.max_initial = _get_opt("max_initial", 30 * self.d**1.5)
+        self.max_total = _get_opt("max_total", 70 * self.d**1.5)
+        self.max_finite = _get_opt("max_finite", self.max_total)
+        self.n_points_per_acq = _get_opt("n_points_per_acq", self.d)
+        self.fit_full_every = max(_get_opt("fit_full_every", 2 * np.sqrt(self.d)), 1)
+        self.fit_simple_every = max(_get_opt("fit_simple_every", 1), 1)
+        # TODO: undocumented option (under testing):
+        self.n_resamples_before_giveup = _get_opt("n_resamples_before_giveup", 2)
+        self.resamples = 0
+        # Sanity checks/adjustments
+        for attr in ["n_initial", "max_initial", "max_finite",
+                     "max_total", "n_points_per_acq",
+                     "fit_full_every", "fit_full_simple",
+                     ]:
+            _large_value = 1000000000
+            setattr(self, attr, min(_large_value, int(np.round(getattr(self, attr)))))
+            if getattr(self, attr) <= 0:
+                raise ValueError(f"'{attr}' must be a positive integer.")
+        if self.max_initial < self.n_initial:
+            raise ValueError(
+                "The number of maximum initial evaluations "
+                f"'max_initial={self.max_initial}' needs to be larger than or equal to "
+                f"the number of initial finite evaluations 'n_initial={self.n_initial}'."
+            )
+        if self.max_finite < self.n_initial:
+            raise ValueError(
+                f"The total number of finite evaluations 'max_finite={self.max_finite}' "
+                "needs to be larger than or equal to the number of initial finite "
+                f"evaluations 'n_initial={self.n_initial}'."
+            )
+        if self.max_total < self.max_initial:
+            raise ValueError(
+                f"The total number of evaluations 'max_total={self.max_total}' needs to "
+                "be larger than or equal to the maximum number of initial evaluations "
+                f"'max_initial={self.max_initial}'."
+            )
+        if self.max_finite < self.max_total:
+            raise ValueError(
+                f"The total number of finite evaluations 'max_finite={self.max_finite}' "
+                "needs to be larger than or equal to the maximum number of evaluations "
+                f"'max_total={self.max_total}'."
+            )
+        if self.n_points_per_acq > self.d:
+            self.log(
+                "Warning: The number kriging believer samples per acquisition step "
+                f"'n_points_per_acq={self.n_points_per_acq}' is larger than the number "
+                f"of dimensions 'd={self.d}' of the feature space. This may lead to slow "
+                "convergence.",
+                level=2,
+            )
+        # Adjust n_points_acq to num of MPI processes within 20% tolerance (always down)
+        rest_n_acq = self.n_points_per_acq % mpi.SIZE
+        if res_n_acq <= 0.2 * self.n_points_per_acq:
+            new_n_acq = self.n_points_per_acq - rest_n_acq
+            self.log(
+                "Warning: The number kriging believer samples per acquisition step "
+                f"'n_points_per_acq={self.n_points_per_acq}' has been rounded down to "
+                f"{new_n_acq} to better utilise parallelisation.",
+                level=2,
+            )
+            self.n_points_per_acq= new_n_acq
+
+
+            
+
+
     @property
     def d(self):
         """Dimensionality of the problem."""
@@ -747,8 +755,11 @@ class Runner():
             with TimerCounter(self.gpr) as timer_acq:
                 force_resample = self.resamples > 0
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
-                    self.gpr, n_points=self.n_points_per_acq, random_state=self.random_state,
-                    force_resample=force_resample)
+                    self.gpr,
+                    n_points=self.n_points_per_acq,
+                    random_state=self.random_state,
+                    force_resample=force_resample,
+                )
                 # Check whether any of the points in new_X are either already in the
                 # training set or exit multiple times in new_X
                 if len(y_pred) > 0:

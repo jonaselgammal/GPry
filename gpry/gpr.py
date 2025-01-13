@@ -282,10 +282,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 raise ValueError(
                     "Specify 'inf_threshold' if using infinities classifier."
                 )
-            value, sigma_units = get_Xnumber(
+            value, is_sigma_units, sigma_power = get_Xnumber(
                 self.inf_threshold, "s", None, dtype=float, varname="inf_threshold"
             )
-            if sigma_units:  # sigma units
+            if sigma_power is not None:
+                raise ValueError("Power for sigma not supported.")
+            if is_sigma_units:
                 self.diff_threshold = self.compute_threshold_given_sigma(value, self.d)
             else:
                 self.diff_threshold = value
