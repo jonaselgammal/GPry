@@ -24,6 +24,7 @@ Contents:
   installation
   intro_example
   adv_example
+  initialisation
   running
   running_cobaya
   callback

@@ -2,7 +2,7 @@
 Running with Cobaya
 ===================
 
-GPry has two ways to interface with the general and cosmological Bayesian inference code `Cobaya <https://cobaya.aesthetics.io>`_.
+GPry has two ways to interface with the general and cosmological Bayesian inference code `Cobaya <https://cobaya.readthedocs.io>`_.
 
 .. note::
 
@@ -12,7 +12,7 @@ GPry has two ways to interface with the general and cosmological Bayesian infere
 a) Passing a Cobaya ``model`` to the GPry ``Runner``
 ----------------------------------------------------
 
-You can pass a `Cobaya model <https://cobaya.readthedocs.io/en/latest/models.html>`_ as the first argument of the :class:`~run.Runner`, and run GPry normally.
+You can pass a :doc:`Cobaya model <cobaya:models>` as the first argument of the :class:`~run.Runner`, and run GPry normally.
 
 In this case, GPry will use the prior specified in the Cobaya model, so there is no need to pass parameter ``bounds`` to the :class:`~run.Runner`. Parameter names and labels will also be automatically used for tables and plots.
 
@@ -48,7 +48,7 @@ Conversely, you can integrate GPry into a Cobaya-based inference pipeline, inclu
 
 A call to the Cobaya ``run`` function or ``cobaya-run`` shell command will run the GPry's learning loop and, after convergence or exhaustion of the evaluation budget, will run an MC sample of the surrogate model, and return/write it in the same way as other Cobaya-interfaced samplers:
 
-- As a `cobaya.collections.SampleCollection <https://cobaya.readthedocs.io/en/latest/output.html#collection.SampleCollection>`_ using the ``samples`` or ``products`` method of the Cobaya sampler wrapper (if in a script or a notebook).
+- As a :ref:`Cobaya SampleCollection <cobaya:output_format>` using the ``samples`` or ``products`` method of the Cobaya sampler wrapper (if in a script or a notebook).
 
 - Written into a ``[prefix].1.txt`` [TODO: CHECK SUFFIX] file if calling ``cobaya-run`` from the command line.
 
