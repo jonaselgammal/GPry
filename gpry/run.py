@@ -99,7 +99,8 @@ class Runner():
               30 * (number of dimensions)**1.5).
             * max_total : Maximum number of attempted sampling points before the run
               stops. This is useful if you e.g. want to restrict the maximum computation
-              resources (default: 70 * (number of dimensions)**1.5).
+              resources (default: 70 * (number of dimensions)**1.5 or max_initial,
+              whichever is largest).
             * max_finite : Maximum number of sampling points accepted into the GP training
               set before the run stops. This might be useful if you use the DontConverge
               convergence criterion, specifying exactly how many points you want to have
@@ -512,12 +513,16 @@ class Runner():
     def _construct_options(self, options):
         if options is None:
             options = {}
-        _get_opt = lambda optname, default: get_X_number(
-            options.get(optname, default), "d", self.d, dtype=int, varname=optname
+        _opt_or_default = lambda optname, default: (
+            options.get(optname, default) if options.get(optname, default) is not None
+            else default
+        )
+        _get_opt = lambda optname, default: get_Xnumber(
+            _opt_or_default(optname, default), "d", self.d, dtype=int, varname=optname
         )
         self.n_initial = max(_get_opt("n_initial", 3 * self.d), 2)  # at least 2 points!
         self.max_initial = _get_opt("max_initial", 30 * self.d**1.5)
-        self.max_total = _get_opt("max_total", 70 * self.d**1.5)
+        self.max_total = _get_opt("max_total", max(self.max_initial, 70 * self.d**1.5))
         self.max_finite = _get_opt("max_finite", self.max_total)
         self.n_points_per_acq = _get_opt("n_points_per_acq", self.d)
         self.fit_full_every = max(_get_opt("fit_full_every", 2 * np.sqrt(self.d)), 1)
@@ -528,7 +533,7 @@ class Runner():
         # Sanity checks/adjustments
         for attr in ["n_initial", "max_initial", "max_finite",
                      "max_total", "n_points_per_acq",
-                     "fit_full_every", "fit_full_simple",
+                     "fit_full_every", "fit_simple_every",
                      ]:
             _large_value = 1000000000
             setattr(self, attr, min(_large_value, int(np.round(getattr(self, attr)))))
@@ -552,11 +557,11 @@ class Runner():
                 "be larger than or equal to the maximum number of initial evaluations "
                 f"'max_initial={self.max_initial}'."
             )
-        if self.max_finite < self.max_total:
+        if self.max_total < self.max_finite:
             raise ValueError(
-                f"The total number of finite evaluations 'max_finite={self.max_finite}' "
-                "needs to be larger than or equal to the maximum number of evaluations "
-                f"'max_total={self.max_total}'."
+                f"The maximum total number of evaluations 'max_total={self.max_total}' "
+                "needs to be larger than or equal to the maximum number of finite ones "
+                f"'max_finite={self.max_finite}'."
             )
         if self.n_points_per_acq > self.d:
             self.log(
@@ -568,19 +573,15 @@ class Runner():
             )
         # Adjust n_points_acq to num of MPI processes within 20% tolerance (always down)
         rest_n_acq = self.n_points_per_acq % mpi.SIZE
-        if res_n_acq <= 0.2 * self.n_points_per_acq:
+        if rest_n_acq <= 0.2 * self.n_points_per_acq and rest_n_acq != 0:
             new_n_acq = self.n_points_per_acq - rest_n_acq
             self.log(
                 "Warning: The number kriging believer samples per acquisition step "
                 f"'n_points_per_acq={self.n_points_per_acq}' has been rounded down to "
-                f"{new_n_acq} to better utilise parallelisation.",
+                f"{new_n_acq} to better exploit parallelisation.",
                 level=2,
             )
             self.n_points_per_acq= new_n_acq
-
-
-            
-
 
     @property
     def d(self):
