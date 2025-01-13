@@ -27,14 +27,29 @@ options:
   # refit from last optimum (hyperparameters kept constant in that iteration).
   fit_simple_every: 1  # every iteration
 
-# The GP regressor used for interpolating the posterior, with options
+# The GP regressor used for interpolating the posterior
 gpr:
-  kernel: RBF  # e.g. RBF, Matern, {Matern: {nu: 2.5}}, ...
-  noise_level: 1e-2
+  # Spatial correlation kernel and params, e.g. RBF, Matern, {Matern: {nu: 2.5}}, ...
+  kernel: RBF
+  # Priors for the output and length scale, in normalised logp units
+  output_scale_prior: [1e-2, 1e3]
+  length_scale_prior: [1e-3, 1e1]
+  # Noise level in logp units; increase for numerically noisy likelihoods
+  noise_level: 1e-1
+  # Factor used to clip the GPR from above, to avoid overshoots (undefined to disable)
+  clip_factor: 1.1
+  # Treatment of infinities and large negative values; False for no classifier
+  account_for_inf: SVM
+  # Difference in standard deviations ('s') for considering a value as -infinity
+  inf_threshold: 20s
+  # Hyperparameter fitting: optimizer (from scipy) and number of restarts for full fits
   optimizer: fmin_l_bfgs_b
-  n_restarts_optimizer:  # default (undefined) is 10 + 2 * dim
-  account_for_inf: SVM  # Undefined or null for not using an SVM classificator
-  verbose:  # set only if you want different verbosity for the GPR
+  n_restarts_optimizer: 3d
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+  # [Not interfaced yet] Preprocessors for input and output scales
+  # preprocessing_X: Normalize_bounds
+  # preprocessing_y: Normalize_y
 
 # Acquisition class. If simply passed the name of an acquisition function,
 # (e.g. "LogExp") uses the default BatchOptimizer with that function.
