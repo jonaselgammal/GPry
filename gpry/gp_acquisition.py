@@ -567,10 +567,6 @@ class NORA(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    use_prior_sample: bool [CURRENTLY DISABLED!]
-        Whether to use the initial prior sample from Nested Sampling for the ranking.
-        Can be a large number of them in high dimension. Default: False.
-
     shrink_with_factor: float, optional (default: None)
         If defined as a positive float, the nested sampling runs are restricted to the
         hypercube defined by the current (finite) GPR training set, enlarged by the given
@@ -587,11 +583,11 @@ class NORA(GenericGPAcquisition):
         live points per sample in the current training set.
         Not recommended to decrease it.
 
-    nlive_per_dim_max: int
-        live points max cap (times dimension).
+    nlive_max: int
+        live points max cap
 
-    num_repeats_per_dim: int
-        length of slice-chains times dimension.
+    num_repeats: int
+        length of slice-chains
 
     precision_criterion_target: float
         Cap on precision criterion of Nested Sampling
@@ -624,15 +620,16 @@ class NORA(GenericGPAcquisition):
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
+                 shrink_1d_nstd=None,
+                 shrink_with_factor=None,
                  # Class-specific:
                  sampler=None,
                  mc_every="1d",
-                 use_prior_sample=False,
-                 shrink_with_factor=None,
-                 shrink_1d_nstd=None,
                  nlive_per_training=3,
-                 nlive_per_dim_max=25,
-                 num_repeats_per_dim=5,
+                 nlive_max="25d",
+                 nlive_per_dim_max=None,  # deprecated
+                 num_repeats="5d",
+                 num_repeats_per_dim=None,  # deprecated
                  precision_criterion_target=0.01,
                  nprior_per_nlive=10,
                  max_ncalls=None,
@@ -646,7 +643,6 @@ class NORA(GenericGPAcquisition):
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
-        self.use_prior_sample = use_prior_sample
         self.tmpdir = tmpdir
         self.i = 0
         self.acq_func_y_sigma = None
@@ -690,8 +686,22 @@ class NORA(GenericGPAcquisition):
         #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
         # Prepare precision parameters
         self.nlive_per_training = nlive_per_training
-        self.nlive_per_dim_max = nlive_per_dim_max
-        self.num_repeats_per_dim = num_repeats_per_dim
+        if nlive_per_dim_max is not None:
+            self.log(
+                "*Warning: 'nlive_per_dim_max' is deprecated. Use e.g. 'nlive_max: 25d'. "
+                "This will fail in the future."
+            )
+            self.nlive_max = nlive_per_dim_max * self.n_d
+        else:
+            self.nlive_max = get_Xnumber(nlive_max, "d", self.d, int, "nlive_max")
+        if num_repeats_per_dim is not None:
+            self.log(
+                "*Warning: 'num_repeats_per_dim' is deprecated. Use e.g. "
+                "'num_repeats: 5d'. This will fail in the future."
+            )
+            self.num_repeats = num_repeats_per_dim * self.n_d
+        else:
+            self.num_repeats = get_Xnumber(num_repeats, "d", self.d, int, "num_repeats")
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
@@ -715,12 +725,12 @@ class NORA(GenericGPAcquisition):
         Updates NS precision parameters:
         - num_repeats: constant for now
         - nlive: `nlive_per_training` times the size of the training set, capped at
-            `nlive_per_dim_max` (typically 25) times the dimension.
+            `nlive_max` (typically 25 * dimension).
         - precision_criterion: constant for now.
         """
-        nlive = min(self.nlive_per_training * gpr.n, self.nlive_per_dim_max * self.n_d)
+        nlive = min(self.nlive_per_training * gpr.n, self.nlive_max)
         return {"nlive": nlive,
-                "num_repeats": self.num_repeats_per_dim * self.n_d,
+                "num_repeats": self.num_repeats,
                 "precision_criterion": self.precision_criterion_target,
                 "nprior": int(self.nprior_per_nlive * nlive),
                 "max_ncalls": self.max_ncalls
@@ -855,8 +865,6 @@ class NORA(GenericGPAcquisition):
             # We will want to re-evaluate to recover the infinities, so we do not pass
             # y forward.
             y = None
-            if self.use_prior_sample:
-                raise NotImplementedError("use_prior not implemented yet for UltraNest.")
             # Delete products from tmp folder
             shutil.rmtree(updated_settings["log_dir"])
             w, X, y = remove_0_weight_samples(w, X, y)
