@@ -144,7 +144,8 @@ class Runner():
     plots : bool, dict (default: True)
         If True, produces some progress plots. One can also pass the arguments of
         ``Runner.plot_progress`` as a dict for finer control, e.g.
-        ``{"timing": True, "convergence": True, "trace": False, "slices": False}``.
+        ``{"timing": True, "convergence": True, "trace": False, "slices": False,
+        "format": "svg"}``.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -1187,13 +1188,32 @@ class Runner():
 
     def plot_progress(
             self,
+            format="svg",
             timing=True,
             convergence=True,
             trace=True,
             slices=False,
-            format="svg"):
+    ):
         """
         Creates some progress plots and saves them at path (assumes path exists).
+
+        Parameters
+        ----------
+        format : str (default ``"svg"``)
+            Format for the plots, among the available ones in ``matplotlib``.
+
+        timing : bool (default: True)
+            Plot histogram of timing per iteration (totals in legend).
+
+        convergence : bool (default: True)
+            Plot the evolution of the convergence criterion (included in ``trace`` plot).
+
+        trace : bool (default: True)
+            Plot the evolution of the run: convergence criterion, surrogate log(p) and
+            parameters.
+
+        slices : bool (default: False)
+            Plots slices per training samples (slow, use for diagnosis only).
         """
         if not mpi.is_main_process:
             return
