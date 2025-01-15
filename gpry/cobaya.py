@@ -11,6 +11,7 @@ For input arguments and options, see ``CobayaSampler.yaml`` in this folder, or r
 import os
 import re
 import logging
+from copy import deepcopy
 from tempfile import gettempdir
 from inspect import cleandoc
 from typing import Union
@@ -24,6 +25,8 @@ from cobaya.collection import SampleCollection
 
 from gpry import mpi
 from gpry.run import Runner
+
+# TODO: resuming may not work in cases where internal gp_acq or gpr options aren't changed
 
 
 # pylint: disable=no-member,access-member-before-definition
@@ -58,20 +61,29 @@ class CobayaWrapper(Sampler):
         self.mc_sampler_upd_info = None
         self.mc_sampler_instance = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
-        # Default to Runner's defaults: (recusively) remove keys with None value:
+        # Default to Runner & Acq defaults: (recusively) remove keys with None value:
         for k, v in list(self.gpr.items()):
             if v is None:
                 self.gpr.pop(k)
-        gp_acquisition_algo = list(self.gp_acquisition)[0]
-        for k, v in list((self.gp_acquisition[gp_acquisition_algo] or {}).items()):
+        for k, v in list(self.gp_acquisition.items()):
             if v is None:
-                self.gp_acquisition[gp_acquisition_algo].pop(k)
+                self.gp_acquisition.pop(k)
+        gq_acq_input = deepcopy(self.gp_acquisition)
+        gp_acq_engine = gq_acq_input.pop("engine", "BatchOptimizer")
+        # Grab the relevant acq options, merge them, and kick out the unused ones
+        gp_acq_engine_options = None
+        for k in list(gq_acq_input):
+            if k.startswith("options_"):
+                gp_acq_engine_options = gq_acq_input.pop(k)
+                if k.lower().endswith(gp_acq_engine.lower()):
+                    gq_acq_input.update(gp_acq_engine_options or {})
+        gp_acq_input = {gp_acq_engine: gq_acq_input}
         # Initialize the runner
         try:
             self.gpry_runner = Runner(
                 model=self.model,
                 gpr=self.gpr,
-                gp_acquisition=self.gp_acquisition,
+                gp_acquisition=gp_acq_input,
                 initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
                 options=self.options,

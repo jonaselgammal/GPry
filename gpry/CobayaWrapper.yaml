@@ -51,27 +51,34 @@ gpr:
   # preprocessing_X: Normalize_bounds
   # preprocessing_y: Normalize_y
 
-# Acquisition class. If simply passed the name of an acquisition function,
-# (e.g. "LogExp") uses the default BatchOptimizer with that function.
+# The acquisition class, function and their options
 gp_acquisition:
-  BatchOptimizer:
-    acq_func:
-      LogExp: {zeta_scaling: 0.85}
+  # Acquisition function and its arguments
+  acq_func:
+    LogExp: {zeta_scaling: 0.85}
+  # Shrinkage of the acquisition region, if necessary for speed and robustness
+  shrink_1d_nstd:
+  shrink_with_factor:
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+  # Acquisition engine: NORA or BatchOptimizer
+  engine: BatchOptimizer
+  # Options for the engine (only the relevant ones are kept in the .updated.yaml)
+  options_BatchOptimizer:
     proposer:  # default (undefined): a mixture of uniform and centroids
-    acq_optimizer: fmin_l_bfgs_b
-    n_restarts_optimizer: 5d
-    n_repeats_propose: 10
-    verbose:  # set only if you want different verbosity for the acq process
-#  NORA:
-#    acq_func:
-#      LogExp: {zeta_scaling: 0.85}
-#    mc_every: 2d
-#    nlive_per_training: 3
-#    nlive_per_dim_max: 25
-#    num_repeats_per_dim: 5
-#    precision_criterion_target: 0.005
-#    nprior_per_nlive: 10
-#    verbose:  # set only if you want different verbosity for the acq process
+    acq_optimizer: fmin_l_bfgs_b  # scipy optimiser to use
+    n_restarts_optimizer: 5d  # number of restarts during hyperparameter fitting
+    n_repeats_propose: 10  # number of starting points drawn from the proposer
+  options_NORA:
+    # nested sampler used for acquisition
+    sampler:  # undefined: in order, of available: polychord > ultranest > nessai
+    mc_every: 2d  # number of iterations between full NS runs
+    nlive_per_training: 3  # number of live points per training sample
+    nlive_max: 25d  # cap for the number of live points
+    num_repeats: 5d  # number of steps of slice chains (polychord only)
+    precision_criterion_target: 0.01  # precision criterion for the NS
+    nprior_per_nlive: 10  # number of prior points in the initial sample, times nlive
+    max_ncalls:  # maximum number of calls to the GPR model during NS
 
 # Proposer used for drawing the initial training samples before running
 # the acquisition loop. One of [reference, prior, uniform].
@@ -86,7 +93,9 @@ convergence_criterion: CorrectCounter
 mc_sampler: mcmc  # default: mcmc with Cobaya defaults
 
 # Produce progress plots (inside the gpry_output dir).
-# Adds overhead for very fast likelihoods.
+# One can specify options detailing which plots will be made, and in which format, e.g.:
+# {timing: True, convergence: True, trace: False, slices: False, format: svg}
+# (Adds overhead for very fast likelihoods.)
 plots: False
 
 # Function run each iteration after adapting the recently acquired points and
