@@ -25,6 +25,7 @@ Contents:
   intro_example
   adv_example
   initialisation
+  gpr
   running
   running_cobaya
   callback
