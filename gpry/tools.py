@@ -407,3 +407,15 @@ def remove_0_weight_samples(weights, *arrays):
         else:
             new_arrays.append(np.delete(array, i_zero_w, axis=0))
     return new_arrays
+
+
+def mean_covmat_from_evals(X, logp):
+    """
+    Returns an estimation of the mean and covariance of a set ``X`` of points, using their
+    ``logp`` as weights.
+    """
+    weights = np.exp(logp - max(logp))
+    weights_, X_ = remove_0_weight_samples(weights, X)
+    mean = np.average(X_, axis=0, weights=weights_)
+    covmat = np.cov(X_.T, aweights=weights_, ddof=0)
+    return mean, covmat

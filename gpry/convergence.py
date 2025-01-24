@@ -13,7 +13,7 @@ from abc import ABCMeta, abstractmethod
 import numpy as np
 
 from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
-from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd
+from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd, mean_covmat_from_evals
 from gpry import mpi
 
 
@@ -438,6 +438,8 @@ class GaussianKL(ConvergenceCriterion):
         # Compute the KL divergence (gaussian approx) with the previous iteration
         try:
             kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
+            if kl < 0:
+                raise ValueError("Negative KL -> undefined")
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
@@ -477,6 +479,103 @@ class GaussianKL(ConvergenceCriterion):
         new = (lambda cls: cls.__new__(cls))(self.__class__)
         new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items() if k != "log"}
         return new
+
+
+class GaussianKLTvA(GaussianKL):
+    """
+    This criterion is not aimed at estimating convergence, but at discarding cases in
+    which a MC sample from the GPR (the last one obtained by the acquisition step, if it
+    exists, otherwise computed on the fly) would not sample the mode mapped by the
+    training set, but instead some overshooting or large baseline plateau. It compares the
+    Gaussian approximation of the last MC sample by the acquisition step with the mean and
+    covariance matrix computed from the training set using probabilities as weights.
+
+    Since its a check in the current iteration, by default it is enough for this criterion
+    to be satisfied in the last step, and with a high tolerance, since it affects extreme
+    cases only.
+
+    At the moment, it assumes that there is a single mode.
+
+    If a valid GPAcquisition instance is passed to ``is_converged``, mean and covariance
+    will be extracted from it. Otherwise, it estimates the mean and covariance by running
+    an MCMC sampler on the GP (slow).
+
+    In the second case, this convergence criterion is MPI-aware, such that it will run as
+    many parallel MCMC chains as running processes to improve the estimation of the mean
+    and covariance.
+
+    Parameters
+    ----------
+    prior_bounds : list
+        List of prior bounds.
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"limit"``: Value of the KL divergence for which we consider the algorithm
+                       converged (default ``1e-2``).
+        * ``"limit_times"``: Number of consecutive times that the KL divergence must be
+                             lower than the ``limit`` parameter (default ``2``).
+        * ``"n_draws"``: Number of steps of the MCMC chain (default: ignored in favour of
+                         ``"n_draws_per_dimsquared"``).
+        * ``"n_draws_per_dimsquared"``: idem, as a factor of the dimensionality squared
+                                        (default 10).
+        * ``"max_reused"``: number of times a sample can be reweighted and reused (may
+                            miss new high-value regions) (default 4).
+    """
+
+    def __init__(self, prior_bounds, params):
+        params = params or {}
+        if params.get("limit") is None:
+            params["limit"] = len(prior_bounds)
+        if params.get("limit_times") is None:
+            params["limit_times"] = 1
+        super().__init__(prior_bounds, params)
+
+    def _get_mean_and_cov_from_training(self, gp):
+        return mean_covmat_from_evals(gp.X_train, gp.y_train)
+
+    def criterion_value(self, gp, gp_2=None, acquisition=None):
+        try:
+            mean_new, cov_new = self._get_new_mean_and_cov(gp, acquisition=acquisition)
+        except ConvergenceCheckError as excpt:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(
+                f"Error when computing mean and covmat: {excpt}"
+            ) from excpt
+        try:
+            mean_training, cov_training = self._get_mean_and_cov_from_training(gp)
+        except Exception as e:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(
+                f"Error when computing mean and covmat from training: {excpt}"
+            ) from excpt
+        if gp_2 is not None:
+            # TODO: Nothing yet to do with gp2
+            pass
+        # Compute the KL divergence (gaussian approx) between with the previous iteration
+        try:
+            kl = kl_norm(mean_new, cov_new, mean_training, cov_training)
+            if kl < 0:
+                raise ValueError("Negative KL -> undefined")
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+        except Exception as excpt:
+            kl = np.nan
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(kl)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
+        return kl
 
 
 class CorrectCounter(ConvergenceCriterion):
