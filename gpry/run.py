@@ -463,7 +463,7 @@ class Runner():
             # Use defaults
             convergence_criterion = ["CorrectCounter"]
             if acq_has_mc:
-                convergence_criterion += ["GaussianKL", "GaussianKLTvA"]
+                convergence_criterion += ["GaussianKL", "GaussianKLTrain"]
         elif isinstance(convergence_criterion, Mapping):
             # In principle, deepcopy, but keep values that are ConvergenceCriterion as is!
             convergence_criterion_copy = {}

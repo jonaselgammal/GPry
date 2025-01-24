@@ -481,7 +481,7 @@ class GaussianKL(ConvergenceCriterion):
         return new
 
 
-class GaussianKLTvA(GaussianKL):
+class GaussianKLTrain(GaussianKL):
     """
     This criterion is not aimed at estimating convergence, but at discarding cases in
     which a MC sample from the GPR (the last one obtained by the acquisition step, if it
