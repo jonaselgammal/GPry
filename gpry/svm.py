@@ -276,6 +276,9 @@ class SVM(SVC):
         Returns the indices of the finite points, depending on some delta-like threshold,
         in the same space (transformed or not) as the y's.
 
+        This is a static method for an untrained SVM, meaning that the maximum of ``y``
+        to compare with must either be passed or it uses the maximum of the input.
+
         Notes
         -----
         This is *not* a predictor method, but a simple threshold check, i.e. it does not
@@ -290,6 +293,17 @@ class SVM(SVC):
         # - If y=inf and diff_threshold=inf --> True & False = False (needs the isfinite!)
         # - If y=np.nan --> False & False = False
         return np.greater_equal(y, max_y - diff_threshold) & np.isfinite(y)
+
+    def is_finite(self, y):
+        """
+        Returns the indices of the finite points, depending on the current threshold and
+        maximum ``y`` value in the training set (not the input).
+
+        The ``y`` input must be passed in the space in which the SVM was defined.
+        """
+        if self.y_train is None:
+            raise ValueError("Cannot do anything: the SVM has not been trained yet!")
+        return self._is_finite_raw(y, self.diff_threshold, self._max_y)
 
     def predict(self, X, validate=True):
         """

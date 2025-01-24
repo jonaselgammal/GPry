@@ -955,9 +955,11 @@ class Runner():
         # We will compare it against y - max(y)
         if isinstance(self.gpr.infinities_classifier, SVM):
             # Check by hand against the threshold (in the non-transformed space)
+            # NB: the SVM has not been trained yet, so we need to call the raw classifier.
+            # pylint: disable=protected-access
             is_finite = lambda ymax_minus_y: (
                 self.gpr.infinities_classifier._is_finite_raw(
-                    -ymax_minus_y, self.gpr.diff_threshold, max_y=0
+                    -ymax_minus_y, self.gpr._diff_threshold, max_y=0
                 )
             )
         else:

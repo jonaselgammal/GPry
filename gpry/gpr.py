@@ -261,8 +261,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.bounds = bounds
         # Initialize SVM if necessary
         self.inf_threshold = inf_threshold
-            self.infinities_classifier = SVM(random_state=random_state)
         if isinstance(account_for_inf, str) and account_for_inf.lower() == "svm":
+            self.infinities_classifier = SVM(random_state=random_state)
         elif account_for_inf is False:
             self.infinities_classifier = None
         else:
@@ -288,9 +288,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             if sigma_power is not None:
                 raise ValueError("Power for sigma not supported.")
             if is_sigma_units:
-                self.diff_threshold = self.compute_threshold_given_sigma(value, self.d)
+                self._diff_threshold = self.compute_threshold_given_sigma(value, self.d)
             else:
-                self.diff_threshold = value
+                self._diff_threshold = value
         # Auto-construct inbuilt kernels
         if isinstance(kernel, str):
             kernel = {kernel: {}}
@@ -479,7 +479,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self.preprocessing_y.inverse_transform_scale(threshold)
 
 
-    def is_finite(self, y=None):
+    def is_finite(self, y):
         """
         Returns the classification of y (target) values as finite (True) or not, by
         comparing them with the current threshold.
@@ -494,7 +494,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         if self.infinities_classifier is None:
             return np.full(shape=len(y), fill_value=True)
-        return self.infinities_classifier._is_finite_raw(y, self.diff_threshold)
+        return self.infinities_classifier.is_finite(self.preprocessing_y.transform(y))
 
     def predict_is_finite(self, X, validate=True):
         """
@@ -641,9 +641,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             X_finite = np.copy(self.X_train_all)
             y_finite = np.copy(self.y_train_all)
         else:
-            # Use the manual method for non-preprocessed input
+            # Use the manual method for non-preprocessed input.
             is_finite_all = self.infinities_classifier._is_finite_raw(
-                self.y_train_all, self.diff_threshold
+                self.y_train_all, self._diff_theshold
             )
             X_finite = np.copy(self.X_train_all[is_finite_all])
             y_finite = np.copy(self.y_train_all[is_finite_all])
@@ -666,7 +666,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         else:
             if fit_classifier:
                 diff_threshold_ = \
-                    self.preprocessing_y.transform_scale(self.diff_threshold)
+                    self.preprocessing_y.transform_scale(self._diff_threshold)
                 # The SVM lives in the preprocessed space, and the preprocessor may have
                 # changed, so we need to pass all points every time
                 is_finite_predict = self.infinities_classifier.fit(
@@ -1331,8 +1331,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Copy the right SVM
         if hasattr(self, "infinities_classifier"):
             c.infinities_classifier = deepcopy(self.infinities_classifier)
-        if hasattr(self, "diff_threshold"):
-            c.diff_threshold = deepcopy(self.diff_threshold)
+        if hasattr(self, "_diff_threshold"):
+            c._diff_threshold = deepcopy(self._diff_threshold)
         if hasattr(self, "inf_value"):
             c.inf_value = deepcopy(self.inf_value)
         if hasattr(self, "minus_inf_value"):
