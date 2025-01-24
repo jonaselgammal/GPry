@@ -132,6 +132,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         which shall be considered finite in :math:`\sigma` using a :math:`\chi^2`
         distribution. Used only if account_for_inf is not None.
 
+    keep_min_finite : int, optional (default: None)
+        Minimum number of points to be considered finite, and this part of the GPR
+        training set. Useful e.g. if a point with a much larger y-value than the rest is
+        suddenly found. If None or no infinities classifier selected, it has no effect.
+
     bounds : array-like, shape=(n_dims,2), optional
         Array of bounds of the prior [lower, upper] along each dimension. Has
         to be provided when the kernel shall be built automatically by the GP.
@@ -239,8 +244,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  length_scale_prior=[1e-3, 1e1], noise_level=1e-2, clip_factor=1.1,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
-                 account_for_inf="SVM", inf_threshold="20s", bounds=None,
-                 random_state=None, verbose=1):
+                 account_for_inf="SVM", inf_threshold="20s", keep_min_finite=None,
+                 bounds=None, random_state=None, verbose=1):
         self.n_last_appended = 0
         self.n_last_appended_finite = 0
         self.newly_appended_for_inv = 0
@@ -261,6 +266,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.bounds = bounds
         # Initialize SVM if necessary
         self.inf_threshold = inf_threshold
+        self.keep_min_finite = keep_min_finite
         if isinstance(account_for_inf, str) and account_for_inf.lower() == "svm":
             self.infinities_classifier = SVM(random_state=random_state)
         elif account_for_inf is False:
@@ -457,12 +463,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         Returns the training set as a pandas DataFrame (created on-the-fly and not saved).
         """
-        data = {
-            p: vals for p, vals in zip(
-                generic_params_names(self.d),
-                self.X_train_all.copy().T
-            )
-        }
+        data = dict(zip(generic_params_names(self.d), self.X_train_all.copy().T))
         data["y"] = self.y_train_all.copy()
         data["is_finite"] = self.is_finite(data["y"])
         print(data)
@@ -477,7 +478,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         if self.preprocessing_y is None:
             return threshold
         return self.preprocessing_y.inverse_transform_scale(threshold)
-
 
     def is_finite(self, y):
         """
@@ -642,8 +642,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             y_finite = np.copy(self.y_train_all)
         else:
             # Use the manual method for non-preprocessed input.
+            # Make sure that the threshold is such that there is a min of finite ones.
+            diff_threshold_keep_n = self._diff_threshold_if_keep_n_finite(
+                self.y_train_all, self.keep_min_finite, self._diff_threshold
+            )
+            # pylint: disable=protected-access
             is_finite_all = self.infinities_classifier._is_finite_raw(
-                self.y_train_all, self._diff_theshold
+                self.y_train_all, diff_threshold_keep_n
             )
             X_finite = np.copy(self.X_train_all[is_finite_all])
             y_finite = np.copy(self.y_train_all[is_finite_all])
@@ -665,12 +670,14 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             )
         else:
             if fit_classifier:
-                diff_threshold_ = \
-                    self.preprocessing_y.transform_scale(self._diff_threshold)
+                # Again, make sure that we keep a min number of finite points
+                diff_threshold_keep_n_ = self.preprocessing_y.transform_scale(
+                    diff_threshold_keep_n
+                )
                 # The SVM lives in the preprocessed space, and the preprocessor may have
                 # changed, so we need to pass all points every time
                 is_finite_predict = self.infinities_classifier.fit(
-                    self.X_train_all_, self.y_train_all_, diff_threshold_
+                    self.X_train_all_, self.y_train_all_, diff_threshold_keep_n_
                 )
                 assert np.array_equal(is_finite_all, is_finite_predict), \
                     "Infinities classifier miss-classified at least 1 point."
@@ -1171,7 +1178,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             if return_std_grad:
                 grad_std = np.zeros(X_.shape[1])
                 if not np.allclose(y_std, grad_std):
-                    # TODO: This can be made much more efficient, but I don't think it's used currently
+                    # TODO: This can be made much more efficient,
+                    #       but I don't think it's used currently
                     grad_std = -np.dot(K_trans,
                                        np.dot(self.V_.T.dot(self.V_), grad))[0] \
                         / y_std_untransformed
@@ -1333,6 +1341,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             c.infinities_classifier = deepcopy(self.infinities_classifier)
         if hasattr(self, "_diff_threshold"):
             c._diff_threshold = deepcopy(self._diff_threshold)
+        if hasattr(self, "keep_min_finite"):
+            c.keep_min_finite = deepcopy(self.keep_min_finite)
         if hasattr(self, "inf_value"):
             c.inf_value = deepcopy(self.inf_value)
         if hasattr(self, "minus_inf_value"):
@@ -1371,7 +1381,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """ Compute inverse of the kernel and store relevant quantities"""
         try:
             self.L_ = cholesky(kernel, lower=True)
-            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]),lower=True)
+            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]), lower=True)
         except np.linalg.LinAlgError as exc:
             exc.args = ("The kernel, %s, is not returning a "
                         "positive definite matrix. Try gradually "
@@ -1388,3 +1398,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         assuming a :math:`\chi^2` distribution.
         """
         return delta_logp_of_1d_nstd(n_sigma, n_dimensions)
+
+    @staticmethod
+    def _diff_threshold_if_keep_n_finite(y, n, reference_diff_threshold, epsilon=1e-6):
+        """
+        Recalculation of the relative threshold when imposing that at least ``n`` points
+        must be kept finite (i.e. in the training set). The "at least" imposes that the
+        minimum value returned is the given threshold.
+
+        It requires sorting the ``y`` values, which can be costly in extreme cases.
+        """
+        if n is None or n <= 1:
+            return reference_diff_threshold
+        y_sorted = np.sort(y)
+        difference_to_nth_point = y_sorted[-1] - y_sorted[-min(n, len(y_sorted))]
+        return max(reference_diff_threshold, difference_to_nth_point + epsilon)
