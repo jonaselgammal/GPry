@@ -693,7 +693,7 @@ class NORA(GenericGPAcquisition):
             )
             self.nlive_max = nlive_per_dim_max * self.n_d
         else:
-            self.nlive_max = get_Xnumber(nlive_max, "d", self.d, int, "nlive_max")
+            self.nlive_max = get_Xnumber(nlive_max, "d", self.n_d, int, "nlive_max")
         if num_repeats_per_dim is not None:
             self.log(
                 "*Warning: 'num_repeats_per_dim' is deprecated. Use e.g. "
@@ -701,7 +701,7 @@ class NORA(GenericGPAcquisition):
             )
             self.num_repeats = num_repeats_per_dim * self.n_d
         else:
-            self.num_repeats = get_Xnumber(num_repeats, "d", self.d, int, "num_repeats")
+            self.num_repeats = get_Xnumber(num_repeats, "d", self.n_d, int, "num_repeats")
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
