@@ -281,6 +281,7 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
             f"{dtype.__name__} value."
         ) from excpt
 
+
 def check_candidates(gpr, new_X, tol=1e-8):
     """
     Method for determining whether points which have been found by the

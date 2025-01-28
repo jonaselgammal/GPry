@@ -1407,7 +1407,7 @@ class Runner():
         from gpry.plots import getdist_add_training
         import matplotlib.pyplot as plt
         self.ensure_paths(plots=True)
-        gdplot = gdplt.get_subplot_plotter(subplot_size=2)
+        gdplot = gdplt.get_subplot_plotter(subplot_size=2, auto_close=True)
         gdplot.settings.line_styles = 'tab10'
         gdplot.settings.solid_colors = 'tab10'
         gdplot.triangle_plot(

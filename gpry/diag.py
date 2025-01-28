@@ -93,15 +93,19 @@ def diagnosis(runner):
     # PLOTS ##########################################################################
     # Create the plots path, just in case it want not there yet
     from gpry.io import create_path
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
     create_path(runner.plots_path)
+    # Temporarily switch to Agg backend in order not to leak memory (by the triangle plot)
+    prev_backend = mpl.get_backend()
+    mpl.use("Agg")
     # Get the "reference" MC sample from runner.reference, if set.
     reference = getattr(runner, "reference", None)
     fiducial = getattr(runner, "fiducial", None)
 
-    # Plot points distribution and convergence criterion
+    # Plot points distribution and convergence criterion, and timings
     from gpry.plots import \
-        plot_points_distribution, plot_slices, plot_slices_reference, \
+        plot_trace, plot_slices, plot_slices_reference, \
         getdist_add_training, _plot_2d_model_acquisition_std
     # Do not plot if sample reweighted, to save time
     if not runner.acquisition.is_last_MC_reweighted:
@@ -115,6 +119,9 @@ def diagnosis(runner):
         else:
             plt.savefig(os.path.join(runner.plots_path, "trace.svg"))
         plt.close()
+        # Timings
+        runner.progress.plot_timing(
+            truth=True, save=os.path.join(runner.plots_path, "timing.svg"))
 
     # Plot mean GP and acq func slices
     if do_plot_slices:
@@ -176,8 +183,8 @@ def diagnosis(runner):
         if reference is not None:
             to_plot = [reference] + to_plot
             filled = [False] + filled
-            legend_labels += ["Reference sample"]
-        g = plots.get_subplot_plotter(subplot_size=2)
+            legend_labels = ["Reference sample"] + legend_labels
+        g = plots.get_subplot_plotter(subplot_size=2, auto_close=True)
         try:
             g.triangle_plot(
                 to_plot, to_plot_params, filled=filled, legend_labels=legend_labels
@@ -194,7 +201,6 @@ def diagnosis(runner):
             plt.close()
         except (ValueError, IndexError, AttributeError, np.linalg.LinAlgError, MCSamplesError, DensitiesError) as e:
             print(f"COULD NOT DO TRIANGLE PLOT! Reason: {e}")
-
         if runner.model.prior.d() == 2:
             try:
                 _plot_2d_model_acquisition_std(
@@ -207,5 +213,7 @@ def diagnosis(runner):
                 plt.close()
             except ValueError as e:
                 print(f"COULD NOT PLOT CONTOURS! Reason: {e}")
+    # Switch back to prev backend
+    mpl.use(prev_backend)
 
     print("**************************************************")
