@@ -3,6 +3,7 @@ Wrappers for external nested samplers.
 """
 
 import os
+import sys
 import glob
 import shutil
 import tempfile
@@ -130,7 +131,8 @@ class InterfacePolyChord:
         mpi.share_attr(self, "polychord_settings")
         # Run PolyChord!
         from pypolychord import run_polychord  # pylint: disable=import-outside-toplevel
-
+        # Flush stdout, since PolyChord can step over it if async (py not called with -u)
+        sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
             self.last_polychord_output = run_polychord(
                 logp_func_wrapped,
