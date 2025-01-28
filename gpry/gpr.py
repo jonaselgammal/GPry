@@ -466,7 +466,6 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         data = dict(zip(generic_params_names(self.d), self.X_train_all.copy().T))
         data["y"] = self.y_train_all.copy()
         data["is_finite"] = self.is_finite(data["y"])
-        print(data)
         return pd.DataFrame(data)
 
     @property
