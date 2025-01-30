@@ -12,7 +12,7 @@ from warnings import warn
 import numpy as np
 
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, generic_params_names
+from gpry.tools import NumpyErrorHandling, generic_params_names, remove_0_weight_samples
 
 
 class NestedSamplerNotInstalledError(Exception):
@@ -35,7 +35,7 @@ class InterfacePolyChord:
             from pypolychord.settings import PolyChordSettings
             from pypolychord import run_polychord
 
-            global run_pypolychord
+            global run_polychord
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
                 "External nested sampler Polychord cannot be imported. "
@@ -63,7 +63,7 @@ class InterfacePolyChord:
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
-        self.last_polychord_output = None
+        self.last_polychord_result = None
 
     def set_verbosity(self, verbose):
         """Sets the verbosity of the sampler at run time."""
@@ -137,7 +137,7 @@ class InterfacePolyChord:
         # Flush stdout, since PolyChord can step over it if async (py not called with -u)
         sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
-            self.last_polychord_output = run_polychord(
+            self.last_polychord_result = run_polychord(
                 logp_func_wrapped,
                 nDims=self.dim,
                 nDerived=0,
@@ -161,8 +161,8 @@ class InterfacePolyChord:
                 no_labels = len(param_names[0]) == 1
                 if no_labels:
                     param_names = [(p, p) for p in param_names]
-            self.last_polychord_output.make_paramnames_files(param_names)
-            samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
+            self.last_polychord_result.make_paramnames_files(param_names)
+            samples_T = np.loadtxt(self.last_polychord_result.root + ".txt").T
             self.X_MC = samples_T[2:].T
             # PolyChord stores chi**2 in 2nd col (contrary to getdist: -logp)
             self.y_MC = -0.5 * samples_T[1]
@@ -244,7 +244,7 @@ class InterfaceNessai:
         self.y_MC = None
         self.w_MC = None
         self.output = None
-        self.last_nessai_output = None
+        self.last_nessai_result = None
 
     def set_verbosity(self, verbose):
         """Sets the verbosity of the sampler at run time."""
@@ -318,7 +318,7 @@ class InterfaceNessai:
             )
             sampler.run(**self.run_settings)
         # Process results
-        self.last_nessai_output = sampler.ns.get_result_dictionary()
+        self.last_nessai_result = sampler.ns.get_result_dictionary()
         x = sampler.posterior_samples
         # Copy the data from the structured array to the float array
         dtype_new = np.dtype(
@@ -332,6 +332,109 @@ class InterfaceNessai:
         self.X_MC = posterior_samples[:, :-3]
         self.y_MC = posterior_samples[:, -2]
         return self.X_MC, self.y_MC, None
+
+    # WARNING: just deletes the last used folder!
+    def delete_output(self):
+        """Deletes the nessai output."""
+        if not mpi.is_main_process:
+            return
+        shutil.rmtree(self.output)
+
+
+class InterfaceUltraNest:
+    """
+    Interface for the ``ultranest`` nested sampler, by J. Buchner.
+
+    See https://johannesbuchner.github.io/UltraNest
+    """
+
+    def __init__(self, bounds, verbosity=3):
+        try:
+            # pylint: disable=import-outside-toplevel,global-statement
+            from ultranest import ReactiveNestedSampler
+
+            global ReactiveNestedSampler
+        except ModuleNotFoundError as excpt:
+            raise NestedSamplerNotInstalledError(
+                "External nested sampler 'UltraNest' cannot be imported. "
+                "Check out installation instructions at "
+                "https://johannesbuchner.github.io/UltraNest "
+                "(or select an alternative nested sampler, e.g. PolyChord or nessai)."
+            ) from excpt
+        self.dim = len(np.atleast_2d(bounds))
+        self.precision_settings = {}
+
+        self.sampler_settings = {
+            "resume": "overwrite",
+            "vectorized": True,
+        }
+        self.run_settings = {"viz_callback": False, "show_status": False}
+        self.set_verbosity(verbosity)
+        self.set_prior(bounds)
+        # Storage of last sample -- will only be defined for rank-0 MPI process
+        self.X_all = None
+        self.y_all = None
+        self.X_MC = None
+        self.y_MC = None
+        self.w_MC = None
+        self.output = None
+        self.last_ultranest_result = None
+
+    def set_verbosity(self, verbose):
+        """Sets the verbosity of the sampler at run time."""
+        pass
+
+    def set_prior(self, bounds):
+        """Sets the prior used by the nested sampler."""
+        self.bounds = np.atleast_2d(bounds)
+        widths = self.bounds[:, 1] - self.bounds[:, 0]
+        lowers = self.bounds[:, 0]
+        self.uniform_prior_transform = lambda quantiles: quantiles * widths + lowers
+
+    def set_precision(
+        self, nlive=None, precision_criterion=None, max_ncalls=None, **kwargs
+    ):
+        """Sets precision parameters for the nested sampler."""
+        if nlive is not None:
+            self.precision_settings["min_num_live_points"] = nlive
+        if precision_criterion is not None:
+            self.precision_settings["frac_remain"] = precision_criterion
+        if max_ncalls is not None:
+            self.precision_settings["max_ncalls"] = max_ncalls
+        if kwargs:
+            warn(f"Some precision parameters not recognized; ignored: {kwargs}")
+
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+        """
+        Runs the nested sampler.
+
+        param_names (optional, otherwise x_[i] will be used) should be a list of sampled
+        parameter names, or a list of (name, label) tuples. Labels are interpreted as
+        LaTeX but should not include '$' signs.
+        """
+        if keep_all:
+            raise NotImplementedError("keep_all=True not yet possible for ultranest.")
+        # pylint: disable=consider-using-with
+        self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name
+        sampler = ReactiveNestedSampler(
+            param_names or generic_params_names(self.dim),
+            logp_func,
+            self.uniform_prior_transform,
+            log_dir=self.output,
+            **self.sampler_settings,
+        )
+        with NumpyErrorHandling(all="ignore") as _:
+            self.last_ultranest_result = sampler.run(
+                **self.precision_settings,
+                **self.run_settings,
+            )
+        # Process results
+        if mpi.is_main_process:
+            w = self.last_ultranest_result["weighted_samples"]["weights"]
+            X = self.last_ultranest_result["weighted_samples"]["points"]
+            y = self.last_ultranest_result["weighted_samples"]["logl"]
+            self.w_MC, self.X_MC, self.y_MC = remove_0_weight_samples(w, X, y)
+        return self.X_MC, self.y_MC, self.w_MC
 
     # WARNING: just deletes the last used folder!
     def delete_output(self):

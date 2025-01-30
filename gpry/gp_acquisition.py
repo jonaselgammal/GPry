@@ -660,14 +660,8 @@ class NORA(GenericGPAcquisition):
             if self.sampler_interface is None:
                 self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
         elif self.sampler.lower() == "ultranest":
-            try:
-                # pylint: disable=import-outside-toplevel
-                import ultranest
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install UltraNest or select an alternative nested sampler "
-                    "(e.g. PolyChord)."
-                ) from excpt
+            if self.sampler_interface is None:
+                self.sampler_interface = nsint.InterfaceUltraNest(bounds, verbose)
         elif self.sampler.lower() == "nessai":
             if self.sampler_interface is None:
                 self.sampler_interface = nsint.InterfaceNessai(bounds, verbose)
@@ -812,65 +806,36 @@ class NORA(GenericGPAcquisition):
         return X_MC, y_MC, None, w_MC
 
     def _do_MC_sample_ultranest(self, gpr, random_state, bounds=None):
-        # Ultranest cannot deal with -np.inf
-        old_minus_inf_value = gpr.minus_inf_value
-        gpr.minus_inf_value = -1e300
-        bounds = self.bounds_ if bounds is None else bounds
-        widths = bounds[:, 1] - bounds[:, 0]
-        lowers = bounds[:, 0]
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
             """
-            return gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
+            # Ultranest cannot deal with -np.inf
+            prev_miv = gpr.minus_inf_value
+            gpr.minus_inf_value = -1e-300
+            logp = gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
+            gpr.minus_inf_value = prev_miv
+            return logp
 
-        def uniform_prior_transform(quantiles):
-            return quantiles * widths + lowers
-
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
-        updated_settings = self.update_NS_precision(gpr)
-        tmpdir = None
-        if mpi.is_main_process:
-            if self.tmpdir is None:
-                # TODO: add to checkpoint folder?
-                tmpdir = tempfile.TemporaryDirectory().name
-            else:
-                tmpdir = f"{self.tmpdir}/{self.i}"
-                self.i += 1
-            # ALT: persistent folder:
-            # tmpdir = tempfile.mkdtemp()
-        tmpdir = mpi.comm.bcast(tmpdir)
-        updated_settings["log_dir"] = tmpdir
-        from ultranest import ReactiveNestedSampler
-        sampler = ReactiveNestedSampler(
-            [f"x_{i + 1}" for i in range(gpr.d)],
-            logp,
-            uniform_prior_transform, log_dir=updated_settings["log_dir"],
-            resume="overwrite",
-            vectorized=True,
+        prec_settings = {
+            k: v for k, v in self.update_NS_precision(gpr).items()
+            if k in ["nlive", "precision_criterion", "max_ncalls"]
+        }
+        self.sampler_interface.set_precision(**prec_settings)
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp, out_dir=self._get_output_folder(), keep_all=False
         )
-        with NumpyErrorHandling(all="ignore") as _:
-            result = sampler.run(
-                min_num_live_points=updated_settings["nlive"],
-                max_ncalls=updated_settings["max_ncalls"],
-                frac_remain=updated_settings["precision_criterion"],
-                viz_callback=False, show_status=False,
-            )
-        gpr.minus_inf_value = old_minus_inf_value
-        if mpi.is_main_process:
-            w = result['weighted_samples']['weights']
-            X = result["weighted_samples"]["points"]
-            # y = result["weighted_samples"]["logl"]
-            # We will want to re-evaluate to recover the infinities, so we do not pass
-            # y forward.
-            y = None
-            # Delete products from tmp folder
-            shutil.rmtree(updated_settings["log_dir"])
-            w, X, y = remove_0_weight_samples(w, X, y)
-            return X, y, None, w
-        return None, None, None, None
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
+        return X_MC, y_MC, None, w_MC
 
     # pylint: disable=import-outside-toplevel
     def _do_MC_sample_nessai(self, gpr, random_state, bounds=None):
@@ -893,7 +858,7 @@ class NORA(GenericGPAcquisition):
         # Update precision settings
         prec_settings = {
             k: v for k, v in self.update_NS_precision(gpr).items()
-            if k in ["nlive", "stopping"]
+            if k in ["nlive", "precision_criterion"]
         }
         self.sampler_interface.set_precision(**prec_settings)
         # Run and get products
