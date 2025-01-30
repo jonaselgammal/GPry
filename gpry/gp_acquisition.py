@@ -669,16 +669,8 @@ class NORA(GenericGPAcquisition):
                     "(e.g. PolyChord)."
                 ) from excpt
         elif self.sampler.lower() == "nessai":
-            try:
-                # pylint: disable=import-outside-toplevel
-                import nessai
-                import nessai.model
-                from nessai.flowsampler import FlowSampler
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install nessai or select an alternative nested sampler "
-                    "(e.g. PolyChord)."
-                ) from excpt
+            if self.sampler_interface is None:
+                self.sampler_interface = nsint.InterfaceNessai(bounds, verbose)
         # TODO: fix this! and adapt to all codes (set_rng method for interfaces)
         # # Using rng state as seed for PolyChord
         # if self.random_state is not None:
@@ -744,6 +736,25 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
+    def _get_output_folder(self):
+        """
+        Prepare a new output folder. Returns always with a ``/`` at the end.
+
+        If one was specified at init, it saves to a subfolder with an increasing index.
+        Otherwise, it creates a random one every time.
+        """
+        if not mpi.is_main_process:
+            return None
+        if self.tmpdir is None:
+            # pylint: disable=consider-using-with
+            tmpdir = tempfile.TemporaryDirectory().name
+        else:
+            tmpdir = os.path.abspath(os.path.join(self.tmpdir, str(self.i)))
+            self.i += 1
+        if not tmpdir.endswith("/"):
+            tmpdir += "/"
+        return tmpdir
+
     def do_MC_sample(self, gpr, random_state=None, sampler=None):
         """
 
@@ -787,21 +798,11 @@ class NORA(GenericGPAcquisition):
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
         self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
-        # Output folder
-        tmpdir = None
-        if mpi.is_main_process:
-            if self.tmpdir is None:
-                # pylint: disable=consider-using-with
-                tmpdir = tempfile.TemporaryDirectory().name
-            else:
-                tmpdir = os.path.join(self.tmpdir, str(self.i))
-                self.i += 1
-            if not tmpdir.endswith("/"):
-                tmpdir += "/"
+        # Output (PolyChord needs a "/" at the end).
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
             logp,
-            out_dir=tmpdir,
+            out_dir=self._get_output_folder(),
             keep_all=False
         )
         self.sampler_interface.delete_output()
@@ -875,79 +876,37 @@ class NORA(GenericGPAcquisition):
     def _do_MC_sample_nessai(self, gpr, random_state, bounds=None):
         if not mpi.is_main_process:
             return None, None, None, None
-        warnings.warn(
-            "Support for Nessai is experimental at the moment, and not MPI-compatible "
-            "(running in rank-0 process only."
+        if mpi.multiple_processes:
+            warnings.warn(
+                "Support for Nessai is experimental at the moment, and not MPI-compatible"
+                " (running in rank-0 process only)."
+            )
+        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
+        def logp(X):
+            """
+            Returns the predicted value at a given point (-inf if prior=0).
+            """
+            return gpr.predict(X, return_std=False, validate=False)
+
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
+        # Update precision settings
+        prec_settings = {
+            k: v for k, v in self.update_NS_precision(gpr).items()
+            if k in ["nlive", "stopping"]
+        }
+        self.sampler_interface.set_precision(**prec_settings)
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp,
+            out_dir=self._get_output_folder(),
+            keep_all=False
         )
-        import nessai
-        import nessai.model
-        from nessai.flowsampler import FlowSampler
-
-        class Nessai_model(nessai.model.Model):
-            """
-            Translates the GP to a nessai model
-            """
-
-            def __init__(self, gpr, bounds):
-                self.gpr = gpr
-                n_d = self.gpr.d
-                self.log_prior_volume = np.sum(np.log(bounds[:, 1] - bounds[:, 0]))
-                self.bounds = dict(
-                    (name, bounds[i]) for i, name in enumerate(generic_params_names(n_d))
-                )
-
-            @property
-            def names(self):
-                return list(self.bounds)
-
-            def gpry_log_likelihood(self, point):
-                return self.gpr.predict(point) + self.log_prior_volume
-
-            def log_likelihood(self, livepoint):
-                if livepoint.ndim == 0:
-                    point = np.array([livepoint[p] for p in self.names])
-                    point = np.atleast_2d(point)
-                    ll = self.gpry_log_likelihood(point)
-                else:
-                    points = np.array(
-                        [[livepoint[i][p] for p in self.names]
-                         for i in range(livepoint.size)]
-                    )
-                    ll = self.gpry_log_likelihood(points)
-                return ll
-
-            def log_prior(self, livepoint):
-                if not self.in_bounds(livepoint).any():
-                    return -np.inf
-                lp = np.single(0.)
-                return lp
-
-        nessai_model = Nessai_model(gpr, self.bounds_ if bounds is None else bounds)
-        updated_settings = self.update_NS_precision(gpr)
-        if self.tmpdir is None:
-            # TODO: add to checkpoint folder?
-            tmpdir = tempfile.TemporaryDirectory().name
-        else:
-            tmpdir = f"{self.tmpdir}/{self.i}"
-            self.i += 1
-        # TODO: add more options for nessai
-        sampler = FlowSampler(nessai_model, output=tmpdir,
-                              nlive=updated_settings['nlive'],
-                              plot=False, resume=False)
-        sampler.run(plot=False, save=False)
-        result = sampler.ns.get_result_dictionary()
-        X = result['nested_samples']
-        x = sampler.posterior_samples
-        # Copy the data from the structured array to the float array
-        dtype_new = np.dtype({
-            'names': x.dtype.names,
-            'formats': tuple([np.float64] * len(x.dtype.names)),
-        })
-        x = x.astype(dtype_new)
-        posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
-        X = posterior_samples[:, :-3]
-        y = posterior_samples[:, -2]
-        return X, y, None, None
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
+        return X_MC, y_MC, None, w_MC
 
     def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, gpr=None):
         """
