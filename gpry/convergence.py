@@ -22,16 +22,19 @@ class ConvergenceCheckError(Exception):
     Exception to be raised when the computation of the convergence criterion failed.
     """
 
-    pass
-
 
 def builtin_names():
     """
     Lists all names of all built-in convergence criteria.
     """
-    list_conv_names = [name for name, obj in inspect.getmembers(sys.modules[__name__])
-                       if (issubclass(obj.__class__, ConvergenceCriterion.__class__) and
-                           obj is not ConvergenceCriterion)]
+    list_conv_names = [
+        name
+        for name, obj in inspect.getmembers(sys.modules[__name__])
+        if (
+            issubclass(obj.__class__, ConvergenceCriterion.__class__)
+            and obj is not ConvergenceCriterion
+        )
+    ]
     return list_conv_names
 
 
@@ -62,7 +65,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 self.n_accepted_evals = []
                 self.limit = ... # stores the limit for convergence
 
-            def is_converged(self, gp, gp_old=None, new_X=None, new_y=None, pred_y=None):
+            def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
                 # Basically a wrapper for the 'criterion_value' method which
                 # returns True if the convergence criterion is met and False
                 # otherwise.
@@ -73,6 +76,13 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 # evaluations to the corresponding variables.
     """
 
+    @abstractmethod
+    def __init__(self, prior_bounds, params):
+        """Sets all relevant initial parameters from the 'params' dict."""
+        self.values = []
+        self.n_posterior_evals = []
+        self.n_accepted_evals = []
+
     def get_history(self):
         """Returns the two lists containing the values of the convergence
         criterion at each step as well as the total number of evaluations and
@@ -82,21 +92,21 @@ class ConvergenceCriterion(metaclass=ABCMeta):
             values = self.values
             n_posterior_evals = self.n_posterior_evals
             n_accepted_evals = self.n_accepted_evals
-        except Exception:
-            raise AttributeError("The convergence criterion does not save it's "
-                                 "convergence history.")
+        except Exception as excpt:
+            raise AttributeError(
+                "The convergence criterion does not save its convergence history."
+            ) from excpt
         if len(values) == 0 or len(n_posterior_evals) == 0:
-            raise ValueError("Make sure to call the convergence criterion "
-                             "before getting it's history.")
+            raise ValueError(
+                "Make sure to call the convergence criterion "
+                "before getting it's history."
+            )
         return values, n_posterior_evals, n_accepted_evals
 
     @abstractmethod
-    def __init__(self, prior_bounds, params):
-        """Sets all relevant initial parameters from the 'params' dict."""
-
-    @abstractmethod
     def is_converged(
-            self, gp, gp_old=None, new_X=None, new_y=None, pred_y=None, acquisition=None):
+        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+    ):
         """
         Returns False if the algorithm hasn't converged and True if it has.
 
@@ -189,7 +199,7 @@ class DontConverge(ConvergenceCriterion):
     the BO loop at a set number of iterations.
     """
 
-    def __init__(self, prior_bounds=None, params={}):
+    def __init__(self, prior_bounds=None, params=None):
         self.values = []
         self.thres = []
         self.n_posterior_evals = []
@@ -205,7 +215,8 @@ class DontConverge(ConvergenceCriterion):
         return np.nan
 
     def is_converged(
-            self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None):
+        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+    ):
         self.criterion_value(gp, gp_2)
         return False
 
@@ -263,13 +274,15 @@ class GaussianKL(ConvergenceCriterion):
         # Number of MCMC chains to generate samples
         if params.get("n_draws") and params.get("n_draws_per_dimsquared"):
             raise ValueError(
-                "Pass either 'n_draws' or 'n_draws_per_dimsquared', not both")
+                "Pass either 'n_draws' or 'n_draws_per_dimsquared', not both"
+            )
         if params.get("n_draws"):
             self._n_draws = int(params.get("n_draws"))
         else:
             self.n_draws_per_dimsquared = params.get("n_draws_per_dimsquared", 10)
         # Max times a sample can be reweighted and reused (we may miss new high regions)
         self.max_reused = params.get("max_reused", 4)
+        self.n_reused = 0
         # We'll some hight MCMC temperature, to get the tails right
         self.temperature = 2
         # Prepare Cobaya's input
@@ -283,8 +296,10 @@ class GaussianKL(ConvergenceCriterion):
         try:
             return self._get_new_mean_and_cov_from_acquisition(acquisition)
         except AttributeError:
-            warn("Could not get sample from acquisition object. "
-                 "Running MC process to get mean and covmat.")
+            warn(
+                "Could not get sample from acquisition object. "
+                "Running MC process to get mean and covmat."
+            )
             return self._get_new_mean_and_cov_from_mc(gp)
 
     def _get_new_mean_and_cov_from_acquisition(self, acquisition):
@@ -293,6 +308,7 @@ class GaussianKL(ConvergenceCriterion):
 
         Raises AttributeError for null acquisition object or it not having samples.
         """
+        mean, cov = None, None
         attr_error, num_error = None, None
         if mpi.is_main_process:
             try:
@@ -307,7 +323,7 @@ class GaussianKL(ConvergenceCriterion):
                     num_error = excpt
         attr_error = mpi.comm.bcast(attr_error)
         if attr_error:
-            raise AttributeError from attr_error # all processes!
+            raise AttributeError from attr_error  # all processes!
         num_error = mpi.comm.bcast(num_error)
         if num_error:
             raise ConvergenceCheckError(
@@ -321,10 +337,8 @@ class GaussianKL(ConvergenceCriterion):
         if mpi.is_main_process:
             reused = False
             if self._last_collection is not None:
-                points = \
-                    self._last_collection[self.paramnames].to_numpy(np.float64)
-                old_gp_values = -0.5 * \
-                    self._last_collection["chi2"].to_numpy(np.float64)
+                points = self._last_collection[self.paramnames].to_numpy(np.float64)
+                old_gp_values = -0.5 * self._last_collection["chi2"].to_numpy(np.float64)
                 new_gp_values = gp.predict(points)
                 weights = self._last_collection["weight"].to_numpy(np.float64)
                 logratio = new_gp_values - old_gp_values
@@ -341,16 +355,18 @@ class GaussianKL(ConvergenceCriterion):
                 try:
                     kl_reweight = max(
                         kl_norm(mean_reweighted, cov_reweighted, self.mean, self.cov),
-                        kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted))
+                        kl_norm(self.mean, self.cov, mean_reweighted, cov_reweighted),
+                    )
                 except np.linalg.LinAlgError as excpt:
-                    raise ConvergenceCheckError(f"Could not compute KL norm: {excpt}.")
+                    raise ConvergenceCheckError(
+                        f"Could not compute KL norm: {excpt}."
+                    ) from excpt
                 # If very small, we've probably found nothing yet, so nothing new
                 # But assume that if we have hit 10 * limit, we are right on track
                 min_kl = self.limit * 1e-2 if max(self.values) < 10 * self.limit else 0
                 # If larger than the difference with the last one, bad
                 max_kl = self.values[-1]
-                if kl_reweight > min_kl and kl_reweight < max_kl and \
-                   self.n_reused < self.max_reused:
+                if min_kl < kl_reweight < max_kl and self.n_reused < self.max_reused:
                     self.n_reused += 1
                     reused = True
         if mpi.multiple_processes:
@@ -358,10 +374,10 @@ class GaussianKL(ConvergenceCriterion):
         if reused:
             if mpi.multiple_processes:
                 mean_reweighted, cov_reweighted = mpi.comm.bcast(
-                    (mean_reweighted, cov_reweighted) if mpi.is_main_process else None)
+                    (mean_reweighted, cov_reweighted) if mpi.is_main_process else None
+                )
             return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
-        self.n_reused = 0
         self._last_info, samples = self._sample_mcmc(gp, covmat=cov_mcmc)
         # Compute mean and cov, and broadcast
         if mpi.is_main_process:
@@ -371,16 +387,20 @@ class GaussianKL(ConvergenceCriterion):
         # Broadcast results
         if mpi.multiple_processes:
             mean_new, cov_new = mpi.comm.bcast(
-                (mean_new, cov_new) if mpi.is_main_process else None)
+                (mean_new, cov_new) if mpi.is_main_process else None
+            )
         return mean_new, cov_new
 
+    # pylint: disable=import-outside-toplevel
     def _sample_mcmc(self, gpr, covmat=None):
         from cobaya.model import get_model
         from cobaya.sampler import get_sampler
         from cobaya.log import LoggedError
+
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
         self.cobaya_input = cobaya_generate_gp_model_input(
-            gpr, self.prior_bounds, self.paramnames)
+            gpr, self.prior_bounds, self.paramnames
+        )
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
         self.cobaya_input["debug"] = 50
@@ -392,11 +412,14 @@ class GaussianKL(ConvergenceCriterion):
             cov = self.cov
         sampler_info = mcmc_info_from_run(model, gpr, cov=cov)
         sampler_info["mcmc"]["temperature"] = self.temperature
-        high_prec_threshold = (self.values[-1] < 1) if len(self.values) else False
+        high_prec_threshold = (self.values[-1] < 1) if len(self.values) > 0 else False
         # Relax stopping criterion if not yet well converged
-        sampler_info["mcmc"].update({
-            "Rminus1_stop": (0.01 if high_prec_threshold else 0.2),
-            "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5)})
+        sampler_info["mcmc"].update(
+            {
+                "Rminus1_stop": (0.01 if high_prec_threshold else 0.2),
+                "Rminus1_cl_stop": (0.2 if high_prec_threshold else 0.5),
+            }
+        )
         mcmc_sampler = get_sampler(sampler_info, model)
         try:
             mcmc_sampler.run()
@@ -456,10 +479,11 @@ class GaussianKL(ConvergenceCriterion):
         return kl
 
     def is_converged(
-            self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None):
+        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+    ):
         self.criterion_value(gp, gp_2, acquisition)
         try:
-            if np.all(np.array(self.values[-self.limit_times:]) < self.limit):
+            if np.all(np.array(self.values[-self.limit_times :]) < self.limit):
                 return True
         except IndexError:
             pass
@@ -547,7 +571,7 @@ class GaussianKLTrain(GaussianKL):
             ) from excpt
         try:
             mean_training, cov_training = self._get_mean_and_cov_from_training(gp)
-        except Exception as e:
+        except Exception as excpt:
             self.values.append(np.nan)
             self.n_posterior_evals.append(gp.n_total)
             self.n_accepted_evals.append(gp.n)
@@ -625,30 +649,34 @@ class CorrectCounter(ConvergenceCriterion):
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:
-                assert (reltol[-1] == "l" or reltol[-1] == "s" or reltol[-1] == "r")
+                assert reltol[-1] == "l" or reltol[-1] == "s" or reltol[-1] == "r"
                 if reltol[-1] == "l":
                     reltol = float(reltol[:-1]) * nstd_of_1d_nstd(1, d)
                 elif reltol[-1] == "s":
-                    reltol = float(reltol[:-1]) * nstd_of_1d_nstd(1, d)**2.
+                    reltol = float(reltol[:-1]) * nstd_of_1d_nstd(1, d) ** 2.0
                 elif reltol[-1] == "r":
                     reltol = float(reltol[:-1]) * np.sqrt(nstd_of_1d_nstd(1, d))
-            except:
-                raise ValueError("The 'reltol' parameter can either be a number " + \
-                    f"or a string with a number followed by 'l' or 's'. Got {reltol}")
+            except Exception as excpt:
+                raise ValueError(
+                    "The 'reltol' parameter can either be a number "
+                    + f"or a string with a number followed by 'l' or 's'. Got {reltol}"
+                ) from excpt
         self.reltol = reltol
         abstol = params.get("abstol", "0.01s")
         if isinstance(abstol, str):
             try:
-                assert (abstol[-1] == "l" or abstol[-1] == "s" or abstol[-1] == "r")
+                assert abstol[-1] == "l" or abstol[-1] == "s" or abstol[-1] == "r"
                 if abstol[-1] == "l":
                     abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d)
                 elif abstol[-1] == "s":
-                    abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d)**2.
+                    abstol = float(abstol[:-1]) * nstd_of_1d_nstd(1, d) ** 2.0
                 elif abstol[-1] == "r":
                     abstol = float(abstol[:-1]) * np.sqrt(nstd_of_1d_nstd(1, d))
-            except:
-                raise ValueError("The 'abstol' parameter can either be a number " + \
-                    f"or a string with a number followed by 'l' or 's'. Got {abstol}")
+            except Exception as excpt:
+                raise ValueError(
+                    "The 'abstol' parameter can either be a number "
+                    + f"or a string with a number followed by 'l' or 's'. Got {abstol}"
+                ) from excpt
         self.abstol = abstol
         self.verbose = params.get("verbose", 0)
         self.convergence_policy = params.get("policy", "and")
@@ -659,13 +687,14 @@ class CorrectCounter(ConvergenceCriterion):
         self.n_pred = 0
 
     def is_converged(
-            self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None):
+        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+    ):
         self.criterion_value(gp, new_X=new_X, new_y=new_y, pred_y=pred_y)
         return self.n_pred > self.ncorrect
 
     def criterion_value(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
         n_new = len(new_y)
-        assert(n_new == len(pred_y))
+        assert n_new == len(pred_y)
         max_val = 0
         max_diff = 0
         max_thres = 0
