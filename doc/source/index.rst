@@ -24,9 +24,10 @@ Contents:
   installation
   intro_example
   adv_example
+  running
   initialisation
   gpr
-  running
+  convergence
   running_cobaya
   callback
   modules
