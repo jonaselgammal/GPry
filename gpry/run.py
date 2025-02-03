@@ -1,13 +1,16 @@
+"""
+Module that defines the ``Runner`` class, which handles input, the active learning loop,
+and the processing of results.
+"""
+
 import os
 import warnings
 from copy import deepcopy
-from inspect import getfullargspec
 from typing import Mapping, Sequence
 import numpy as np
 from tqdm import tqdm
 
 from cobaya.model import Model
-from cobaya.collection import SampleCollection
 
 from gpry import mpi
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
@@ -25,7 +28,6 @@ from gpry.mc import mc_sample_from_gp, process_gdsamples
 import gpry.plots as gpplt
 from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds
 
-global _plots_path
 _plots_path = "images"
 
 
@@ -145,7 +147,7 @@ class Runner():
         If True, produces some progress plots. One can also pass the arguments of
         ``Runner.plot_progress`` as a dict for finer control, e.g.
         ``{"timing": True, "convergence": True, "trace": False, "slices": False,
-        "format": "svg"}``.
+        "ext": "svg"}``.
 
     verbose : 1, 2, 3, optional (default: 3)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
@@ -426,7 +428,7 @@ class Runner():
             if isinstance(initial_proposer, str):
                 initial_proposer = {initial_proposer: {}}
             else:  # Mapping
-                initial_proposed = deepcopy(initial_proposer)
+                initial_proposer = deepcopy(initial_proposer)
             initial_proposer_name = list(initial_proposer)[0]
             initial_proposer_args = initial_proposer[initial_proposer_name]
             propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
@@ -582,7 +584,7 @@ class Runner():
                 f"{new_n_acq} to better exploit parallelisation.",
                 level=2,
             )
-            self.n_points_per_acq= new_n_acq
+            self.n_points_per_acq = new_n_acq
 
     @property
     def d(self):
@@ -743,12 +745,13 @@ class Runner():
             self.progress.add_iteration()
             if mpi.is_main_process:
                 n_iter_left = int(np.ceil(self.n_total_left / self.n_points_per_acq))
-                self.banner(f"Iteration {self.current_iteration} "
-                            f"({at_most_str}{n_iter_left} left)\n"
-                            f"Total truth evals: {self.gpr.n_total} "
-                            f"({self.gpr.n_finite} finite) of {self.max_total}" +
-                            (f" (or {self.max_finite} finite)"
-                             if self.max_finite < self.max_total else "") + "\n"
+                self.banner(
+                    f"Iteration {self.current_iteration} "
+                    f"({at_most_str}{n_iter_left} left)\n"
+                    f"Total truth evals: {self.gpr.n_total} "
+                    f"({self.gpr.n_finite} finite) of {self.max_total}" +
+                    (f" (or {self.max_finite} finite)"
+                     if self.max_finite < self.max_total else "") + "\n"
                 )
             self.old_gpr = deepcopy(self.gpr)
             self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
@@ -770,8 +773,8 @@ class Runner():
                         if np.any(in_training_set):
                             self.log(
                                 f"{np.sum(in_training_set)} of the proposed points are "
-                                "already in the training set. Skipping them."
-                                , level=2
+                                "already in the training set. Skipping them.",
+                                level=2,
                             )
                         if np.any(duplicates):
                             self.log(
@@ -1110,7 +1113,7 @@ class Runner():
             )
         return new_y, eval_msg
 
-    def _fit_gpr_parallel(self, new_X, new_y, fit="full"):
+    def _fit_gpr_parallel(self, new_X, new_y):
         # Prepare hyperparameter fit
         hyperparams_bounds = None
         # if self.cov is not None:
@@ -1124,7 +1127,7 @@ class Runner():
             "hyperparameter_bounds": mpi.comm.bcast(hyperparams_bounds),
             "start_from_current": mpi.is_main_process,
         }
-        is_this_iter = lambda every: self.current_iteration % every == every -1
+        is_this_iter = lambda every: self.current_iteration % every == every - 1
         if self.fit_full_every and is_this_iter(self.fit_full_every):
             fit_gpr_kwargs["n_restarts"] = mpi.split_number_for_parallel_processes(
                 self.gpr.n_restarts_optimizer
@@ -1190,7 +1193,7 @@ class Runner():
 
     def plot_progress(
             self,
-            format="svg",
+            ext="svg",
             timing=True,
             convergence=True,
             trace=True,
@@ -1201,7 +1204,7 @@ class Runner():
 
         Parameters
         ----------
-        format : str (default ``"svg"``)
+        ext : str (default ``"svg"``)
             Format for the plots, among the available ones in ``matplotlib``.
 
         timing : bool (default: True)
@@ -1223,20 +1226,20 @@ class Runner():
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         if timing:
             self.progress.plot_timing(
-                truth=True, save=os.path.join(self.plots_path, f"timing.{format}")
+                truth=True, save=os.path.join(self.plots_path, f"timing.{ext}")
             )
         if convergence:
             fig, ax = gpplt.plot_convergence(self.convergence)
-            plt.savefig(os.path.join(self.plots_path, f"convergence.{format}"))
+            plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
         if trace:
             gpplt.plot_trace(
                 self.model, self.gpr, self.convergence, self.progress,
                 reference=self.last_mc_samples()
             )
-            plt.savefig(os.path.join(self.plots_path, f"trace.{format}"))
+            plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
             gpplt.plot_slices(self.model, self.gpr, self.acquisition)
-            plt.savefig(os.path.join(self.plots_path, f"slices.{format}"))
+            plt.savefig(os.path.join(self.plots_path, f"slices.{ext}"))
         plt.close("all")
 
     def generate_mc_sample(
@@ -1342,15 +1345,15 @@ class Runner():
                 new_vals = np.empty(len(points_to_evaluate))
                 for i, p in enumerate(points_to_evaluate):
                     new_vals[i] = self.model.logpost(p)
-                    self.gpr.append_to_data(points_to_evaluate, new_vals,
-                            fit=True)
+                    self.gpr.append_to_data(
+                        points_to_evaluate, new_vals, fit_gpr=True)
                 self._share_gpr()
                 # self.save_checkpoint()
                 self.log("...done.")
 
     # pylint: disable=import-outside-toplevel
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
-                add_samples=None, output=None, output_dpi=200, format="svg"):
+                add_samples=None, output=None, output_dpi=200, ext="svg"):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.
@@ -1379,7 +1382,8 @@ class Runner():
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
 
-        format : str (default: "svg" if `output` not defined; else ignore)
+        ext : str (default: "svg" if `output` not defined; else ignore)
+            Format for the plot.
         """
         if not mpi.is_main_process:
             warnings.warn(
@@ -1416,13 +1420,13 @@ class Runner():
         if add_training and self.d > 1:
             getdist_add_training(gdplot, self.model, self.gpr)
         if output is None:
-            output = os.path.join(self.plots_path, f"Surrogate_triangle.{format}")
+            output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
         plt.savefig(output, dpi=output_dpi)
         return gdplot
 
     def plot_distance_distribution(
             self, samples_or_samples_folder=None, show_added=True, output=None,
-            output_dpi=200, format="svg"):
+            output_dpi=200, ext="svg"):
         """
         Plots the distance distribution of the training points with respect to the
         confidence ellipsoids (in a Gaussian approx) derived from an MC sample of the
@@ -1448,7 +1452,8 @@ class Runner():
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
 
-        format : str (default: "svg" if `output` not defined; else ignore)
+        ext : str (default: "svg" if `output` not defined; else ignore)
+            Format for the plot
         """
         if not mpi.is_main_process:
             warnings.warn(
@@ -1472,10 +1477,10 @@ class Runner():
         self.ensure_paths(plots=True)
         if output is None:
             output_1 = os.path.join(
-                self.plots_path, f"Distance_distribution.{format}"
+                self.plots_path, f"Distance_distribution.{ext}"
             )
             output_2 = os.path.join(
-                self.plots_path, f"Distance_distribution_density.{format}"
+                self.plots_path, f"Distance_distribution_density.{ext}"
             )
         else:
             output_1 = output
