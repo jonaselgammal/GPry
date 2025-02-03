@@ -1,16 +1,23 @@
+"""
+Functions to interface Cobaya and GetDist for generation and processing of MC samples.
+"""
+
 import os
 import warnings
 import logging
-import numpy as np
 from copy import deepcopy
-from gpry.gpr import GaussianProcessRegressor
-import gpry.mpi as mpi
-from gpry.tools import generic_params_names, is_valid_covmat
+
+import numpy as np
 from cobaya.model import Model, get_model
 from cobaya.output import get_output
 from cobaya.sampler import get_sampler
 from cobaya.collection import SampleCollection
 from getdist.mcsamples import MCSamples, loadMCSamples
+
+from gpry import mpi
+from gpry.gpr import GaussianProcessRegressor
+from gpry.tools import generic_params_names, is_valid_covmat
+from gpry.io import read_checkpoint
 
 
 def get_cobaya_log_level(verbose):
@@ -63,17 +70,25 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
         raise ValueError("`true_model` must be a Cobaya model.")
     # Get bounds
     if bounds is not None:
-        if np.array(bounds).shape != np.array(gpr.bounds).shape \
-                and gpr.bounds is not None:
-            raise ValueError(f"``bounds`` has the wrong shape {np.array(bounds).shape}. "
-                             f"Expected {np.array(gpr.bounds).shape}.")
+        if (
+            np.array(bounds).shape != np.array(gpr.bounds).shape
+            and gpr.bounds is not None
+        ):
+            raise ValueError(
+                f"``bounds`` has the wrong shape {np.array(bounds).shape}. "
+                f"Expected {np.array(gpr.bounds).shape}."
+            )
     elif true_model is not None:
         bounds = true_model.prior.bounds(confidence_for_unbounded=0.99995)
-        if np.array(bounds).shape != np.array(gpr.bounds).shape \
-                and gpr.bounds is not None:
-            raise ValueError("The dimensionality of the prior of `true_model` "
-                             f"({true_model.prior.d()}) does not correspond to that of "
-                             f"the GP ({gpr.d}).")
+        if (
+            np.array(bounds).shape != np.array(gpr.bounds).shape
+            and gpr.bounds is not None
+        ):
+            raise ValueError(
+                "The dimensionality of the prior of `true_model` "
+                f"({true_model.prior.d()}) does not correspond to that of "
+                f"the GP ({gpr.d})."
+            )
     elif gpr.bounds is not None:
         bounds = deepcopy(gpr.bounds)
     else:
@@ -84,8 +99,10 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     paramlabels = None
     if paramnames is not None:
         if len(paramnames) != gpr.d:
-            raise ValueError(f"Passed `paramnames` with {len(paramnames)} "
-                             f"parameters, but the prior has dimension {gpr.d}")
+            raise ValueError(
+                f"Passed `paramnames` with {len(paramnames)} "
+                f"parameters, but the prior has dimension {gpr.d}"
+            )
     elif true_model is not None:
         paramnames = list(true_model.parameterization.sampled_params())
         all_labels = true_model.parameterization.labels()
@@ -96,23 +113,15 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
     if paramlabels:
         for p, l in zip(paramnames, paramlabels):
             info["params"][p]["latex"] = l
-    # TODO :: this is very artificial and probably should be removed eventually.
-    # # It was added here by Jonas, so I am leaving it for now until we discuss further
-    # epsilon = [1e-8 * (bounds[i, 1] - bounds[i, 0]) for i in range(gpr.d)]
-    # for p, eps in zip(info["params"].values(), epsilon):
-    #     if "prior" in p:
-    #         p["prior"] = [p["prior"][0] - eps, p["prior"][1] + eps]
-    log_prior_volume = np.sum(np.log(bounds[:,1] - bounds[:,0]))
+    log_prior_volume = np.sum(np.log(bounds[:, 1] - bounds[:, 0]))
 
     def lkl(**kwargs):
         values = [kwargs[name] for name in paramnames]
         # we need to add the log-volume of the prior we define here as the GP
         # interpolates the posterior, not the likelihood.
-        return gpr.predict(np.atleast_2d(values), validate=False)[0] + \
-            log_prior_volume
+        return gpr.predict(np.atleast_2d(values), validate=False)[0] + log_prior_volume
 
-    info.update({"likelihood": {"gp": {
-        "external": lkl, "input_params": paramnames}}})
+    info.update({"likelihood": {"gp": {"external": lkl, "input_params": paramnames}}})
     return info
 
 
@@ -136,6 +145,13 @@ def mcmc_info_from_run(model, gpr, cov=None, cov_params=None, verbose=3):
         A covariance matrix to speed up convergence of the MCMC. If none is provided the
         MCMC will run without but it will be slower at converging.
 
+    cov_params : List of strings, optional
+        List of parameters corresponding to the rows and columns of the covariance matrix
+        passed via ``cov``.
+
+    verbose : int (default: 3)
+        Verbosity of the MC sampler.
+
     Returns
     -------
     sampler : dict
@@ -152,8 +168,10 @@ def mcmc_info_from_run(model, gpr, cov=None, cov_params=None, verbose=3):
     # Create sampler info
     sampler_info = {"mcmc": {"measure_speeds": False, "max_tries": 100000}}
     if (cov is None or not is_valid_covmat(cov)) and verbose >= 2:
-        warnings.warn("No covariance matrix or invalid one provided for the `mcmc` "
-                      "sampler. This will make the convergence of the sampler slower.")
+        warnings.warn(
+            "No covariance matrix or invalid one provided for the `mcmc` "
+            "sampler. This will make the convergence of the sampler slower."
+        )
     else:
         sampler_info["mcmc"]["covmat"] = cov
         sampler_info["mcmc"]["covmat_params"] = cov_params or list(model.prior.params)
@@ -174,9 +192,19 @@ def polychord_info_from_run():
     return sampler_info
 
 
-def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
-                      sampler="mcmc", add_options=None,
-                      output=None, run=True, resume=False, convergence=None, verbose=3):
+def mc_sample_from_gp(
+    gpr,
+    bounds=None,
+    paramnames=None,
+    true_model=None,
+    sampler="mcmc",
+    add_options=None,
+    output=None,
+    run=True,
+    resume=False,
+    convergence=None,
+    verbose=3,
+):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
     and runs it on the surrogate model.
@@ -240,18 +268,22 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
     """
     loaded_convergence = None
     if isinstance(gpr, str):
-        from gpry.run import _read_checkpoint
-        _, gpr, _, loaded_convergence, _ = _read_checkpoint(gpr)
+        _, gpr, _, loaded_convergence, _, _ = read_checkpoint(gpr)
         if gpr is None:
             raise RuntimeError("Could not load the GP regressor from checkpoint")
     if not isinstance(gpr, GaussianProcessRegressor):
-        raise TypeError("The GP `gpr` needs to be a gpry GP Regressor or a string "
-                        "with a path to a checkpoint file.")
+        raise TypeError(
+            "The GP `gpr` needs to be a gpry GP Regressor or a string "
+            "with a path to a checkpoint file."
+        )
     if not hasattr(gpr, "y_train"):
-        warnings.warn("The provided GP hasn't been trained to data "
-                      "before. This is likely unintentional...")
+        warnings.warn(
+            "The provided GP hasn't been trained to data "
+            "before. This is likely unintentional..."
+        )
     model_input = cobaya_generate_gp_model_input(
-        gpr, bounds=bounds, paramnames=paramnames, true_model=true_model)
+        gpr, bounds=bounds, paramnames=paramnames, true_model=true_model
+    )
     model_input["debug"] = get_cobaya_log_level(verbose)
     model_surrogate = get_model(model_input)
     # Check if convergence_criterion is given/loaded: it may contain a covariance matrix
@@ -267,18 +299,27 @@ def mc_sample_from_gp(gpr, bounds=None, paramnames=None, true_model=None,
         covariance_matrix = add_options.pop("covmat")
         covariance_params = add_options.pop("covmat_params", None)
     if sampler.lower() == "mcmc":
-        sampler_input = mcmc_info_from_run(model_surrogate, gpr, cov=covariance_matrix,
-                                           cov_params=covariance_params, verbose=verbose)
+        sampler_input = mcmc_info_from_run(
+            model_surrogate,
+            gpr,
+            cov=covariance_matrix,
+            cov_params=covariance_params,
+            verbose=verbose,
+        )
     elif sampler.lower() == "polychord":
         if output is False:
-            warnings.warn("Polychord cannot run without output. Mind that it defaults "
-                          "to /tmp/polychord_raw")
+            warnings.warn(
+                "Polychord cannot run without output. Mind that it defaults "
+                "to /tmp/polychord_raw"
+            )
         sampler_input = polychord_info_from_run()
     elif isinstance(sampler, str):
         raise ValueError("`sampler` must be `mcmc|polychord`")
     elif not isinstance(sampler, dict):
-        raise ValueError("`sampler` must be `mcmc|polychord` or a full sampler "
-                         "specification as a dict.")
+        raise ValueError(
+            "`sampler` must be `mcmc|polychord` or a full sampler "
+            "specification as a dict."
+        )
     else:  # dict
         sampler_input = sampler
     sampler_name = list(sampler_input.keys())[0]
