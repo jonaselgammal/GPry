@@ -461,12 +461,13 @@ class Runner():
         if convergence_criterion is False:
             self.convergence = [gpryconv.DontConverge()]
             return
+        # Defaults:
         if convergence_criterion is None:
-            # Use defaults
-            convergence_criterion = ["CorrectCounter"]
+            convergence_criterion = {"CorrectCounter": {"policy": "s"}}
             if acq_has_mc:
-                convergence_criterion += ["GaussianKL", "GaussianKLTrain"]
-        elif isinstance(convergence_criterion, Mapping):
+                convergence_criterion["GaussianKL"] = {"policy": "s"}
+                convergence_criterion["GaussianKLTrain"] = {"policy": "n"}
+        if isinstance(convergence_criterion, Mapping):
             # In principle, deepcopy, but keep values that are ConvergenceCriterion as is!
             convergence_criterion_copy = {}
             for k, v in convergence_criterion.items():
@@ -737,7 +738,8 @@ class Runner():
         if mpi.is_main_process:
             maybe_stop_before_max_total = (
                 (self.max_finite < self.max_total) or
-                not isinstance(self.convergence[0], gpryconv.DontConverge))
+                not any(isinstance(cc, gpryconv.DontConverge) for cc in self.convergence)
+            )
             at_most_str = "at most " if maybe_stop_before_max_total else ""
         while (self.n_total_left > 0 and self.n_finite_left > 0 and
                not self.has_converged):
@@ -869,22 +871,7 @@ class Runner():
             # Calculate convergence and break if the run has converged
             mpi.sync_processes()
             with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
-                has_converged = []
-                for cc in self.convergence:
-                    try:
-                        has_converged.append(cc.is_converged_MPIwrapped(
-                            self.gpr, self.old_gpr,
-                            new_X, new_y, y_pred, self.acquisition))
-                    except gpryconv.ConvergenceCheckError:
-                        has_converged.append(False)
-                convergence_policy = [cc.get_convergence_policy for cc in self.convergence]
-                self.has_converged = has_converged[0]
-                for i in range(1, len(has_converged)):
-                    self.has_converged = self.has_converged and has_converged[i] \
-                        if convergence_policy[i] == "and" else self.has_converged or has_converged[i]
-                if mpi.is_main_process:
-                    print(f"has_converged = {self.has_converged}, {has_converged}")
-                    print(f"convergence_policy = {convergence_policy}")
+                self._check_convergence_parallel(new_X, new_y, y_pred)
                 mpi.sync_processes()
             self.progress.add_convergence(
                 timer_convergence.time, timer_convergence.evals,
@@ -892,14 +879,18 @@ class Runner():
             )
             mpi.share_attr(self, "has_converged")
             if mpi.is_main_process:
-                last_values = ", ".join(
-                    f"{cc.last_value:.2g} (limit {cc.limit:.2g})"
-                    for cc in self.convergence
-                )
-                self.log(f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
-                         "Evaluated convergence criterion to " + last_values, level=2)
+                if self.verbose >= 2:
+                    last_values = "; ".join(
+                        f"{cc.__class__.__name__} [{cc.convergence_policy}]: "
+                        f"{cc.last_value:.2g} (limit {cc.limit:.2g})"
+                        for cc in self.convergence
+                    )
+                    self.log(
+                        f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
+                        "Evaluated convergence criterion: " + last_values,
+                        level=2
+                    )
             mpi.sync_processes()
-            # TODO: uncomment for mean and cov updates (cov would be used for corr.length)
             self.update_mean_cov()
             self.progress.mpi_sync()
             self.save_checkpoint()
@@ -1177,6 +1168,38 @@ class Runner():
                 f"GPR hyperparameters were " + what_hyper
             )
         return msg
+
+    def _check_convergence_parallel(self, new_X, new_y, y_pred):
+        """
+        Checks algorithmic convergence.
+
+        It needs to be called from all MPI processes.
+        """
+        # First, compute all convergence checks
+        has_converged = []
+        all_necessary = True
+        n_necessary = 0
+        any_sufficient = False
+        n_sufficient = 0
+        for cc in self.convergence:
+            try:
+                has_converged.append(cc.is_converged_MPIwrapped(
+                    self.gpr, self.old_gpr,
+                    new_X, new_y, y_pred, self.acquisition))
+            except gpryconv.ConvergenceCheckError:
+                has_converged.append(False)
+            this_policy = cc.convergence_policy_MPI.lower()
+            if "n" in this_policy:
+                all_necessary &= has_converged[-1]
+                n_necessary += 1
+            if "s" in this_policy:
+                any_sufficient |= has_converged[-1]
+                n_sufficient += 1
+        # NB: corner case: all criteria are "m" (monitor): should not converge
+        if n_necessary == 0 and n_sufficient == 0:
+            self.has_converged = False
+        else:
+            self.has_converged = all_necessary and (any_sufficient or (n_sufficient == 0))
 
     def update_mean_cov(self):
         """

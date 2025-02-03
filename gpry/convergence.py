@@ -16,6 +16,15 @@ from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
 from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd, mean_covmat_from_evals
 from gpry import mpi
 
+# Policies and default ("necessary") for convergence criteria
+_all_convergence_policies_dict = {
+    "n": "necessary",
+    "s": "sufficient",
+    "ns": "necessary and sufficient",
+    "m": "monitor",
+}
+_default_convergence_policy = "n"
+
 
 class ConvergenceCheckError(Exception):
     """
@@ -82,6 +91,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         self.values = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
+        self._set_convergence_policy(params)
 
     def get_history(self):
         """Returns the two lists containing the values of the convergence
@@ -133,14 +143,35 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         """
         return False
 
+    def _set_convergence_policy(self, params):
+        # pylint: disable=attribute-defined-outside-init
+        self._convergence_policy = (params or {}).get(
+            "policy", _default_convergence_policy
+        )
+        try:
+            self._convergence_policy = self._convergence_policy.lower()
+            if self._convergence_policy not in _all_convergence_policies_dict:
+                raise ValueError()
+        except (AttributeError, ValueError) as excpt:
+            raise ValueError(
+                "Convergence 'policy' must be one of the following strings: "
+                f"{_all_convergence_policies_dict}. Got {self._convergence_policy}."
+            ) from excpt
+
     @property
-    def get_convergence_policy(self):
+    def convergence_policy(self):
         """
         Returns a string describing the convergence policy.
         """
-        mpi.sync_processes()
+        return self._convergence_policy
+
+    @property
+    def convergence_policy_MPI(self):
+        """
+        Returns a string describing the convergence policy (MPI-wrapped!)
+        """
         if self.is_MPI_aware or mpi.is_main_process:
-            convergence_policy = self.convergence_policy
+            convergence_policy = self._convergence_policy
         else:
             convergence_policy = None
         return mpi.comm.bcast(convergence_policy)
@@ -201,11 +232,13 @@ class DontConverge(ConvergenceCriterion):
 
     def __init__(self, prior_bounds=None, params=None):
         self.values = []
+        self.limit = np.nan
         self.thres = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
         self.prior_bounds = prior_bounds
-        self.convergence_policy = params.get("policy", "and")
+        # Explicitly set "necessary" as policy
+        self._set_convergence_policy({"policy": "n"})
 
     def criterion_value(self, gp, gp_2=None):
         self.values.append(np.nan)
@@ -266,7 +299,7 @@ class GaussianKL(ConvergenceCriterion):
         d = len(self.prior_bounds)
         # Needs to at least encompass 2 full MC samples -- TODO: fix in run.py at init
         self.limit_times = int(np.round(params.get("limit_times", d)))
-        self.convergence_policy = params.get("policy", "and")
+        self._set_convergence_policy(params)
         self.values = []
         self.thres = []
         self.n_posterior_evals = []
@@ -679,7 +712,7 @@ class CorrectCounter(ConvergenceCriterion):
                 ) from excpt
         self.abstol = abstol
         self.verbose = params.get("verbose", 0)
-        self.convergence_policy = params.get("policy", "and")
+        self._set_convergence_policy(params)
         self.values = []
         self.n_posterior_evals = []
         self.n_accepted_evals = []
