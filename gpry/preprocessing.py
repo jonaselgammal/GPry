@@ -11,11 +11,13 @@ be performed internally.
 You can build your own preprocessor if you want. This requires you to build a
 custom class. How to do that for X- and y-preprocessors is explained in the
 :class:`Pipeline_X` and :class:`Pipeline_y` classes respectively.
+
+NB: all ``transform``-like methods should return a copy of the input, but avoid
+unnecessary ``copy`` statements.
 """
 
 import warnings
 from numbers import Number
-from functools import partial
 from itertools import product
 
 import numpy as np
@@ -24,12 +26,12 @@ from scipy.linalg import eigh, LinAlgError
 from gpry.tools import delta_logp_of_1d_nstd
 
 
-class DummyPreprocessor():
+class DummyPreprocessor:
 
     is_linear = True
 
     @classmethod
-    def fit(*args, **kwargs):
+    def fit(cls, *args, **kwargs):
         pass
 
     @classmethod
@@ -57,7 +59,7 @@ class Pipeline_X:
     """
     Used for building a pipeline for preprocessing X-values. This is provided
     with a list of preprocessors in the order they shall be applied. The
-    ``transform_bounds``, ``fit``, ``transform`` and ``inverse_transform``
+    ``transform_scale``, ``fit``, ``transform`` and ``inverse_transform``
     methods can then be called as if the pipeline was a single preprocessor.
 
     Parameters
@@ -87,23 +89,33 @@ class Pipeline_X:
                     ...
                     return transformed_bounds
 
-                def transform(self, X, copy=True):
+                def transform(self, X):
                     # This method transforms the X-data. For this the fit
                     # method has to have been called before at least once.
-                    # The 'copy' argument controls whether X is copied or the
-                    # transformation is performed in place.
                     ...
                     return X_transformed
 
-                def inverse_transform(self, X, copy=True):
-                    # Applies the inverse transformation to 'transform'.
+                def inverse_transform(self, X):
+                    # Applies the inverse transformation to ``transform``.
                     ...
                     return inverse_transformed_X
 
+                def transform_scale(self, scale):
+                    # This method should transform a scale in X, e.g. the bounds
+                    # of the prior.
+                    ...
+                    return transformed_scale
+
+                def transform_scale(self, scale):
+                    # Applies the inverse transform to ``transform_scale``.
+                    ...
+                    return transformed_scale
         .. note::
 
             All the preprocessor objects need to be initialized! Furthermore
-            `transform` and `inverse_transform` need to preserve the shape of X
+            ``transform` and ``inverse_transform`` need to preserve the shape of X.
+            All transformations must return a copy (but avoid unnecessary copy
+            statements).
     """
 
     def __init__(self, preprocessors):
@@ -113,8 +125,7 @@ class Pipeline_X:
     def transform_bounds(self, bounds):
         transformed_bounds = bounds
         for preprocessor in self.preprocessors:
-            transformed_bounds = preprocessor.transform_bounds(
-                transformed_bounds)
+            transformed_bounds = preprocessor.transform_bounds(transformed_bounds)
         return transformed_bounds
 
     def fit(self, X, y):
@@ -129,24 +140,40 @@ class Pipeline_X:
         self.fitted = True
         return self
 
-    def transform(self, X, copy=True):
+    def transform(self, X):
         """
         Transform the data through the pipeline
         """
-        X_transformed = np.copy(X) if copy else X
+        X_transformed = X
         for preprocessor in self.preprocessors:
-            X_transformed = preprocessor.transform(X_transformed, copy=copy)
+            X_transformed = preprocessor.transform(X_transformed)
         return X_transformed
 
-    def inverse_transform(self, X, copy=True):
+    def inverse_transform(self, X):
         """
         Inverse transform the data through the pipeline (by applying each
         inverse transformation in reverse order).
         """
-        X_transformed = np.copy(X) if copy else X
+        X_transformed = X
         for preprocessor in reversed(self.preprocessors):
-            X_transformed = preprocessor.inverse_transform(X, copy=copy)
+            X_transformed = preprocessor.inverse_transform(X_transformed)
         return X_transformed
+
+    def transform_scale(self, scale):
+        transformed_scale = scale
+        for preprocessor in self.preprocessors:
+            transformed_scale = preprocessor.transform_scale(transformed_scale)
+        return transformed_scale
+
+    def inverse_transform_scale(self, scale):
+        """
+        Inverse transform the data through the pipeline (by applying each
+        inverse transformation in reverse order).
+        """
+        transformed_scale = scale
+        for preprocessor in reversed(self.preprocessors):
+            transformed_scale = preprocessor.inverse_transform_scale(transformed_scale)
+        return transformed_scale
 
 
 # TODO: finish and fix
@@ -256,14 +283,14 @@ class Whitening:
             warnings.warn(warn_msg + str(excpt) + warn_msg_end)
         return self
 
-    def transform(self, X, copy=True):
+    def transform(self, X):
         if self.cov is None:  # adaptive (or could not initialise), but not fitted yet
-            return np.copy(X) if copy else X
+            return np.copy(X)
         return (self.transf_matrix @ (X - self.mean).T).T
 
-    def inverse_transform(self, X, copy=True):
+    def inverse_transform(self, X):
         if self.cov is None:  # adaptive (or could not initialise), but not fitted yet
-            return np.copy(X) if copy else X
+            return np.copy(X)
         return (self.inv_transf_matrix @ X.T).T + self.mean
 
     def transform_bounds(self, bounds):
@@ -328,16 +355,15 @@ class Normalize_bounds:
         self.bounds_min = bounds[:, 0]
         self.bounds_max = bounds[:, 1]
         if np.any(self.bounds_min > self.bounds_max):
-            raise ValueError("The bounds must be in dimension-wise order "
-                             "min->max, got \n" + bounds)
+            raise ValueError(
+                "The bounds must be in dimension-wise order " "min->max, got \n" + bounds
+            )
         return transformed_bounds
 
     def fit(self, X, y):
-        """Fits the transformer (which in reality does nothing)
-        """
-        pass
+        """Fits the transformer (which in reality does nothing)"""
 
-    def transform(self, X, copy=True):
+    def transform(self, X):
         """Transforms X so that all values lie between 0 and 1.
 
         Parameters
@@ -345,20 +371,14 @@ class Normalize_bounds:
         X : array-like, shape = (n_samples, n_dims)
             X-values that one wants to transform. Must be between bounds.
 
-        copy : bool, default: True
-            Return a copy if True, or transform in place if False.
-
         Returns
         -------
         X_transformed : array-like, shape = (n_samples, n_dims)
             Transformed X-values
         """
-        # if np.any(X < self.bounds_min) or np.any(X > self.bounds_max):
-        #     raise ValueError("all X must be between bounds.")
-        X = np.copy(X) if copy else X
         return (X - self.bounds_min) / (self.bounds_max - self.bounds_min)
 
-    def inverse_transform(self, X, copy=True):
+    def inverse_transform(self, X):
         """Applies the inverse transformation
 
         Parameters
@@ -366,20 +386,14 @@ class Normalize_bounds:
         X : array-like, shape = (n_samples, n_dims)
             Transformed X-values between 0 and 1.
 
-        copy : bool, default: True
-            Return a copy if True, or transform in place if False.
-
         Returns
         -------
         X : array-like, shape = (n_samples, n_dims)
             Inverse transformed (original) values.
         """
-        # if np.any(X < 0) or np.any(X > 1):
-        #     raise ValueError("all X must be between 0 and 1.")
-        X = np.copy(X) if copy else X
         return (X * (self.bounds_max - self.bounds_min)) + self.bounds_min
 
-    def inverse_transform_scale(self, X, copy=True):
+    def inverse_transform_scale(self, X):
         """Applies the inverse transformation to an unbounded scale (e.g. the kernel
         length scale).
 
@@ -388,18 +402,12 @@ class Normalize_bounds:
         X : array-like, shape = (n_samples, n_dims)
             Transformed X-values between 0 and 1.
 
-        copy : bool, default: True
-            Return a copy if True, or transform in place if False.
-
         Returns
         -------
         X : array-like, shape = (n_samples, n_dims)
             Inverse transformed (original) values.
         """
-        # if np.any(X < 0) or np.any(X > 1):
-        #     raise ValueError("all X must be between 0 and 1.")
-        X = np.copy(X) if copy else X
-        return (X * (self.bounds_max - self.bounds_min))
+        return X * (self.bounds_max - self.bounds_min)
 
 
 class Pipeline_y:
@@ -428,6 +436,17 @@ class Pipeline_y:
                     ...
                     return self
 
+                def transform(self, y):
+                    # This method transforms the y-data. For this the fit
+                    # method has to have been called before at least once.
+                    ...
+                    return transformed_y
+
+                def inverse_transform(self, y):
+                    # Applies the inverse transformation to ``transform``.
+                    ...
+                    return inverse_transformed_y
+
                 def transform_scale(self, scale):
                     # This method should transform a scale-like quantity
                     # (e.g. the noise level of the training data) such that
@@ -438,30 +457,17 @@ class Pipeline_y:
 
                 def inverse_transform_scale(self, scale):
                     # This method should invert the transformation applied by
-                    # 'transform_scale'.
+                    # ``transform_scale``.
                     ...
                     return inverse_transformed_scale
-
-                def transform(self, y, copy=True):
-                    # This method transforms the y-data. For this the fit
-                    # method has to have been called before at least once.
-                    # The 'copy' argument controls whether y is copied or the
-                    # transformation is performed in place.
-                    ...
-                    return transformed_y
-
-                def inverse_transform(self, y, copy=True):
-                    # Applies the inverse transformation to 'transform'.
-                    ...
-                    return inverse_transformed_y
 
         .. note::
 
             All the preprocessor objects need to be initialized! Furthermore
             the `transform` and `inverse_transform` methods need to preserve
             the shape of y. In contrast to the preprocessors for X this does
-            not need to contain a method to transform bounds but instead one to
-            transform the noise level (alpha).
+            not need to contain a method to transform bounds, but it still needs
+            one to transform scales such as the the noise level (alpha).
     """
 
     def __init__(self, preprocessors):
@@ -480,45 +486,42 @@ class Pipeline_y:
         self.fitted = True
         return self
 
-    def transform_scale(self, scale):
-        """
-        Transforms the noise level through the pipeline
-        """
-        scale_transformed = np.copy(scale)
-        for preprocessor in self.preprocessors:
-            scale_transformed = \
-                preprocessor.transform_noise_level(scale_transformed)
-        return scale_transformed
-
-    def inverse_transform_scale(self, scale):
-        """
-        Inverse transforms the noise level through the pipeline
-        """
-        scale_transformed = np.copy(scale)
-        for preprocessor in reversed(self.preprocessors):
-            scale_transformed = \
-                preprocessor.inverse_transform_scale(
-                    scale_transformed)
-        return scale_transformed
-
-    def transform(self, y, copy=True):
+    def transform(self, y):
         """
         Transform the data through the pipeline
         """
-        y_transformed = np.copy(y) if copy else y
+        y_transformed = y
         for preprocessor in self.preprocessors:
-            y_transformed = preprocessor.transform(y_transformed, copy=copy)
+            y_transformed = preprocessor.transform(y_transformed)
         return y_transformed
 
-    def inverse_transform(self, y, copy=True):
+    def inverse_transform(self, y):
         """
         Inverse transform the data through the pipeline (by applying each
         inverse transformation in reverse order).
         """
-        y_transformed = np.copy(y) if copy else y
+        y_transformed = y
         for preprocessor in reversed(self.preprocessors):
-            y_transformed = preprocessor.inverse_transform(y, copy=copy)
+            y_transformed = preprocessor.inverse_transform(y_transformed)
         return y_transformed
+
+    def transform_scale(self, scale):
+        """
+        Transforms the scale through the pipeline
+        """
+        scale_transformed = scale
+        for preprocessor in self.preprocessors:
+            scale_transformed = preprocessor.transform_scale(scale_transformed)
+        return scale_transformed
+
+    def inverse_transform_scale(self, scale):
+        """
+        Inverse transforms the scale through the pipeline
+        """
+        scale_transformed = scale
+        for preprocessor in reversed(self.preprocessors):
+            scale_transformed = preprocessor.inverse_transform_scale(scale_transformed)
+        return scale_transformed
 
 
 class Normalize_y:
@@ -550,9 +553,9 @@ class Normalize_y:
         self.std_ = None
         self.use_median = bool(use_median)
         if self.use_median:
-            self.get_mean_std = lambda y: (
-                lambda y25, y50, y75: (y50, y75 - y25)
-            )(*np.percentile(y, [25, 50, 75]))
+            self.get_mean_std = lambda y: (lambda y25, y50, y75: (y50, y75 - y25))(
+                *np.percentile(y, [25, 50, 75])
+            )
         else:
             self.get_mean_std = lambda y: (np.mean(y), np.std(y))
 
@@ -571,34 +574,23 @@ class Normalize_y:
 
         Parameters
         ----------
+        X : array-like, shape = (n_samples, dimension)
+            X-values (target values) that can be used to tune the transformation.
+            determine the mean and std.
+
         y : array-like, shape = (n_samples,)
             y-values (target values) that are used to
             determine the mean and std.
         """
         self.mean_, self.std_ = self.get_mean_std(y[np.isfinite(y)])
 
-    def transform_scale(self, scale, copy=True):
-        if not self.fitted:
-            raise TypeError("mean_ and std_ have not been fit before")
-        scale = np.copy(scale) if copy else scale
-        return scale / self.std_  # Divide by the standard deviation
-
-    def inverse_transform_scale(self, scale, copy=True):
-        if not self.fitted:
-            raise TypeError("mean_ and std_ have not been fit before")
-        scale = np.copy(scale) if copy else scale
-        return scale * self.std_  # Multiply by the standard deviation
-
-    def transform(self, y, copy=True):
+    def transform(self, y):
         """Transforms y.
 
         Parameters
         ----------
         y : array-like, shape = (n_samples,)
             y-values that one wants to transform.
-
-        copy : bool, default: True
-            Return a copy if True, or transform in place if False.
 
         Returns
         -------
@@ -607,19 +599,15 @@ class Normalize_y:
         """
         if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
-        y = np.copy(y) if copy else y
         return (y - self.mean_) / self.std_
 
-    def inverse_transform(self, y_transformed, copy=True):
+    def inverse_transform(self, y):
         """Applies inverse transformation to y.
 
         Parameters
         ----------
         y_transformed : array-like, shape = (n_samples,)
             Transformed y-values.
-
-        copy : bool, default: True
-            Return a copy if True, or transform in place if False.
 
         Returns
         -------
@@ -628,8 +616,17 @@ class Normalize_y:
         """
         if not self.fitted:
             raise TypeError("mean_ and std_ have not been fit before")
-        y = np.copy(y_transformed) if copy else y_transformed
         return (y * self.std_) + self.mean_
+
+    def transform_scale(self, scale):
+        if not self.fitted:
+            raise TypeError("mean_ and std_ have not been fit before")
+        return scale / self.std_  # Divide by the standard deviation
+
+    def inverse_transform_scale(self, scale):
+        if not self.fitted:
+            raise TypeError("mean_ and std_ have not been fit before")
+        return scale * self.std_  # Multiply by the standard deviation
 
 
 class NormalizeChi2_y(Normalize_y):
