@@ -5,7 +5,6 @@ true function.
 
 import os
 import sys
-import shutil
 import warnings
 import inspect
 import tempfile
@@ -654,7 +653,10 @@ class NORA(GenericGPAcquisition):
                 self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
                 self.sampler = "polychord"
             except nsint.NestedSamplerNotInstalledError as excpt:
-                self.log("Could not import PolyChord. Defaulting to UltraNest.")
+                self.log(
+                    f"Could not import PolyChord (Err msg: {excpt}). "
+                    "Defaulting to UltraNest."
+                )
                 self.sampler = "ultranest"
         if self.sampler.lower() == "polychord":
             if self.sampler_interface is None:
@@ -715,11 +717,12 @@ class NORA(GenericGPAcquisition):
         - precision_criterion: constant for now.
         """
         nlive = min(self.nlive_per_training * gpr.n, self.nlive_max)
-        return {"nlive": nlive,
-                "num_repeats": self.num_repeats,
-                "precision_criterion": self.precision_criterion_target,
-                "nprior": int(self.nprior_per_nlive * nlive),
-                "max_ncalls": self.max_ncalls
+        return {
+            "nlive": nlive,
+            "num_repeats": self.num_repeats,
+            "precision_criterion": self.precision_criterion_target,
+            "nprior": int(self.nprior_per_nlive * nlive),
+            "max_ncalls": self.max_ncalls
         }
 
     def log(self, msg, level=None):
@@ -778,7 +781,7 @@ class NORA(GenericGPAcquisition):
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
-        return X, None, None, None, None
+        return X, None, None, None
 
     def _do_MC_sample_polychord(self, gpr, random_state, bounds=None):
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
@@ -1067,7 +1070,7 @@ class NORA(GenericGPAcquisition):
             noise_level=gpr.noise_level, zeta=self.acq_func.zeta)
         # *Split* among MPI processes and compute acq func value (in parallel)
         this_X, this_y, this_sigma_y, this_acq = \
-            self._split_and_compute_acq(gpr, X_mc, y_mc, sigma_y_mc)
+            self._split_and_compute_acq(X_mc, y_mc, sigma_y_mc)
         if mpi.is_main_process:
             what_we_did = ("Obtained new MC sample" if mc_sample_this_time
                            else "Re-evaluated previous MC sample")
@@ -1121,7 +1124,7 @@ class NORA(GenericGPAcquisition):
                 f"({(time()-start_rank):.2g} sec) Ranked pool of candidates.")
         return X_pool, y_pool, acq_pool
 
-    def _split_and_compute_acq(self, gpr, X, y, sigma_y):
+    def _split_and_compute_acq(self, X, y, sigma_y):
         """
         Scatters `(X, y, sigma_y)` between processes, and returns them together with the
         acquisition function values, computed in parallel.
@@ -1348,7 +1351,7 @@ class RankedPool():
             for i in (i_sort if i_sort is not None else range(len(X))):
                 self.add_one(X[i], y[i], sigma[i], acq[i])
         else:
-            ValueError(f"Algorithm '{method}' not known.")
+            raise ValueError(f"Algorithm '{method}' not known.")
 
     def add_bulk(self, X, y, sigma, acq, i_start=0):
         """
@@ -1440,7 +1443,7 @@ class RankedPool():
 
         Raises
         ------
-        ValueError: if invalid acquisition function value, unless ``acq_nan_is_null=True``.
+        ValueError: if invalid acq. function value, unless ``acq_nan_is_null=True``.
         """
         # Discard the point as early as possible!
         # NB: The equals sign below takes care of the case in which we are trying to add a
@@ -1533,7 +1536,7 @@ class RankedPool():
         self.log_pool(level=4, include_last=True, prefix="[pool.add] ",
                       suffix_last="[unused]")
         # Make sure that the last slot (buffer) is marked as empty
-        self.acq_cond[-1] == -np.inf
+        self.acq_cond[-1] = -np.inf
 
     def cache_model(self, i):
         """
@@ -1628,7 +1631,7 @@ class RankedPool():
         if i_start >= len(self):
             self.log(
                 level=4,
-                msg=f"[pool.sort] Nothing to do (sorting beyond last position).")
+                msg="[pool.sort] Nothing to do (sorting beyond last position).")
             return
         self.log(
             level=4,
@@ -1637,7 +1640,7 @@ class RankedPool():
         upper_gpr_cond = self.cache_model(i_start - 1)
         # If list not full (first sublist element's acq_cond=-inf), do nothing
         if self.acq_cond[i_start] == -np.inf:
-            self.log(level=4, msg=f"[pool.sort] Nothing to do (list is not full yet).")
+            self.log(level=4, msg="[pool.sort] Nothing to do (list is not full yet).")
             return
         # Compute acq_cond for non-empty points (acq != -inf) only. Assume always sorted.
         try:
@@ -1661,7 +1664,7 @@ class RankedPool():
         if acq_cond_max == -np.inf:
             self.log(
                 level=4,
-                msg=f"[pool.sort] Nothing to do (all sublist elements have -inf acq)."
+                msg="[pool.sort] Nothing to do (all sublist elements have -inf acq)."
             )
             self.acq_cond[i_start:i_1st_inf] = -np.inf
             return
