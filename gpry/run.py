@@ -766,6 +766,7 @@ class Runner():
                 new_X, y_pred, acq_vals = self.acquisition.multi_add(
                     self.gpr,
                     n_points=self.n_points_per_acq,
+                    bounds=self.gpr.trust_bounds,
                     random_state=self.random_state,
                     force_resample=force_resample,
                 )
@@ -994,6 +995,8 @@ class Runner():
                 for j in range(n_to_sample_per_process):
                     # Draw a point from prior and evaluate logposterior at that point.
                     # But check first if the point is within the priors.
+                    # NB: this check should be superseded by the corresponding ones in the
+                    #     proposer.py module, but left in case of using custom proposer.
                     X_in_bounds = False
                     proposer_tries = 0
                     warn_multiple = 10 * self.gpr.d
@@ -1314,16 +1317,10 @@ class Runner():
                 self.model.parameterization.sampled_params(), best_point_per_mpi_rank
             )
         }
-        # Hack: reuse shrunk bounds from acquisition class
-        # TODO: change this so that shrunk bounds are used at GPR model level
-        bounds = None
-        if hasattr(self.acquisition, "shrink_priors"):
-            bounds = self.acquisition.shrink_priors(self.gpr)
-        # end of hack
         self.last_mc_surr_info, self.last_mc_sampler = mc_sample_from_gp(
-            self.gpr, true_model=self.model, sampler=sampler, bounds=bounds,
-            convergence=self.convergence, output=output, add_options=add_options,
-            resume=resume, verbose=self.verbose)
+            self.gpr, true_model=self.model, sampler=sampler,
+            bounds=self.gpr.trust_bounds, convergence=self.convergence, output=output,
+            add_options=add_options, resume=resume, verbose=self.verbose)
         sampler_name = sampler if isinstance(sampler, str) else list(sampler)[0]
         self._last_mc_samples = self.last_mc_sampler.samples(
             combined=True,

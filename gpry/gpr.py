@@ -21,7 +21,7 @@ from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
 from gpry.preprocessing import Normalize_bounds, DummyPreprocessor
 from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd, \
-    generic_params_names
+    generic_params_names, shrink_bounds, is_in_bounds
 
 
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
@@ -141,6 +141,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Array of bounds of the prior [lower, upper] along each dimension. Has
         to be provided when the kernel shall be built automatically by the GP.
 
+    trust_region_factor : float, optional
+        If defined as a positive float, it defines a trust region as a hypercube
+        containing the GPR (finite) training set, enlarged by the given factor.
+        The bounds of this trust region can be read from the ``trust_bounds`` attribute,
+        and points outside these bounds will cause the ``predict`` method to return a
+        negative infinity. Useful when the posterior can be expected to be much
+        smaller than the prior (but in that case it would be preferable to simply reduce
+        the prior bounds), noticeable e.g. by the acquisition module is taking too long
+        to propose points.
+
+    trust_region_nstd : float, optional
+        If defined as a positive float, the definition of the trust region only takes into
+        account training points corresponding to a significance (assuming a Gaussian
+        posterior) equivalent to this value in 1d standard deviations.
+
     random_state : int or `numpy RandomState <https://numpy.org/doc/stable/reference/random/legacy.html?highlight=randomstate#numpy.random.RandomState>`_, optional
         The generator used to initialize the centers. If an integer is
         given, it fixes the seed. Defaults to the global numpy random
@@ -158,6 +173,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     d : int
         Dimensionality of the training data.
+
+    bounds : array
+        The bounds with which the GPR was defined.
+
+    trust_bounds : array or None
+        The bounds of the trust region if ``trust_region_factor`` was defined, or ``None``
+        otherwise.
 
     X_train : array-like, shape = (n_samples, n_features)
         Original (untransformed) feature values in training data of the GPR. Intended to
@@ -245,6 +267,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
                  account_for_inf="SVM", inf_threshold="20s", keep_min_finite=None,
+                 trust_region_factor=None, trust_region_nstd=None,
                  bounds=None, random_state=None, verbose=1):
         self.n_last_appended = 0
         self.n_last_appended_finite = 0
@@ -264,6 +287,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.minus_inf_value = -np.inf
         self._fitted = False
         self.bounds = bounds
+        self.trust_bounds = None
+        self.trust_region_factor = trust_region_factor
+        self.trust_region_nstd = trust_region_nstd
         # Initialize SVM if necessary
         self.inf_threshold = inf_threshold
         self.keep_min_finite = keep_min_finite
@@ -523,6 +549,22 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.infinities_classifier.random_state = check_random_state(
                 random_state, convert_to_random_state=True)
 
+    def update_trust_region(self):
+        """
+        Adjusts the boundaries of the trust region.
+        """
+        if self.trust_region_factor is None:
+            return
+        use_X = self.X_train
+        if self.trust_region_nstd is not None:
+            use_X = use_X[
+                np.where(max(self.y_train) - self.y_train <
+                         delta_logp_of_1d_nstd(self.trust_region_nstd, self.d))
+            ]
+        self.trust_bounds = shrink_bounds(
+            self.bounds_, use_X, factor=self.trust_region_factor
+        )
+
     def append_to_data(
             self, X, y, noise_level=None, fit_gpr=True, fit_classifier=True,
     ):
@@ -699,6 +741,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.fit_gpr_hyperparameters(**fit_gpr_kwargs)
         else:  # just update the regressor, keeping the kernel constant
             self._update_model()
+        self.update_trust_region()
 
     def _validate_noise_level(self, noise_level, n_train):
         """
@@ -968,7 +1011,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return self
 
     def predict(self, X, return_std=False, return_cov=False,
-                return_mean_grad=False, return_std_grad=False, validate=True):
+                return_mean_grad=False, return_std_grad=False, validate=True,
+                ignore_trust_region=False
+        ):
         """
         Predict output for X.
 
@@ -999,6 +1044,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             points as rows and dimensions/features as columns, C-contiguous), and no
             checks are performed on it. Reduces overhead. Use only for repeated calls when
             the input is programmatically generated to be correct at each stage.
+
+        ignore_trust_region : bool (default: False)
+            If ``True`` and trust-region definition was used (``trust_region_factor``
+            defined at initialisation), it ignores the trust region and does not return
+            a negative infinity outside the trust region.
 
         .. note::
 
@@ -1042,10 +1092,19 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         elif validate:
             X = check_array(X, ensure_2d=False, dtype=None)
 
+        impose_trust_region = self.trust_bounds is not None and not ignore_trust_region
+        i_outside_trust = None
+        if impose_trust_region:
+            i_outside_trust = np.logical_not(
+                is_in_bounds(X, self.trust_bounds, check_shape=False)
+            )
+
         if not hasattr(self, "X_train_"):  # Not fit; predict based on GP prior
             # we assume that since the GP has not been fit to data the SVM can
             # be ignored
             y_mean = np.zeros(X.shape[0])
+            if impose_trust_region:
+                y_mean[i_outside_trust] = self.minus_inf_value
             if return_std:
                 y_var = self.kernel.diag(X)
                 y_std = np.sqrt(y_var)
@@ -1125,10 +1184,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     (self.clip_factor - 1) * min(self.y_train)
                 )
             )
-        # Put together with SVM predictions
+        # Put together with SVM predictions and trust region
         if self.infinities_classifier is not None:
             y_mean_full[finite] = y_mean
             y_mean = y_mean_full
+        if impose_trust_region:
+            y_mean[i_outside_trust] = self.minus_inf_value
 
         if return_std:
             M = tri_mul(1., self.V_, K_trans.T, lower=True)
@@ -1342,6 +1403,10 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             c._diff_threshold = deepcopy(self._diff_threshold)
         if hasattr(self, "keep_min_finite"):
             c.keep_min_finite = deepcopy(self.keep_min_finite)
+        if hasattr(self, "trust_region_factor"):
+            c.trust_region_factor = deepcopy(self.trust_region_factor)
+        if hasattr(self, "trust_region_nstd"):
+            c.trust_region_nstd = deepcopy(self.trust_region_nstd)
         if hasattr(self, "inf_value"):
             c.inf_value = deepcopy(self.inf_value)
         if hasattr(self, "minus_inf_value"):
