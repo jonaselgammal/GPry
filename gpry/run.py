@@ -431,6 +431,8 @@ class Runner():
                 initial_proposer = deepcopy(initial_proposer)
             initial_proposer_name = list(initial_proposer)[0]
             initial_proposer_args = initial_proposer[initial_proposer_name]
+            if "bounds" not in initial_proposer_args:
+                initial_proposer_args["bounds"] = self.prior_bounds
             propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
             if propname_nosuffix == "reference":
                 self.initial_proposer = ReferenceProposer(

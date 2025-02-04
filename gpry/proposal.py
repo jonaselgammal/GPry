@@ -7,6 +7,7 @@ optimize the acquisition function.
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from math import inf
+from warnings import warn
 
 import scipy.stats
 import numpy as np
@@ -15,9 +16,34 @@ from cobaya.model import LogPosterior
 from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
 from cobaya.tools import resolve_packages_path
 
-from gpry.tools import check_random_state
+from gpry.tools import check_random_state, is_in_bounds
 from gpry.mc import mc_sample_from_gp
 from gpry import mpi
+
+
+def check_in_bounds(get_method):
+    """
+    Decorator for ``get`` methods of ``Proposer`` sub-classes, that call the method until
+    the returned proposal falls within the ``bounds`` defined as an attribute.
+
+    Print a warning every 1000 failed attempts.
+
+    It does not need to be used if the returned proposals are guaranteed to fulfil it.
+    """
+
+    def wrapper(self, *args, **kwargs):
+        i = 0
+        x = np.nan
+        while not is_in_bounds(x, get_method.__self__.bounds, check_shape=False)[0]:
+            i += 1
+            if not i % 1000:
+                warn(
+                    f"[{get_method.__self__.__class__.__name__}] Could produce a proposal"
+                    f" within the given bounds after {i} tries."
+                )
+            x = get_method(self, *args, **kwargs)
+        return x
+    return wrapper
 
 
 class Proposer(metaclass=ABCMeta):
@@ -32,6 +58,9 @@ class Proposer(metaclass=ABCMeta):
         Returns a random sample (given a certain random state) in the parameter space for
         getting initial training samples or the acquisition function to be optimized from.
 
+        If the output is not guaranteed by construction to be within the bounds defined in
+        the ``bounds`` attribute, decorated this method with ``check_in_bounds``.
+
         Parameters
         ----------
         random_state : int or numpy.RandomState, optional
@@ -39,6 +68,18 @@ class Proposer(metaclass=ABCMeta):
             given, it fixes the seed. Defaults to the global numpy random
             number generator.
         """
+
+    def update_bounds(self, bounds):
+        """
+        Updates the bounds for the proposal.
+
+        Parameters
+        ----------
+        bounds : array
+            Bounds in which to optimize the acquisition function, assumed to be of shape
+            (d,2) for d dimensional prior
+        """
+        self.bounds = np.atleast_2d(bounds)
 
     def update(self, gpr):
         """
@@ -70,11 +111,13 @@ class ReferenceProposer(Proposer, InitialPointProposer):
 
     def __init__(self, model, max_tries=inf, warn_if_tries="10d", ignore_fixed=True):
         self.prior = model.prior
+        self.update_bounds(model.prior.bounds(confidence_for_unbounded=0.99995))
         self.warn = True
         self.max_tries = max_tries
         self.warn_if_tries = warn_if_tries
         self.ignore_fixed = ignore_fixed
 
+    @check_in_bounds
     def get(self, random_state=None):
         ref = self.prior.reference(
             max_tries=self.max_tries,
@@ -100,7 +143,9 @@ class PriorProposer(Proposer, InitialPointProposer):
 
     def __init__(self, model):
         self.model = model
+        self.update_bounds(model.prior.bounds(confidence_for_unbounded=0.99995))
 
+    @check_in_bounds
     def get(self, random_state=None):
         return self.model.prior.sample(random_state=random_state)[0]
 
@@ -117,12 +162,17 @@ class UniformProposer(Proposer, InitialPointProposer):
     """
 
     def __init__(self, bounds):
+        self.update_bounds(bounds)
+
+    def update_bounds(self, bounds):
+        super().update_bounds(bounds)
         n_d = len(bounds)
         proposal_pdf = scipy.stats.uniform(
             loc=bounds[:, 0], scale=bounds[:, 1] - bounds[:, 0]
         )
         self.proposal_function = partial(proposal_pdf.rvs, size=n_d)
 
+    # Within updated bounds by construction: no need to decorate it.
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
 
@@ -166,6 +216,8 @@ class PartialProposer(Proposer, InitialPointProposer):
         self.random_proposer = UniformProposer(bounds)
         self.true_proposer = true_proposer
 
+    # Not decorating it, assuming the individual ones fulfil the in-bounds criterion,
+    # either by construction or because of their own ``check_in_bounds`` decorator.
     def get(self, random_state=None):
         rng = check_random_state(random_state)
         if rng.random() > self.rpf:
@@ -175,6 +227,10 @@ class PartialProposer(Proposer, InitialPointProposer):
 
     def update(self, gpr):
         self.true_proposer.update(gpr)
+
+    def update_bounds(self, bounds):
+        self.random_proposer.update_bounds(bounds)
+        self.true_proposer.update_bounds(bounds)
 
 
 class MeanCovProposer(Proposer, InitialPointProposer):
@@ -200,13 +256,15 @@ class MeanCovProposer(Proposer, InitialPointProposer):
         If True, returns the mean in the first call to ``get`` (only for the 1st MPI rank)
     """
 
-    def __init__(self, mean, cov, include_mean=False):
+    def __init__(self, bounds, mean, cov, include_mean=False):
+        self.update_bounds(bounds)
         self._mean_used = not include_mean
         self._mean = np.array(mean)
         self.proposal_function = scipy.stats.multivariate_normal(
             mean=mean, cov=cov, allow_singular=True
         ).rvs
 
+    @check_in_bounds
     def get(self, random_state=None):
         if not self._mean_used:
             self._mean_used = True
@@ -242,6 +300,7 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
             # UNDEFINED: model
             self.proposal_function = model.prior.sample
 
+    @check_in_bounds
     def get(self, random_state=None):
         return self.proposal_function(random_state=random_state)
 
@@ -274,12 +333,16 @@ class SmallChainProposer(Proposer):
 
     def __init__(self, bounds, npoints=100, nsteps=20, nretries=3):
         self.samples = []
-        self.bounds = bounds
+        self.update_bounds(bounds)
         self.nretries = nretries
         self.npoints = npoints
         self.nsteps = nsteps
+
+    def update_bounds(self, bounds):
+        super().update_bounds(bounds)
         self.random_proposer = UniformProposer(bounds)
 
+    @check_in_bounds
     def get(self, random_state=None):
         if len(self.samples) > 0:
             last, self.samples = self.samples[-1], self.samples[:-1]
@@ -341,7 +404,7 @@ class CentroidsProposer(Proposer):
     """
 
     def __init__(self, bounds, lambd=1.0):
-        self.bounds = bounds
+        self.update_bounds(bounds)
         # Set bounds to None as we want to be able to initialize the proposer
         # before we have trained our model and it's updated in the propose
         # method.
@@ -355,6 +418,7 @@ class CentroidsProposer(Proposer):
         """Dimensionality of the prior."""
         return len(self.bounds)
 
+    # No need for check_in_bounds, by construction
     def get(self, random_state=None):
         rng = check_random_state(random_state)
         m = self.d + 1
