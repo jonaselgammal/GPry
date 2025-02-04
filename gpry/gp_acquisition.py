@@ -23,6 +23,12 @@ from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
     shrink_bounds, remove_0_weight_samples, delta_logp_of_1d_nstd
 import gpry.ns_interfaces as nsint
 
+_NORA_ns_interfaces = {
+    "polychord": nsint.InterfacePolyChord,
+    "ultranest": nsint.InterfaceUltraNest,
+    "nessai": nsint.InterfaceNessai,
+}
+
 
 def builtin_names():
     """
@@ -647,26 +653,7 @@ class NORA(GenericGPAcquisition):
         self.acq_func_y_sigma = None
         # Configure nested sampler
         self.sampler = sampler
-        self.sampler_interface = None
-        if self.sampler is None:
-            try:
-                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
-                self.sampler = "polychord"
-            except nsint.NestedSamplerNotInstalledError as excpt:
-                self.log(
-                    f"Could not import PolyChord (Err msg: {excpt}). "
-                    "Defaulting to UltraNest."
-                )
-                self.sampler = "ultranest"
-        if self.sampler.lower() == "polychord":
-            if self.sampler_interface is None:
-                self.sampler_interface = nsint.InterfacePolyChord(bounds, verbose)
-        elif self.sampler.lower() == "ultranest":
-            if self.sampler_interface is None:
-                self.sampler_interface = nsint.InterfaceUltraNest(bounds, verbose)
-        elif self.sampler.lower() == "nessai":
-            if self.sampler_interface is None:
-                self.sampler_interface = nsint.InterfaceNessai(bounds, verbose)
+        self._init_nested_sampler()
         # TODO: fix this! and adapt to all codes (set_rng method for interfaces)
         # # Using rng state as seed for PolyChord
         # if self.random_state is not None:
@@ -707,6 +694,35 @@ class NORA(GenericGPAcquisition):
         if self.pool is None:
             return None
         return len(self.pool)
+
+    def _init_nested_sampler(self, sampler=None):
+        """
+        Initializes the nested sampler, managing defaults with a recursive call.
+
+        Raises
+        ------
+        ``gpry.ns_interfaces.NestedSamplerNotInstalledError`` if the requested or fallback
+        sampler cannot be loaded, or ``ValueError`` if the sampler is not recognised.
+        """
+        this_sampler = sampler or self.sampler
+        # Manage defaults
+        if this_sampler is None:
+            try:
+                self._init_nested_sampler("polychord")
+            except nsint.NestedSamplerNotInstalledError as excpt:
+                self.log(
+                    f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
+                    "Defaulting to UltraNest."
+                )
+                self._init_nested_sampler("ultranest")
+        # Load the requested sampler
+        try:
+            _NORA_ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
+        except (AttributeError, KeyError) as excpt:
+            raise ValueError(
+                f"No interface found for the requested nested sampler '{this_sampler}'. "
+                f"Use one of {list(_NORA_ns_interfaces)}"
+            ) from excpt
 
     def update_NS_precision(self, gpr):
         """

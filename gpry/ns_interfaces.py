@@ -8,6 +8,7 @@ import glob
 import shutil
 import tempfile
 from warnings import warn
+from abc import ABC, abstractmethod
 
 import numpy as np
 
@@ -22,7 +23,45 @@ class NestedSamplerNotInstalledError(Exception):
     """
 
 
-class InterfacePolyChord:
+class NSInterface(ABC):
+    """
+    Meta-class for Nested Sampler interfaces.
+    """
+
+    @abstractmethod
+    def __init__(self, bounds, verbosity=None):
+        pass
+
+    @abstractmethod
+    def set_verbosity(self, verbose):
+        """Sets the verbosity of the sampler at run time."""
+
+    @abstractmethod
+    def set_prior(self, bounds):
+        """Sets the prior used by the nested sampler."""
+
+    @abstractmethod
+    def set_precision(self, **kwargs):
+        """Sets precision parameters for the nested sampler."""
+
+    @abstractmethod
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+        """
+        Runs the nested sampler.
+
+        param_names (optional, otherwise x_[i] will be used) should be a list of sampled
+        parameter names, or a list of (name, label) tuples. Labels are interpreted as
+        LaTeX but should not include '$' signs.
+        """
+
+    @abstractmethod
+    def delete_output(self):
+        """
+        Deletes the sampler output.
+        """
+
+
+class InterfacePolyChord(NSInterface):
     """
     Interface for the PolyChord nested sampler, by W. Handley, M. Hobson & A. Lasenby.
 
@@ -202,7 +241,7 @@ class InterfacePolyChord:
             pass
 
 
-class InterfaceNessai:
+class InterfaceNessai(NSInterface):
     """
     Interface for the ``nessai`` nested sampler, by M.J. Williams, J. Veitch and C.
     Messenger.
@@ -341,7 +380,7 @@ class InterfaceNessai:
         shutil.rmtree(self.output)
 
 
-class InterfaceUltraNest:
+class InterfaceUltraNest(NSInterface):
     """
     Interface for the ``ultranest`` nested sampler, by J. Buchner.
 
