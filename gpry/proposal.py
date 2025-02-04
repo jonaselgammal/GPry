@@ -1,15 +1,23 @@
-# Random proposals from which to optimize the acquisition function
+"""
+Classes to generate random proposals within the prior or trust bounds, used to generate
+initial samples for the active learning cycle, or as starting points from which to
+optimize the acquisition function.
+"""
 
 from abc import ABCMeta, abstractmethod
-from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-from cobaya.tools import resolve_packages_path
 from functools import partial
+from math import inf
+
 import scipy.stats
 import numpy as np
-from gpry.mc import mc_sample_from_gp
+
 from cobaya.model import LogPosterior
+from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+from cobaya.tools import resolve_packages_path
+
 from gpry.tools import check_random_state
-from math import inf
+from gpry.mc import mc_sample_from_gp
+from gpry import mpi
 
 
 class Proposer(metaclass=ABCMeta):
@@ -19,7 +27,7 @@ class Proposer(metaclass=ABCMeta):
     """
 
     @abstractmethod
-    def get(random_state=None):
+    def get(self, random_state=None):
         """
         Returns a random sample (given a certain random state) in the parameter space for
         getting initial training samples or the acquisition function to be optimized from.
@@ -41,45 +49,50 @@ class Proposer(metaclass=ABCMeta):
         gpr : GaussianProcessRegressor
             The gpr instance that has been updated.
         """
-        pass
+
 
 class InitialPointProposer(metaclass=ABCMeta):
     """
     Base proposer class for all proposers which work for initial point generation.
     """
 
+
 class ReferenceProposer(Proposer, InitialPointProposer):
     """
     Generates proposals from the "reference" distribution defined in the model. If no
     reference distribution is defined it defaults to the prior.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         The model from which to draw the samples.
     """
 
-    def __init__(self, model, max_tries=inf, warn_if_tries='10d', ignore_fixed=True):
+    def __init__(self, model, max_tries=inf, warn_if_tries="10d", ignore_fixed=True):
         self.prior = model.prior
-        self.warn=True
+        self.warn = True
         self.max_tries = max_tries
         self.warn_if_tries = warn_if_tries
         self.ignore_fixed = ignore_fixed
 
     def get(self, random_state=None):
         ref = self.prior.reference(
-            max_tries=self.max_tries, warn_if_tries=self.warn_if_tries,
-            ignore_fixed=self.ignore_fixed, warn_if_no_ref=self.warn,
-            random_state=random_state)
+            max_tries=self.max_tries,
+            warn_if_tries=self.warn_if_tries,
+            ignore_fixed=self.ignore_fixed,
+            warn_if_no_ref=self.warn,
+            random_state=random_state,
+        )
         self.warn = False
         return ref
+
 
 class PriorProposer(Proposer, InitialPointProposer):
     """
     Generates proposals from the prior of the model.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         The model from which to draw the samples.
         max_tries=inf, warn_if_tries='10d', ignore_fixed=False
@@ -90,6 +103,7 @@ class PriorProposer(Proposer, InitialPointProposer):
 
     def get(self, random_state=None):
         return self.model.prior.sample(random_state=random_state)[0]
+
 
 class UniformProposer(Proposer, InitialPointProposer):
     """
@@ -105,7 +119,8 @@ class UniformProposer(Proposer, InitialPointProposer):
     def __init__(self, bounds):
         n_d = len(bounds)
         proposal_pdf = scipy.stats.uniform(
-            loc=bounds[:, 0], scale=bounds[:, 1] - bounds[:, 0])
+            loc=bounds[:, 0], scale=bounds[:, 1] - bounds[:, 0]
+        )
         self.proposal_function = partial(proposal_pdf.rvs, size=n_d)
 
     def get(self, random_state=None):
@@ -138,10 +153,11 @@ class PartialProposer(Proposer, InitialPointProposer):
     # Either sample from true_proposer, or give a random prior sample
     def __init__(self, bounds, true_proposer, random_proposal_fraction=0.25):
 
-        if random_proposal_fraction > 1. or random_proposal_fraction < 0.:
+        if random_proposal_fraction > 1.0 or random_proposal_fraction < 0.0:
             raise ValueError(
                 "Cannot pass a fraction outside of [0,1]. "
-                f"You passed 'random_proposal_fraction={random_proposal_fraction}'")
+                f"You passed 'random_proposal_fraction={random_proposal_fraction}'"
+            )
         if not isinstance(true_proposer, Proposer):
             raise ValueError("The true proposer needs to be a valid proposer.")
 
@@ -188,13 +204,13 @@ class MeanCovProposer(Proposer, InitialPointProposer):
         self._mean_used = not include_mean
         self._mean = np.array(mean)
         self.proposal_function = scipy.stats.multivariate_normal(
-            mean=mean, cov=cov, allow_singular=True).rvs
+            mean=mean, cov=cov, allow_singular=True
+        ).rvs
 
     def get(self, random_state=None):
         if not self._mean_used:
             self._mean_used = True
-            from gpry.mpi import is_main_process
-            if is_main_process:
+            if mpi.is_main_process:
                 return self._mean
         return self.proposal_function(random_state=random_state)
 
@@ -215,11 +231,11 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
     """
 
     def __init__(self, mean, model_info):
-        cmat_dir = get_best_covmat(
-            model_info, packages_path=resolve_packages_path())
-        if np.any(d != 0 for d in cmat_dir['covmat'].shape):
+        cmat_dir = get_best_covmat(model_info, packages_path=resolve_packages_path())
+        if np.any(d != 0 for d in cmat_dir["covmat"].shape):
             self.proposal_function = scipy.stats.multivariate_normal(
-                mean=mean, cov=cmat_dir['covmat'], allow_singular=True).rvs
+                mean=mean, cov=cmat_dir["covmat"], allow_singular=True
+            ).rvs
         else:
             # TODO :: how to gracefully fall back if autocovmat not found
             raise Exception("Autocovmat is not valid")
@@ -286,7 +302,7 @@ class SmallChainProposer(Proposer):
             try:
                 self.sampler.run()
                 points = self.sampler.products()["sample"][self.parnames].values
-                self.samples = points[::-self.nsteps]
+                self.samples = points[:: -self.nsteps]
                 return
             except Exception:
                 pass
@@ -299,10 +315,14 @@ class SmallChainProposer(Proposer):
     def update(self, gpr):
         self.samples = []
         surr_info, sampler = mc_sample_from_gp(
-            gpr, self.bounds, sampler="mcmc", run=False, add_options={
-                'max_samples': self.npoints, 'max_tries': 10 * self.npoints})
+            gpr,
+            self.bounds,
+            sampler="mcmc",
+            run=False,
+            add_options={"max_samples": self.npoints, "max_tries": 10 * self.npoints},
+        )
         self.sampler = sampler
-        self.parnames = list(surr_info['params'])
+        self.parnames = list(surr_info["params"])
         self.gpr = gpr
 
 
@@ -320,7 +340,7 @@ class CentroidsProposer(Proposer):
         correspond to more exploration.
     """
 
-    def __init__(self, bounds, lambd=1.):
+    def __init__(self, bounds, lambd=1.0):
         self.bounds = bounds
         # Set bounds to None as we want to be able to initialize the proposer
         # before we have trained our model and it's updated in the propose
@@ -343,8 +363,11 @@ class CentroidsProposer(Proposer):
         # perturb the point: per dimension, add a random multiple of the difference
         # between the centroid and one of the points.
         kick = -centroid + np.array(
-            [subset[j][i] for i, j in enumerate(
-                rng.choice(m, size=self.d, replace=False))])
+            [
+                subset[j][i]
+                for i, j in enumerate(rng.choice(m, size=self.d, replace=False))
+            ]
+        )
         kick *= self.kicking_pdf.rvs(self.d, random_state=rng)
         # This might have to be modified if the optimizer can't deal with
         # points which are exactly on the edges.
