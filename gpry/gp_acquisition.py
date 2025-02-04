@@ -19,8 +19,7 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names, \
-    shrink_bounds, remove_0_weight_samples, delta_logp_of_1d_nstd
+from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples
 import gpry.ns_interfaces as nsint
 
 _NORA_ns_interfaces = {
@@ -49,8 +48,6 @@ class GenericGPAcquisition():
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 shrink_1d_nstd=None,
-                 shrink_with_factor=None,
                  ):
         self.bounds_ = np.array(bounds).copy()
         self.n_d = bounds.shape[0]
@@ -85,45 +82,16 @@ class GenericGPAcquisition():
                 "acq_func should be an AcquisitionFunction or a str or dict "
                 f"specification. Got {acq_func}"
             )
-        # Shrinkage of prior bounds for acquisition
-        self.shrink_with_factor = shrink_with_factor
-        self.shrink_1d_nstd = shrink_1d_nstd
 
     def __call__(self, X, gpr, eval_gradient=False):
         """Returns the value of the acquision function at ``X`` given a ``gpr``."""
         return self.acq_func(X, gpr, eval_gradient=eval_gradient)
 
-    def multi_add(self, gpr, n_points=1, random_state=None):
+    def multi_add(self, gpr, n_points=1, bounds=None, random_state=None):
         """
         Method to query multiple points where the objective function
         shall be evaluated.
         """
-
-    def shrink_priors(self, gpr):
-        """
-        Adjusts given boundaries based on the infinities classifier cutoff value.
-        Boundaries are only adjusted if the last samples towards the edges are below the
-        cutoff.
-
-        Parameters
-        ----------
-        gpr: GaussianProcessRegressor
-            The current GPR instance.
-
-        Returns
-        -------
-        numpy.ndarray:
-            A (d, 2) array representing the adjusted boundaries.
-        """
-        if self.shrink_with_factor is None:
-            return self.bounds_
-        X = gpr.X_train
-        if self.shrink_1d_nstd is not None:
-            X = X[
-                np.where(max(gpr.y_train) - gpr.y_train <
-                         delta_logp_of_1d_nstd(self.shrink_1d_nstd, gpr.d))
-            ]
-        return shrink_bounds(self.bounds_, X, factor=self.shrink_with_factor)
 
 
 class BatchOptimizer(GenericGPAcquisition):
@@ -206,18 +174,6 @@ class BatchOptimizer(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    shrink_with_factor: float, optional (default: None)
-        If defined as a positive float, the nested sampling runs are restricted to the
-        hypercube defined by the current (finite) GPR training set, enlarged by the given
-        factor. If ``None``, no shrinking takes place.
-        Useful if the NORA sampling phase gets stuck (generating initial live points).
-
-    shrink_1d_nstd: float, optional (default: None)
-        If defined as a positive float, the restriction of the nested sampler runs is
-        defined by the points in the training set corresponding to a significance
-        (assuming a Gaussian posterior) equivalent to this value in 1d standard
-        deviations.
-
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -236,8 +192,6 @@ class BatchOptimizer(GenericGPAcquisition):
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 shrink_1d_nstd=None,
-                 shrink_with_factor=None,
                  # Class-specific:
                  proposer=None,
                  acq_optimizer="fmin_l_bfgs_b",
@@ -246,8 +200,7 @@ class BatchOptimizer(GenericGPAcquisition):
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, shrink_1d_nstd=shrink_1d_nstd,
-            shrink_with_factor=shrink_with_factor,
+            verbose=verbose, acq_func=acq_func,
         )
         self.proposer = proposer
         self.obj_func = None
@@ -263,6 +216,7 @@ class BatchOptimizer(GenericGPAcquisition):
                     f"Got {proposer} of type {type(proposer)}."
                 )
             self.proposer = proposer
+            self.proposer.update_bounds(self.bounds_)
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -295,7 +249,7 @@ class BatchOptimizer(GenericGPAcquisition):
         self.mean_ = None
         self.cov = None
 
-    def optimize_acquisition_function(self, gpr, i, random_state=None):
+    def optimize_acquisition_function(self, gpr, i, bounds=None, random_state=None):
         """Exposes the optimization method for the acquisition function. When
         called it proposes a single point where for where to evaluate the true
         model next. It is internally called in the :meth:`multi_add` method.
@@ -322,8 +276,10 @@ class BatchOptimizer(GenericGPAcquisition):
         func : float
             The value of the acquisition function at X_opt
         """
-        # Update proposer with new gpr
+        # Update proposer with new gpr and new bounds
         self.proposer.update(gpr)
+        use_bounds = self.bounds_ if bounds is None else bounds
+        self.proposer.update_bounds(use_bounds)
 
         # If we do a first-time run, use this
         if not self.obj_func:
@@ -363,21 +319,20 @@ class BatchOptimizer(GenericGPAcquisition):
 
         # Preprocessing
         if self.preprocessing_X is not None:
-            transformed_bounds = self.preprocessing_X.transform_bounds(
-                self.bounds_)
+            transformed_bounds = self.preprocessing_X.transform_bounds(use_bounds)
         else:
-            transformed_bounds = self.bounds_
+            transformed_bounds = use_bounds
 
         if i == 0:
             # Perform first run from last training point
             x0 = gpr.X_train[-1]
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
-            return self._constrained_optimization(self.obj_func, x0,
-                                                  transformed_bounds)
+            return self._constrained_optimization(self.obj_func, x0, transformed_bounds)
         else:
-            n_tries = 10 * self.bounds_.shape[0] * self.n_restarts_optimizer
-            x0s = np.empty((self.n_repeats_propose + 1, self.bounds_.shape[0]))
+            d = self.bounds_.shape[0]
+            n_tries = 10 * d * self.n_restarts_optimizer
+            x0s = np.empty((self.n_repeats_propose + 1, d))
             values = np.empty(self.n_repeats_propose + 1)
             ifull = 0
             for n_try in range(n_tries):
@@ -392,16 +347,18 @@ class BatchOptimizer(GenericGPAcquisition):
                     x0 = x0s[np.argmax(values)]
                     if self.preprocessing_X is not None:
                         x0 = self.preprocessing_X.transform(x0)
-                    return self._constrained_optimization(self.obj_func, x0,
-                                                          transformed_bounds)
+                    return self._constrained_optimization(
+                        self.obj_func, x0, transformed_bounds
+                    )
             # if there's at least one finite value try optimizing from
             # there, otherwise take the last x0 and add that to the GP
             if ifull > 0:
                 x0 = x0s[np.argmax(values[:ifull])]
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                return self._constrained_optimization(self.obj_func, x0,
-                                                      transformed_bounds)
+                return self._constrained_optimization(
+                    self.obj_func, x0, transformed_bounds
+                )
             else:
                 if self.verbose > 1:
                     print(f"of {n_tries} initial samples for the "
@@ -411,7 +368,9 @@ class BatchOptimizer(GenericGPAcquisition):
                     x0 = self.preprocessing_X.transform(x0)
                 return x0, -1 * value
 
-    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
+    def multi_add(
+            self, gpr, n_points=1, bounds=None, random_state=None, force_resample=False
+    ):
         r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
@@ -437,6 +396,10 @@ class BatchOptimizer(GenericGPAcquisition):
             in parallel, and thus obtain more objective function evaluations
             per unit of time.
 
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
+
         random_state : int or numpy.RandomState, optional
             The generator used to initialize the centers. If an integer is
             given, it fixes the seed. Defaults to the global numpy random
@@ -456,10 +419,10 @@ class BatchOptimizer(GenericGPAcquisition):
             raise ValueError(
                 "n_points should be int > 0, got " + str(n_points)
             )
+        use_bounds = self.bounds_ if bounds is None else bounds
         if mpi.is_main_process:
             # Initialize arrays for storing the optimized points
-            X_opts = np.empty((n_points,
-                               gpr.d))
+            X_opts = np.empty((n_points, gpr.d))
             y_lies = np.empty(n_points)
             acq_vals = np.empty(n_points)
             # Copy the GP instance as it is modified during
@@ -478,7 +441,9 @@ class BatchOptimizer(GenericGPAcquisition):
             # (done in parallel)
             for i in range(n_acq_this_process):
                 proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
-                    gpr_, i + i_acq_this_process, random_state=random_state)
+                    gpr_, i + i_acq_this_process,
+                    bounds=use_bounds, random_state=random_state
+                )
             proposal_X_main, acq_X_main = mpi.multi_gather_array(
                 [proposal_X, acq_X])
             # Reset the objective function, such that afterwards the correct one is used
@@ -491,7 +456,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
-                    X_opt = self.preprocessing_X.inverse_transform(X_opt, copy=True)
+                    X_opt = self.preprocessing_X.inverse_transform(X_opt)
                 # Get the value of the acquisition function at the optimum value
                 acq_val = -1 * acq_X_main[max_pos]
                 X_opt = np.array([X_opt])
@@ -572,18 +537,6 @@ class NORA(GenericGPAcquisition):
         given, it fixes the seed. Defaults to the global numpy random
         number generator.
 
-    shrink_with_factor: float, optional (default: None)
-        If defined as a positive float, the nested sampling runs are restricted to the
-        hypercube defined by the current (finite) GPR training set, enlarged by the given
-        factor. If ``None``, no shrinking takes place.
-        Useful if the NORA sampling phase gets stuck (generating initial live points).
-
-    shrink_1d_nstd: float, optional (default: None)
-        If defined as a positive float, the restriction of the nested sampler runs is
-        defined by the points in the training set corresponding to a significance
-        (assuming a Gaussian posterior) equivalent to this value in 1d standard
-        deviations.
-
     nlive_per_training: int
         live points per sample in the current training set.
         Not recommended to decrease it.
@@ -625,8 +578,6 @@ class NORA(GenericGPAcquisition):
                  random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 shrink_1d_nstd=None,
-                 shrink_with_factor=None,
                  # Class-specific:
                  sampler=None,
                  mc_every="1d",
@@ -642,8 +593,7 @@ class NORA(GenericGPAcquisition):
                  ):
         super().__init__(
             bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, shrink_1d_nstd=shrink_1d_nstd,
-            shrink_with_factor=shrink_with_factor,
+            verbose=verbose, acq_func=acq_func,
         )
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
@@ -717,7 +667,8 @@ class NORA(GenericGPAcquisition):
                 self._init_nested_sampler("ultranest")
         # Load the requested sampler
         try:
-            _NORA_ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
+            self.sampler_interface = \
+                _NORA_ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
         except (AttributeError, KeyError) as excpt:
             raise ValueError(
                 f"No interface found for the requested nested sampler '{this_sampler}'. "
@@ -768,7 +719,7 @@ class NORA(GenericGPAcquisition):
             tmpdir += "/"
         return tmpdir
 
-    def do_MC_sample(self, gpr, random_state=None, sampler=None):
+    def do_MC_sample(self, gpr, bounds, random_state=None, sampler=None):
         """
 
         Returns
@@ -776,7 +727,6 @@ class NORA(GenericGPAcquisition):
         X, y, sigma_y, weights
             May return None for any of y, sigma_y, weights
         """
-        bounds = self.shrink_priors(gpr)
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
@@ -789,11 +739,12 @@ class NORA(GenericGPAcquisition):
             return self._do_MC_sample_nessai(gpr, random_state, bounds=bounds)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
+    # For tests only.
     def _do_MC_sample_uniform(self, gpr, random_state, bounds=None):
         if not mpi.is_main_process:
             return None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
-        n_total = 8 * gpr.d
+        n_total = 1000 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
             X[i] = proposer.get(random_state=random_state)
@@ -909,7 +860,7 @@ class NORA(GenericGPAcquisition):
                 gpr, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
             )
 
-    def _reweight_last_MC_sample(self, gpr, ensure_sigma_y=False):
+    def _reweight_last_MC_sample(self, gpr, bounds=None, ensure_sigma_y=False):
         """Stores the MC sample as attributes. Use ``last_MC_sample`` to retrieve it."""
         self.is_last_MC_reweighted = True
         X_excpt, y_excpt = None, None
@@ -924,9 +875,16 @@ class NORA(GenericGPAcquisition):
         if y_excpt is not None:
             raise y_excpt
         # Ensure y and sigma_y (optional) are computed
-        self._X_mc_reweight = np.copy(self._X_mc) if mpi.is_main_process else None
+        self._X_mc_reweight = None
+        if mpi.is_main_process:
+            self._X_mc_reweight = np.copy(self._X_mc)
+            if bounds is not None:
+                # Keep points within new bounds (maybe none!)
+                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_bounds=False)
+                self._X_mc_reweight = self._X_mc_reweight[i_within]
+                # TODO: not handled: there could be 0 points within new bounds
         self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
-            gpr, self._X_mc_reweight, None, None, ensure_sigma_y=True
+            gpr, self._X_mc_reweight, None, None, ensure_sigma_y=ensure_sigma_y
         )
         if mpi.is_main_process:
             # Reweight, and drop 0 weights
@@ -1007,7 +965,9 @@ class NORA(GenericGPAcquisition):
         )
         return mcsamples
 
-    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
+    def multi_add(
+            self, gpr, n_points=1, bounds=None, random_state=None, force_resample=False
+    ):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
 
@@ -1036,6 +996,10 @@ class NORA(GenericGPAcquisition):
             in parallel, and thus obtain more objective function evaluations
             per unit of time.
 
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
+
         random_state : int or numpy.RandomState, optional
             The generator used to initialize the centers. If an integer is
             given, it fixes the seed. Defaults to the global numpy random
@@ -1059,11 +1023,13 @@ class NORA(GenericGPAcquisition):
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
         if mc_sample_this_time:
             self._set_MC_sample(
-                *self.do_MC_sample(gpr, random_state), ensure_y_sigma_y=True, gpr=gpr
+                *self.do_MC_sample(
+                    gpr, bounds=bounds, random_state=random_state
+                ), ensure_y_sigma_y=True, gpr=gpr
             )
             self._X_already_proposed = np.empty(shape=(0, gpr.d))
         else:
-            self._reweight_last_MC_sample(gpr, ensure_sigma_y=True)
+            self._reweight_last_MC_sample(gpr, bounds=bounds, ensure_sigma_y=True)
         self.mc_every_i += 1
         X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
         # Find indices of already used elements to exclude them.
