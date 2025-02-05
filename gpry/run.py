@@ -432,7 +432,10 @@ class Runner():
             initial_proposer_args = initial_proposer[initial_proposer_name]
             if "bounds" not in initial_proposer_args:
                 initial_proposer_args["bounds"] = self.prior_bounds
-            propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
+            # TODO: at py 3.8 deprecation, use str.removesuffix("proposer")
+            propname_nosuffix = initial_proposer_name.lower()
+            if propname_nosuffix.endswith("proposer"):
+                propname_nosuffix = propname_nosuffix[:-len("proposer")]
             if propname_nosuffix == "reference":
                 self.initial_proposer = ReferenceProposer(
                     self.model, **initial_proposer_args)
