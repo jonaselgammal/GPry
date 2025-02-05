@@ -34,15 +34,16 @@ def check_in_bounds(get_method):
     def wrapper(self, *args, **kwargs):
         i = 0
         x = np.nan
-        while not is_in_bounds(x, get_method.__self__.bounds, check_shape=False)[0]:
+        while not is_in_bounds(x, self.bounds, check_shape=False)[0]:
             i += 1
             if not i % 1000:
                 warn(
-                    f"[{get_method.__self__.__class__.__name__}] Could produce a proposal"
+                    f"[{self.__class__.__name__}] Could produce a proposal"
                     f" within the given bounds after {i} tries."
                 )
             x = get_method(self, *args, **kwargs)
         return x
+
     return wrapper
 
 
@@ -69,6 +70,7 @@ class Proposer(metaclass=ABCMeta):
             number generator.
         """
 
+    # pylint: disable=attribute-defined-outside-init
     def update_bounds(self, bounds):
         """
         Updates the bounds for the proposal.
@@ -109,9 +111,15 @@ class ReferenceProposer(Proposer, InitialPointProposer):
         The model from which to draw the samples.
     """
 
-    def __init__(self, model, max_tries=inf, warn_if_tries="10d", ignore_fixed=True):
+    def __init__(
+        self, model, bounds=None, max_tries=inf, warn_if_tries="10d", ignore_fixed=True
+    ):
         self.prior = model.prior
-        self.update_bounds(model.prior.bounds(confidence_for_unbounded=0.99995))
+        self.update_bounds(
+            bounds
+            if bounds is not None
+            else model.prior.bounds(confidence_for_unbounded=0.99995)
+        )
         self.warn = True
         self.max_tries = max_tries
         self.warn_if_tries = warn_if_tries
@@ -141,9 +149,13 @@ class PriorProposer(Proposer, InitialPointProposer):
         max_tries=inf, warn_if_tries='10d', ignore_fixed=False
     """
 
-    def __init__(self, model):
+    def __init__(self, model, bounds=None):
         self.model = model
-        self.update_bounds(model.prior.bounds(confidence_for_unbounded=0.99995))
+        self.update_bounds(
+            bounds
+            if bounds is not None
+            else model.prior.bounds(confidence_for_unbounded=0.99995)
+        )
 
     @check_in_bounds
     def get(self, random_state=None):

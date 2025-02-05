@@ -562,7 +562,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                          delta_logp_of_1d_nstd(self.trust_region_nstd, self.d))
             ]
         self.trust_bounds = shrink_bounds(
-            self.bounds_, use_X, factor=self.trust_region_factor
+            self.bounds, use_X, factor=self.trust_region_factor
         )
 
     def append_to_data(

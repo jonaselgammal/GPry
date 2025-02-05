@@ -1002,7 +1002,9 @@ class Runner():
                     warn_multiple = 10 * self.gpr.d
                     while not X_in_bounds:
                         X = self.initial_proposer.get(random_state=self.random_state)
-                        X_in_bounds = is_in_bounds(X, self.prior_bounds)[0]
+                        X_in_bounds = is_in_bounds(
+                            X, self.prior_bounds, check_shape=False
+                        )[0]
                         proposer_tries += 1
                         if proposer_tries > 0 and proposer_tries > warn_multiple:
                             self.log(

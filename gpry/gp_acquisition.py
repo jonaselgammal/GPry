@@ -19,7 +19,8 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples
+from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples, \
+    is_in_bounds
 import gpry.ns_interfaces as nsint
 
 _NORA_ns_interfaces = {
@@ -659,12 +660,14 @@ class NORA(GenericGPAcquisition):
         if this_sampler is None:
             try:
                 self._init_nested_sampler("polychord")
+                return
             except nsint.NestedSamplerNotInstalledError as excpt:
                 self.log(
                     f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
                     "Defaulting to UltraNest."
                 )
                 self._init_nested_sampler("ultranest")
+                return
         # Load the requested sampler
         try:
             self.sampler_interface = \
@@ -674,6 +677,7 @@ class NORA(GenericGPAcquisition):
                 f"No interface found for the requested nested sampler '{this_sampler}'. "
                 f"Use one of {list(_NORA_ns_interfaces)}"
             ) from excpt
+        self.sampler = this_sampler
 
     def update_NS_precision(self, gpr):
         """
@@ -880,7 +884,7 @@ class NORA(GenericGPAcquisition):
             self._X_mc_reweight = np.copy(self._X_mc)
             if bounds is not None:
                 # Keep points within new bounds (maybe none!)
-                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_bounds=False)
+                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_shape=False)
                 self._X_mc_reweight = self._X_mc_reweight[i_within]
                 # TODO: not handled: there could be 0 points within new bounds
         self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
@@ -889,10 +893,15 @@ class NORA(GenericGPAcquisition):
         if mpi.is_main_process:
             # Reweight, and drop 0 weights
             with NumpyErrorHandling(all="ignore") as _:
-                reweight_factor = np.exp(self._y_mc_reweight - self._y_mc)
+                y_mc = self._y_mc
+                w_mc = self._w_mc
+                if bounds is not None:
+                    y_mc = y_mc[i_within]
+                    w_mc = w_mc[i_within] if w_mc is not None else None
+                reweight_factor = np.exp(self._y_mc_reweight - y_mc)
                 w_mc_reweight = (
-                    self._w_mc if self._w_mc is not None
-                    else np.ones(shape=self._X_mc.shape[0])
+                    w_mc if w_mc is not None
+                    else np.ones(shape=self._X_mc_reweight.shape[0])
                 ) * reweight_factor
                 w_mc_reweight /= max(w_mc_reweight)
             self._w_mc_reweight, self._X_mc_reweight, self._y_mc_reweight, \
