@@ -760,6 +760,12 @@ class Runner():
             self.old_gpr = deepcopy(self.gpr)
             self.progress.add_current_n_truth(self.gpr.n_total, self.gpr.n_finite)
             # Acquire new points in parallel
+            if mpi.is_main_process:
+                self.log(
+                    "[ACQUISITION] Starting acquisition engine "
+                    f"{self.acquisition.__class__.__name__}...",
+                    level=4
+                )
             mpi.sync_processes()  # to sync the timer
             with TimerCounter(self.gpr) as timer_acq:
                 force_resample = self.resamples > 0
@@ -837,6 +843,11 @@ class Runner():
                              "tries remaining)", level=2)
                 continue
             self.resamples = 0
+            if mpi.is_main_process:
+                self.log(
+                    "[EVALUATION] Starting evaluation of the true posterior...",
+                    level=4,
+                )
             mpi.sync_processes()  # to sync the timer
             with Timer() as timer_truth:
                 # This call includes some overhead that will be added to the timer,
@@ -847,6 +858,8 @@ class Runner():
                 self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) {eval_msg}", level=3)
             mpi.sync_processes()
             # Add the newly evaluated truths to the GPR, and maybe refit hyperparameters.
+            if mpi.is_main_process:
+                self.log("[FIT] Starting GPR fit...", level=4)
             with TimerCounter(self.gpr) as timer_fit:
                 fit_msg = self._fit_gpr_parallel(new_X, new_y)
             if mpi.is_main_process:
@@ -864,6 +877,8 @@ class Runner():
             # TODO: better failsafes for MPI_aware=False BUT actually using MPI
             # Use a with statement to pass an MPI communicator (dummy if MPI_aware=False)
             if self.callback:
+                if mpi.is_main_process:
+                    self.log(f"[CALLBACK] Calling callback function...", level=4)
                 if self.callback_is_MPI_aware or mpi.is_main_process:
                     with Timer() as timer_callback:
                         self.callback(self)
@@ -873,6 +888,8 @@ class Runner():
                 mpi.sync_processes()
             # Calculate convergence and break if the run has converged
             mpi.sync_processes()
+            if mpi.is_main_process:
+                self.log("[CONVERGENCE] Starting convergence check...", level=4)
             with TimerCounter(self.gpr, self.old_gpr) as timer_convergence:
                 self._check_convergence_parallel(new_X, new_y, y_pred)
                 mpi.sync_processes()
