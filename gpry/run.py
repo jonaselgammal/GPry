@@ -26,7 +26,8 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry.mc import mc_sample_from_gp, process_gdsamples
 import gpry.plots as gpplt
-from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds
+from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds, \
+    mean_covmat_from_evals, kl_norm
 
 _plots_path = "images"
 
@@ -277,8 +278,6 @@ class Runner():
                 acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
             )
             self._construct_options(options)
-            # Diagnosis
-            self.diagnosis = options.get("diagnosis", None)
             # Callback
             self.callback = callback
             self.callback_is_MPI_aware = callback_is_MPI_aware
@@ -289,7 +288,7 @@ class Runner():
                          "n_points_per_acq", "fit_full_every", "fit_simple_every",
                          "options", "acquisition",
                          "callback_is_MPI_aware", "loaded_from_checkpoint",
-                         "initial_proposer", "progress", "diagnosis",
+                         "initial_proposer", "progress",
                          "n_resamples_before_giveup", "resamples"):
                 mpi.share_attr(self, attr)
             self._share_gpr()
@@ -912,6 +911,27 @@ class Runner():
                     )
             mpi.sync_processes()
             self.update_mean_cov()
+            # Run the final MC sampler and perform a diagnosis
+            if self.has_converged:
+                if mpi.is_main_process:
+                    self.log(
+                        "[MC+DIAGNOSIS] Starting MC sampler (convergence signalled)...",
+                        level=4
+                    )
+                with TimerCounter(self.gpr, self.old_gpr) as timer_mc:
+                    self.generate_mc_sample()
+                    if mpi.is_main_process:
+                        self.log("[MC+DIAGNOSIS] MC sampler done. Diagnosing...", level=4)
+                    diag_success = self.diagnose_last_mc_sample()
+                mpi.sync_processes()
+                if mpi.is_main_process:
+                    self.log(
+                        "[MC+DIAGNOSIS] Obtained MC sample. "
+                        f"Diagnosis passed: *{diag_success}*",
+                        level=3
+                    )
+                if not diag_success:
+                    self.has_converged = False
             self.progress.mpi_sync()
             self.save_checkpoint()
             if mpi.is_main_process and self.plots:
@@ -939,8 +959,29 @@ class Runner():
                         f"(max. {self.n_resamples_before_giveup})."
                     )
                 self.banner(lines)
-            if self.diagnosis:
-                self.diagnose()
+                # Run MC and diagnose if it did not converge
+                if not self.has_converged:
+                    if mpi.is_main_process:
+                        self.log(
+                            "[MC+DIAGNOSIS] Starting MC sampler "
+                            "(convergence not reached)...",
+                            level=4
+                        )
+                        with TimerCounter(self.gpr, self.old_gpr) as timer_mc:
+                            self.generate_mc_sample()
+                            if mpi.is_main_process:
+                                self.log(
+                                    "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
+                                    level=4,
+                                )
+                            diag_success = self.diagnose_last_mc_sample()
+                            mpi.sync_processes()
+                        if mpi.is_main_process:
+                            self.log(
+                                "[MC+DIAGNOSIS] Obtained MC sample. "
+                                f"Diagnosis passed: *{diag_success}*",
+                                level=3
+                            )
         self.has_run = True
 
     def logpost_eval_and_report(self, X, level=None):
@@ -1361,36 +1402,41 @@ class Runner():
             return self._last_mc_samples.to_getdist(model=self.model)
         return self._last_mc_samples
 
-    # TODO: recover, for tests about sampling overshoots
-    def diagnose(self):
+    def diagnose_last_mc_sample(self):
+        """
+        Diagnoses the last MC sample to check consistency.
+
+        This is an MPI-aware method that should be run simultaneously from all processes
+        if running with MPI.
+
+        Returns
+        -------
+        ``True`` if the test succeeded, ``False`` otherwise.
+        """
         if mpi.is_main_process:
-            lines = "Starting diagnosis\n"
-            lines += "- Evaluating corners"
-            self.log(lines)
-            bounds = self.model.prior.bounds()
-            ndim = len(bounds)
-            mesh = np.meshgrid(*bounds)
-            corners = np.stack(mesh, axis=-1).reshape(-1, ndim)
-            # Evaluate GP at all corners
-            vals_in_corners = self.gpr.predict(corners, validate=False)
-            # Check if at any point it's overshooting
-            higher_than_max = vals_in_corners > self.gpr.y_max
-            if np.sum(higher_than_max) > 0:
-                lines = f"WARNING: found {np.sum(higher_than_max)} corners\n"
-                lines += "where the GP predicts a higher value than its\n"
-                lines += "maximum. Reevaluating those corners..."
-                self.log(lines)
-                # Filter the points where the high values are predicted and
-                # evaluate the posterior distribution there
-                points_to_evaluate = np.atleast_2d(corners[higher_than_max])
-                new_vals = np.empty(len(points_to_evaluate))
-                for i, p in enumerate(points_to_evaluate):
-                    new_vals[i] = self.model.logpost(p)
-                    self.gpr.append_to_data(
-                        points_to_evaluate, new_vals, fit_gpr=True)
-                self._share_gpr()
-                # self.save_checkpoint()
-                self.log("...done.")
+            last_mc_samples = self.last_mc_samples(as_getdist=False)
+            first_third = int(np.floor(len(last_mc_samples) / 3))
+            mean_last_mc = last_mc_samples.mean(first=first_third)
+            cov_last_mc = last_mc_samples.cov(first=first_third)
+            mean_training, cov_training = mean_covmat_from_evals(
+                self.gpr.X_train, self.gpr.y_train
+            )
+            success = \
+                kl_norm(mean_last_mc, cov_last_mc, mean_training, cov_training) < self.d
+        success = mpi.comm.bcast(success if mpi.is_main_process else None)
+        if not hasattr(self.acquisition, "last_MC_sample"):
+            return success
+        if mpi.is_main_process:
+            X, _, _, w = self.acquisition.last_MC_sample(warn_reweight=False)
+            try:
+                mean_acq = np.average(X, weights=w, axis=0)
+                cov_acq = np.atleast_2d(np.cov(X.T, aweights=w, ddof=0))
+            except (ValueError, TypeError):
+                pass  # If failed, consider training test sufficient
+            else:
+                success &= kl_norm(mean_last_mc, cov_last_mc, mean_acq, cov_acq) < self.d
+        success = mpi.comm.bcast(success if mpi.is_main_process else None)
+        return success
 
     # pylint: disable=import-outside-toplevel
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
