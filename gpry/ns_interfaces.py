@@ -70,11 +70,11 @@ class InterfacePolyChord(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel,global-statement
+            # pylint: disable=import-outside-toplevel
             from pypolychord.settings import PolyChordSettings
             from pypolychord import run_polychord
 
-            global run_polychord
+            self.globals = {"run_polychord": run_polychord}
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
                 "External nested sampler Polychord cannot be imported. "
@@ -176,7 +176,7 @@ class InterfacePolyChord(NSInterface):
         # Flush stdout, since PolyChord can step over it if async (py not called with -u)
         sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
-            self.last_polychord_result = run_polychord(
+            self.last_polychord_result = self.globals["run_polychord"](
                 logp_func_wrapped,
                 nDims=self.dim,
                 nDerived=0,
@@ -251,11 +251,11 @@ class InterfaceNessai(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel,global-statement
+            # pylint: disable=import-outside-toplevel
             from nessai.model import Model as NessaiModel
             from nessai.flowsampler import FlowSampler
 
-            global NessaiModel, FlowSampler
+            self.globals = {"NessaiModel": NessaiModel, "FlowSampler": FlowSampler}
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
                 "External nested sampler 'nessai' cannot be imported. "
@@ -312,6 +312,8 @@ class InterfaceNessai(NSInterface):
         """
         if keep_all:
             raise NotImplementedError("keep_all=True not yet possible for nessai.")
+        NessaiModel = self.globals["NessaiModel"]
+        FlowSampler = self.globals["FlowSampler"]
 
         class MyNessaiModel(NessaiModel):
             """
@@ -389,10 +391,10 @@ class InterfaceUltraNest(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel,global-statement
+            # pylint: disable=import-outside-toplevel
             from ultranest import ReactiveNestedSampler
 
-            global ReactiveNestedSampler
+            self.globals = {"ReactiveNestedSampler": ReactiveNestedSampler}
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
                 "External nested sampler 'UltraNest' cannot be imported. "
@@ -454,8 +456,9 @@ class InterfaceUltraNest(NSInterface):
         if keep_all:
             raise NotImplementedError("keep_all=True not yet possible for ultranest.")
         # pylint: disable=consider-using-with
-        self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name
-        sampler = ReactiveNestedSampler(
+        if mpi.is_main_process:
+            self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name
+        sampler = self.globals["ReactiveNestedSampler"](
             param_names or generic_params_names(self.dim),
             logp_func,
             self.uniform_prior_transform,
