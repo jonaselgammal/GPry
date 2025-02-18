@@ -135,7 +135,8 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     keep_min_finite : int, optional (default: None)
         Minimum number of points to be considered finite, and this part of the GPR
         training set. Useful e.g. if a point with a much larger y-value than the rest is
-        suddenly found. If None or no infinities classifier selected, it has no effect.
+        suddenly found. If no infinities classifier selected, it has no effect. Otherwise,
+        if ``None``, is set to the dimensionality of the problem.
 
     bounds : array-like, shape=(n_dims,2), optional
         Array of bounds of the prior [lower, upper] along each dimension. Has
@@ -291,7 +292,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.trust_region_nstd = trust_region_nstd
         # Initialize SVM if necessary
         self.inf_threshold = inf_threshold
-        self.keep_min_finite = keep_min_finite
+        self.keep_min_finite = (
+            keep_min_finite if keep_min_finite is not None else max(2, self.d)
+        )
         if isinstance(account_for_inf, str) and account_for_inf.lower() == "svm":
             self.infinities_classifier = SVM(random_state=random_state)
         elif account_for_inf is False:
