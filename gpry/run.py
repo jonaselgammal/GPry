@@ -141,8 +141,10 @@ class Runner():
         Whether to resume from the checkpoint files if existing ones are found
         at the location specified by `checkpoint`.
 
-    seed: int, optional
-        Seed for the random number generator. Allows for reproducible runs.
+    seed: int or numpy.random.Generator, optional
+        Seed for the random number generator, or an already existing generator, for
+        reproducible runs. For MPI runs, if a seed is passed,
+        ``numpy.random.SeedSequence`` will be used to generate seeds for every ranks.
 
     plots : bool, dict (default: True)
         If True, produces some progress plots. One can also pass the arguments of
@@ -225,7 +227,7 @@ class Runner():
                 create_path(self.plots_path, verbose=self.verbose >= 3)
         self.plots = plots
         self.ensure_paths(plots=self.plots)
-        self.random_state = mpi.get_random_state(seed)
+        self.rng = mpi.get_random_generator(seed)
         if mpi.is_main_process:
             self.options = deepcopy(options) or {}
             # Check if a checkpoint exists already and if so resume from there
@@ -333,7 +335,7 @@ class Runner():
                 "preprocessing_X": Normalize_bounds(self.prior_bounds),
                 "preprocessing_y": Normalize_y(),
                 "bounds": self.prior_bounds,
-                "random_state": self.random_state,
+                "random_state": self.rng,
                 "verbose": self.verbose,
                 "account_for_inf": "SVM",
                 "inf_threshold": "20s"
@@ -390,7 +392,6 @@ class Runner():
             gp_acquisition_defaults = {
                 "bounds": self.prior_bounds,
                 "preprocessing_X": self.gpr.preprocessing_X,
-                "random_state": self.random_state,
                 "acq_func": {"LogExp": {"zeta_scaling": 0.85}},
                 "verbose": self.verbose,
             }
@@ -444,7 +445,7 @@ class Runner():
                     self.model, **initial_proposer_args)
             elif propname_nosuffix == "uniform":
                 self.initial_proposer = UniformProposer(
-                    self.prior_bounds, **initial_proposer_args)
+                    **initial_proposer_args)
             elif propname_nosuffix == "meancov":
                 self.initial_proposer = MeanCovProposer(
                     **initial_proposer_args)
@@ -689,7 +690,7 @@ class Runner():
         if not mpi.multiple_processes:
             return
         mpi.share_attr(self, "gpr", root=root)
-        self.gpr.set_random_state(self.random_state)
+        self.gpr.set_random_state(self.rng)
 
     def _share_convergence_from_main(self):
         """
@@ -775,7 +776,7 @@ class Runner():
                     self.gpr,
                     n_points=self.n_points_per_acq,
                     bounds=self.gpr.trust_bounds,
-                    random_state=self.random_state,
+                    rng=self.rng,
                     force_resample=force_resample,
                 )
                 # Check whether any of the points in new_X are either already in the
@@ -1062,7 +1063,7 @@ class Runner():
                     proposer_tries = 0
                     warn_multiple = 10 * self.gpr.d
                     while not X_in_bounds:
-                        X = self.initial_proposer.get(random_state=self.random_state)
+                        X = self.initial_proposer.get(rng=self.rng)
                         X_in_bounds = is_in_bounds(
                             X, self.prior_bounds, check_shape=False
                         )[0]

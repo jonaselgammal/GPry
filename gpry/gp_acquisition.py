@@ -46,7 +46,6 @@ class GenericGPAcquisition():
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
                  ):
@@ -54,7 +53,6 @@ class GenericGPAcquisition():
         self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
         self.verbose = verbose
-        self.random_state = random_state
         if gpryacqfuncs.is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif isinstance(acq_func, (Mapping, str)):
@@ -88,10 +86,40 @@ class GenericGPAcquisition():
         """Returns the value of the acquision function at ``X`` given a ``gpr``."""
         return self.acq_func(X, gpr, eval_gradient=eval_gradient)
 
-    def multi_add(self, gpr, n_points=1, bounds=None, random_state=None):
-        """
-        Method to query multiple points where the objective function
+    def multi_add(self, gpr, n_points=1, bounds=None, rng=None):
+        r"""Method to query multiple points where the objective function
         shall be evaluated.
+
+        The strategy differs depending on the acquisition class.
+
+        When run in parallel (MPI), it must return the same values for all processes.
+
+        Parameters
+        ----------
+        gpr : GaussianProcessRegressor
+            The GP Regressor which is used as surrogate model.
+
+        n_points : int, optional (default=1)
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
+
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
+
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
+
+        Returns
+        -------
+        X : numpy.ndarray, shape = (X_dim, n_points)
+            The X values of the found optima
+        y_lies : numpy.ndarray, shape = (n_points,)
+            The predicted values of the GP at the proposed sampling locations
+        fval : numpy.ndarray, shape = (n_points,)
+            The values of the acquisition function at X_opt
         """
 
 
@@ -170,11 +198,6 @@ class BatchOptimizer(GenericGPAcquisition):
         from the space of allowed X-values. Note that n_restarts_optimizer == 0
         implies that one run is performed.
 
-    random_state : int or numpy.RandomState, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
-
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -190,7 +213,6 @@ class BatchOptimizer(GenericGPAcquisition):
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
                  # Class-specific:
@@ -200,7 +222,7 @@ class BatchOptimizer(GenericGPAcquisition):
                  n_repeats_propose=10,
                  ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
+            bounds=bounds, preprocessing_X=preprocessing_X,
             verbose=verbose, acq_func=acq_func,
         )
         self.proposer = proposer
@@ -250,7 +272,7 @@ class BatchOptimizer(GenericGPAcquisition):
         self.mean_ = None
         self.cov = None
 
-    def optimize_acquisition_function(self, gpr, i, bounds=None, random_state=None):
+    def optimize_acquisition_function(self, gpr, i, bounds=None, rng=None):
         """Exposes the optimization method for the acquisition function. When
         called it proposes a single point where for where to evaluate the true
         model next. It is internally called in the :meth:`multi_add` method.
@@ -265,10 +287,8 @@ class BatchOptimizer(GenericGPAcquisition):
             to optimize from a single location and rerun the optimizer from
             multiple starting locations loop over this parameter.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : numpy.random.Generator, optional
+            The generator used for the optimization process.
 
         Returns
         -------
@@ -337,7 +357,7 @@ class BatchOptimizer(GenericGPAcquisition):
             values = np.empty(self.n_repeats_propose + 1)
             ifull = 0
             for n_try in range(n_tries):
-                x0 = self.proposer.get(random_state=random_state)
+                x0 = self.proposer.get(rng=rng)
                 value = self.acq_func(x0, gpr)
                 if not np.isfinite(value):
                     continue
@@ -370,7 +390,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 return x0, -1 * value
 
     def multi_add(
-            self, gpr, n_points=1, bounds=None, random_state=None, force_resample=False
+            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
     ):
         r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
@@ -379,7 +399,7 @@ class BatchOptimizer(GenericGPAcquisition):
 
         This is done to increase speed since then the blockwise matrix
         inversion lemma can be used to invert the K matrix. The optimization
-        for a single point is done using the :meth:`optimize_acq_func` method.
+        for a single point is done using the :meth:`optimize_acquisition_func` method.
 
         When run in parallel (MPI), returns the same values for all processes.
 
@@ -389,22 +409,17 @@ class BatchOptimizer(GenericGPAcquisition):
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
-            Number of points returned by the optimize method
-            If the value is 1, a single point to evaluate is returned.
-
-            Otherwise a list of points to evaluate is returned of size
-            n_points. This is useful if you can evaluate your objective
-            in parallel, and thus obtain more objective function evaluations
-            per unit of time.
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
 
         bounds : np.array, optional
             Bounds inside which to look for the next proposals, e.g. the GPR trust region.
             If not defined, the prior bounds are used.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
 
         Returns
         -------
@@ -417,9 +432,9 @@ class BatchOptimizer(GenericGPAcquisition):
         """
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
-            raise ValueError(
-                "n_points should be int > 0, got " + str(n_points)
-            )
+            raise ValueError(f"n_points should be int > 0, got {n_points}")
+        # Create (parallel) generator(s) if int passed as rng
+        rng = mpi.get_random_generator(rng)
         use_bounds = self.bounds_ if bounds is None else bounds
         if mpi.is_main_process:
             # Initialize arrays for storing the optimized points
@@ -442,8 +457,7 @@ class BatchOptimizer(GenericGPAcquisition):
             # (done in parallel)
             for i in range(n_acq_this_process):
                 proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
-                    gpr_, i + i_acq_this_process,
-                    bounds=use_bounds, random_state=random_state
+                    gpr_, i + i_acq_this_process, bounds=use_bounds, rng=rng
                 )
             proposal_X_main, acq_X_main = mpi.multi_gather_array(
                 [proposal_X, acq_X])
@@ -533,11 +547,6 @@ class NORA(GenericGPAcquisition):
         If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
         otherwise, recomputing y and sigma with the new GPR.
 
-    random_state : int or numpy.RandomState, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
-
     nlive_per_training: int
         live points per sample in the current training set.
         Not recommended to decrease it.
@@ -576,7 +585,6 @@ class NORA(GenericGPAcquisition):
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
                  # Class-specific:
@@ -593,7 +601,7 @@ class NORA(GenericGPAcquisition):
                  tmpdir=None,
                  ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
+            bounds=bounds, preprocessing_X=preprocessing_X,
             verbose=verbose, acq_func=acq_func,
         )
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
@@ -723,7 +731,7 @@ class NORA(GenericGPAcquisition):
             tmpdir += "/"
         return tmpdir
 
-    def do_MC_sample(self, gpr, bounds, random_state=None, sampler=None):
+    def do_MC_sample(self, gpr, bounds, rng=None, sampler=None):
         """
 
         Returns
@@ -734,27 +742,27 @@ class NORA(GenericGPAcquisition):
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
-            return self._do_MC_sample_uniform(gpr, random_state, bounds=bounds)
+            return self._do_MC_sample_uniform(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "polychord":
-            return self._do_MC_sample_polychord(gpr, random_state, bounds=bounds)
+            return self._do_MC_sample_polychord(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "ultranest":
-            return self._do_MC_sample_ultranest(gpr, random_state, bounds=bounds)
+            return self._do_MC_sample_ultranest(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "nessai":
-            return self._do_MC_sample_nessai(gpr, random_state, bounds=bounds)
+            return self._do_MC_sample_nessai(gpr, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
-    def _do_MC_sample_uniform(self, gpr, random_state, bounds=None):
+    def _do_MC_sample_uniform(self, gpr, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
         n_total = 1000 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
-            X[i] = proposer.get(random_state=random_state)
+            X[i] = proposer.get(rng=rng)
         return X, None, None, None
 
-    def _do_MC_sample_polychord(self, gpr, random_state, bounds=None):
+    def _do_MC_sample_polychord(self, gpr, bounds=None, rng=None):
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
             """
@@ -779,7 +787,7 @@ class NORA(GenericGPAcquisition):
         y_MC = None
         return X_MC, y_MC, None, w_MC
 
-    def _do_MC_sample_ultranest(self, gpr, random_state, bounds=None):
+    def _do_MC_sample_ultranest(self, gpr, bounds=None, rng=None):
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
@@ -812,7 +820,7 @@ class NORA(GenericGPAcquisition):
         return X_MC, y_MC, None, w_MC
 
     # pylint: disable=import-outside-toplevel
-    def _do_MC_sample_nessai(self, gpr, random_state, bounds=None):
+    def _do_MC_sample_nessai(self, gpr, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         if mpi.multiple_processes:
@@ -975,7 +983,7 @@ class NORA(GenericGPAcquisition):
         return mcsamples
 
     def multi_add(
-            self, gpr, n_points=1, bounds=None, random_state=None, force_resample=False
+            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
     ):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
@@ -997,22 +1005,17 @@ class NORA(GenericGPAcquisition):
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
-            Number of points returned by the optimize method
-            If the value is 1, a single point to evaluate is returned.
-
-            Otherwise a list of points to evaluate is returned of size
-            n_points. This is useful if you can evaluate your objective
-            in parallel, and thus obtain more objective function evaluations
-            per unit of time.
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
 
         bounds : np.array, optional
             Bounds inside which to look for the next proposals, e.g. the GPR trust region.
             If not defined, the prior bounds are used.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
 
         Returns
         -------
@@ -1026,15 +1029,16 @@ class NORA(GenericGPAcquisition):
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(f"n_points should be int > 0, got {n_points}")
+        # Create (parallel) generator(s) if int passed as rng
+        rng = mpi.get_random_generator(rng)
         # Gather an MC sample, only not-None for rank 0; bcasted by _split_and_compute_acq
         if mpi.is_main_process:
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
         if mc_sample_this_time:
             self._set_MC_sample(
-                *self.do_MC_sample(
-                    gpr, bounds=bounds, random_state=random_state
-                ), ensure_y_sigma_y=True, gpr=gpr
+                *self.do_MC_sample(gpr, bounds=bounds, rng=rng),
+                ensure_y_sigma_y=True, gpr=gpr
             )
             self._X_already_proposed = np.empty(shape=(0, gpr.d))
         else:

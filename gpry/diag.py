@@ -108,7 +108,10 @@ def diagnosis(runner):
         plot_trace, plot_slices, plot_slices_reference, \
         getdist_add_training, _plot_2d_model_acquisition_std
     # Do not plot if sample reweighted, to save time
-    if not runner.acquisition.is_last_MC_reweighted:
+    if (
+            not hasattr(runner.acquisition, "is_last_MC_reweighted") or
+            not runner.acquisition.is_last_MC_reweighted
+    ):
         try:
             plot_trace(
                 runner.model, runner.gpr, runner.convergence,

@@ -15,7 +15,7 @@ is_main_process = not bool(RANK)
 multiple_processes = SIZE > 1
 
 
-def get_random_state(seed=None):
+def get_random_generator(seed=None):
     """
     Generates seed sequences for processes running in parallel.
 

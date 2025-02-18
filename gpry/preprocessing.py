@@ -343,21 +343,22 @@ class Normalize_bounds:
     """
 
     def __init__(self, bounds):
-        _ = self.transform_bounds(bounds)
+        self.update_bounds(bounds)
         self.fitted = True  # only needs fitting at init
 
-    def transform_bounds(self, bounds):
+    def update_bounds(self, bounds):
         bounds = np.asarray(bounds)
         self.bounds = bounds
-        transformed_bounds = np.ones_like(bounds)
-        transformed_bounds[:, 0] = 0
-        self.transformed_bounds = transformed_bounds
         self.bounds_min = bounds[:, 0]
         self.bounds_max = bounds[:, 1]
         if np.any(self.bounds_min > self.bounds_max):
             raise ValueError(
                 "The bounds must be in dimension-wise order " "min->max, got \n" + bounds
             )
+
+    def transform_bounds(self, bounds):
+        transformed_bounds = np.ones_like(bounds)
+        transformed_bounds[:, 0] = 0
         return transformed_bounds
 
     def fit(self, X, y):

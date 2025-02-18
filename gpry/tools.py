@@ -13,6 +13,7 @@ from numpy.linalg import det
 from scipy.linalg import eigh
 from scipy.special import gamma, erfc
 from scipy.stats import chi2
+from sklearn.utils import check_random_state as check_random_state_sklearn
 from cobaya.model import get_model
 
 
@@ -139,9 +140,7 @@ def check_random_state(seed, convert_to_random_state=False):
         if convert_to_random_state:
             seed = np.random.RandomState(seed.bit_generator)
         return seed
-    from sklearn.utils import check_random_state
-
-    return check_random_state(seed)
+    return check_random_state_sklearn(seed)
 
 
 def generic_params_names(n, prefix="x_"):

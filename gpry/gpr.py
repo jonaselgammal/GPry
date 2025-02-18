@@ -156,10 +156,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         account training points corresponding to a significance (assuming a Gaussian
         posterior) equivalent to this value in 1d standard deviations.
 
-    random_state : int or `numpy RandomState <https://numpy.org/doc/stable/reference/random/legacy.html?highlight=randomstate#numpy.random.RandomState>`_, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
+    random_state : int or numpy.random.Generator, optional
+        The generator used to perform random operations of the GPR. If an integer is
+        given, it is used as a seed for the default global numpy random number generator.
 
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity of the GP. 3 prints Infos, Warnings and Errors, 2

@@ -54,7 +54,7 @@ class Proposer(metaclass=ABCMeta):
     """
 
     @abstractmethod
-    def get(self, random_state=None):
+    def get(self, rng=None):
         """
         Returns a random sample (given a certain random state) in the parameter space for
         getting initial training samples or the acquisition function to be optimized from.
@@ -64,10 +64,9 @@ class Proposer(metaclass=ABCMeta):
 
         Parameters
         ----------
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : int or numpy.random.Generator, optional
+            The generator used to propose points. If an integer is given, it is used as a
+            seed for the default global numpy random number generator.
         """
 
     # pylint: disable=attribute-defined-outside-init
@@ -126,13 +125,13 @@ class ReferenceProposer(Proposer, InitialPointProposer):
         self.ignore_fixed = ignore_fixed
 
     @check_in_bounds
-    def get(self, random_state=None):
+    def get(self, rng=None):
         ref = self.prior.reference(
             max_tries=self.max_tries,
             warn_if_tries=self.warn_if_tries,
             ignore_fixed=self.ignore_fixed,
             warn_if_no_ref=self.warn,
-            random_state=random_state,
+            random_state=rng,
         )
         self.warn = False
         return ref
@@ -158,8 +157,8 @@ class PriorProposer(Proposer, InitialPointProposer):
         )
 
     @check_in_bounds
-    def get(self, random_state=None):
-        return self.model.prior.sample(random_state=random_state)[0]
+    def get(self, rng=None):
+        return self.model.prior.sample(random_state=rng)[0]
 
 
 class UniformProposer(Proposer, InitialPointProposer):
@@ -185,8 +184,8 @@ class UniformProposer(Proposer, InitialPointProposer):
         self.proposal_function = partial(proposal_pdf.rvs, size=n_d)
 
     # Within updated bounds by construction: no need to decorate it.
-    def get(self, random_state=None):
-        return self.proposal_function(random_state=random_state)
+    def get(self, rng=None):
+        return self.proposal_function(random_state=rng)
 
 
 class PartialProposer(Proposer, InitialPointProposer):
@@ -224,18 +223,17 @@ class PartialProposer(Proposer, InitialPointProposer):
             raise ValueError("The true proposer needs to be a valid proposer.")
 
         self.rpf = random_proposal_fraction
-        # ToDo: Make this a sample of the prior instead of uniform hypercube.
+        # TODO: Make this a sample of the prior instead of uniform hypercube.
         self.random_proposer = UniformProposer(bounds)
         self.true_proposer = true_proposer
 
     # Not decorating it, assuming the individual ones fulfil the in-bounds criterion,
     # either by construction or because of their own ``check_in_bounds`` decorator.
-    def get(self, random_state=None):
-        rng = check_random_state(random_state)
+    def get(self, rng=None):
+        rng = check_random_state(rng)
         if rng.random() > self.rpf:
-            return self.true_proposer.get(random_state=rng)
-        else:
-            return self.random_proposer.get(random_state=rng)
+            return self.true_proposer.get(rng=rng)
+        return self.random_proposer.get(rng=rng)
 
     def update(self, gpr):
         self.true_proposer.update(gpr)
@@ -277,12 +275,12 @@ class MeanCovProposer(Proposer, InitialPointProposer):
         ).rvs
 
     @check_in_bounds
-    def get(self, random_state=None):
+    def get(self, rng=None):
         if not self._mean_used:
             self._mean_used = True
             if mpi.is_main_process:
                 return self._mean
-        return self.proposal_function(random_state=random_state)
+        return self.proposal_function(random_state=rng)
 
 
 # UNUSED (not really, but should not be here, being specific to one problem)
@@ -313,8 +311,8 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
             self.proposal_function = model.prior.sample
 
     @check_in_bounds
-    def get(self, random_state=None):
-        return self.proposal_function(random_state=random_state)
+    def get(self, rng=None):
+        return self.proposal_function(random_state=rng)
 
 
 # UNUSED
@@ -355,17 +353,17 @@ class SmallChainProposer(Proposer):
         self.random_proposer = UniformProposer(bounds)
 
     @check_in_bounds
-    def get(self, random_state=None):
+    def get(self, rng=None):
         if len(self.samples) > 0:
             last, self.samples = self.samples[-1], self.samples[:-1]
             return last
         else:
-            self.resample(random_state)
+            self.resample(rng)
             last, self.samples = self.samples[-1], self.samples[:-1]
             return last
 
-    def resample(self, random_state=None):
-        rng = check_random_state(random_state)
+    def resample(self, rng=None):
+        rng = check_random_state(rng)
         for i in range(self.nretries):
             this_i = rng.choice(range(len(self.gpr.X_train)))
             this_X = np.copy(self.gpr.X_train[this_i])
@@ -431,8 +429,8 @@ class CentroidsProposer(Proposer):
         return len(self.bounds)
 
     # No need for check_in_bounds, by construction
-    def get(self, random_state=None):
-        rng = check_random_state(random_state)
+    def get(self, rng=None):
+        rng = check_random_state(rng)
         m = self.d + 1
         subset = self.training[rng.choice(len(self.training), size=m, replace=False)]
         centroid = np.average(subset, axis=0)
