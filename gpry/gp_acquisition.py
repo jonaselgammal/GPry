@@ -617,12 +617,6 @@ class NORA(GenericGPAcquisition):
         # Configure nested sampler
         self.sampler = sampler
         self._init_nested_sampler()
-        # TODO: fix this! and adapt to all codes (set_rng method for interfaces)
-        # # Using rng state as seed for PolyChord
-        # if self.random_state is not None:
-        #     self.polychord_settings.seed = \
-        #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
-        # Prepare precision parameters
         self.nlive_per_training = nlive_per_training
         if nlive_per_dim_max is not None:
             self.log(
@@ -685,9 +679,10 @@ class NORA(GenericGPAcquisition):
             self.sampler_interface = \
                 _NORA_ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
         except (AttributeError, KeyError) as excpt:
-            raise ValueError(
-                f"No interface found for the requested nested sampler '{this_sampler}'. "
-                f"Use one of {list(_NORA_ns_interfaces)}"
+            if this_sampler.lower() != "uniform":
+                raise ValueError(
+                    "No interface found for the requested nested sampler "
+                    f"'{this_sampler}'. Use one of {list(_NORA_ns_interfaces)}"
             ) from excpt
         self.sampler = this_sampler
 
@@ -756,6 +751,7 @@ class NORA(GenericGPAcquisition):
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
+    # TODO: merge samples for >1 MPI processes.
     def _do_MC_sample_uniform(self, gpr, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
@@ -778,12 +774,15 @@ class NORA(GenericGPAcquisition):
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
         self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
+        # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
+        seed = rng.integers(2**31 - 1) if rng is not None else None
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
             logp,
             out_dir=self._get_output_folder(),
-            keep_all=False
+            keep_all=False,
+            seed=seed,
         )
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
@@ -813,6 +812,12 @@ class NORA(GenericGPAcquisition):
             if k in ["nlive", "precision_criterion", "max_ncalls"]
         }
         self.sampler_interface.set_precision(**prec_settings)
+        # Seeding -- for now UltraNest does not accept an rng or a seed, only setting the
+        # np.random seed globally, which is dangerous!
+        # TODO: Create a PR for taking a custom RNG in UltraNest.
+        if rng is not None:
+            if mpi.is_main_process:
+                warnings.warn("Seeded runs are not supported for UltraNest.")
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
             logp, out_dir=self._get_output_folder(), keep_all=False
@@ -847,11 +852,14 @@ class NORA(GenericGPAcquisition):
             if k in ["nlive", "precision_criterion"]
         }
         self.sampler_interface.set_precision(**prec_settings)
+        # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
+        seed = rng.integers(2**31 - 1) if rng is not None else None
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
             logp,
             out_dir=self._get_output_folder(),
-            keep_all=False
+            keep_all=False,
+            seed=seed,
         )
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through

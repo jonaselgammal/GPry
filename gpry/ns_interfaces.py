@@ -45,7 +45,7 @@ class NSInterface(ABC):
         """Sets precision parameters for the nested sampler."""
 
     @abstractmethod
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
         """
         Runs the nested sampler.
 
@@ -128,7 +128,7 @@ class InterfacePolyChord(NSInterface):
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
         """
         Runs the nested sampler.
 
@@ -171,6 +171,10 @@ class InterfacePolyChord(NSInterface):
                 file_root = "ns_samples"
             self.polychord_settings.base_dir = base_dir
             self.polychord_settings.file_root = file_root
+        # Set seed (only that of rank 0 is used, and incremented internally by PolyChord)
+        # See line 83 in PolyChordLite/src/polychord/random_utils.F90
+        if seed is not None:
+            self.polychord_settings.seed = seed
         mpi.share_attr(self, "polychord_settings")
         # Run PolyChord!
         # Flush stdout, since PolyChord can step over it if async (py not called with -u)
@@ -302,7 +306,7 @@ class InterfaceNessai(NSInterface):
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
         """
         Runs the nested sampler.
 
@@ -354,6 +358,7 @@ class InterfaceNessai(NSInterface):
             sampler = FlowSampler(
                 MyNessaiModel(self.bounds, param_names=param_names),
                 output=self.output,
+                seed=seed,
                 **self.flow_sampler_settings,
                 **self.precision_settings,
             )
@@ -445,7 +450,7 @@ class InterfaceUltraNest(NSInterface):
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False):
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
         """
         Runs the nested sampler.
 
