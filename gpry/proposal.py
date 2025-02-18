@@ -414,11 +414,9 @@ class CentroidsProposer(Proposer):
     """
 
     def __init__(self, bounds, lambd=1.0):
-        self.update_bounds(bounds)
-        # Set bounds to None as we want to be able to initialize the proposer
-        # before we have trained our model and it's updated in the propose
-        # method.
         self.training = None
+        self.training_ = None  # in-bounds subset
+        self.update_bounds(bounds)
         # TODO: adapt lambda to dimensionality!
         # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
         self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
@@ -428,11 +426,19 @@ class CentroidsProposer(Proposer):
         """Dimensionality of the prior."""
         return len(self.bounds)
 
-    # No need for check_in_bounds, by construction
+    # No need for check_in_bounds, by construction (uses np.clip)
     def get(self, rng=None):
         rng = check_random_state(rng)
         m = self.d + 1
-        subset = self.training[rng.choice(len(self.training), size=m, replace=False)]
+        # If possible, get points inside bounds, otherwise outside (1st iteration(s))
+        try:
+            subset = self.training_[
+                rng.choice(len(self.training_), size=m, replace=False)
+            ]
+        except ValueError:  # m > len(training_)
+            subset = self.training[
+                rng.choice(len(self.training), size=m, replace=False)
+            ]
         centroid = np.average(subset, axis=0)
         # perturb the point: per dimension, add a random multiple of the difference
         # between the centroid and one of the points.
@@ -450,3 +456,10 @@ class CentroidsProposer(Proposer):
     def update(self, gpr):
         # Get training locations from gpr and save them
         self.training = np.copy(gpr.X_train)
+
+    def update_bounds(self, bounds):
+        super().update_bounds(bounds)
+        # Save training samples inside new bounds
+        if self.training is None:
+            return
+        self.training_ = self.training[is_in_bounds(self.training, bounds)]

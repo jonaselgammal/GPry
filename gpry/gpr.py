@@ -554,15 +554,22 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
     def update_trust_region(self):
         """
         Adjusts the boundaries of the trust region.
+
+        Keeps at least ``d`` points, temporarily lowering the threshold if needed.
         """
         if self.trust_region_factor is None:
             return
-        use_X = self.X_train
-        if self.trust_region_nstd is not None:
-            use_X = use_X[
-                np.where(max(self.y_train) - self.y_train <
-                         delta_logp_of_1d_nstd(self.trust_region_nstd, self.d))
-            ]
+        if self.trust_region_nstd is None:
+            use_X = self.X_train
+        else:
+            trust_region_nstd_ = self.trust_region_nstd
+            use_X = np.empty(shape=(0, self.X_train.shape[1]))
+            while len(use_X) < min(self.d, self.n):
+                use_X = self.X_train[
+                    np.where(max(self.y_train) - self.y_train <
+                             delta_logp_of_1d_nstd(trust_region_nstd_, self.d))
+                ]
+                trust_region_nstd_ = trust_region_nstd_ + 0.1
         self.trust_bounds = shrink_bounds(
             self.bounds, use_X, factor=self.trust_region_factor
         )
