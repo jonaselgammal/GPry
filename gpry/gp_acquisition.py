@@ -345,8 +345,12 @@ class BatchOptimizer(GenericGPAcquisition):
             transformed_bounds = use_bounds
 
         if i == 0:
-            # Perform first run from last training point
-            x0 = gpr.X_train[-1]
+            # Perform first run from last (in-bounds) training point.
+            # Cannot raise StopIteration if trust_region contains at least one point!
+            x0 = next(
+                X for X in gpr.X_train[::-1]
+                if np.all(is_in_bounds(X, bounds, check_shape=False))
+            )
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
             return self._constrained_optimization(self.obj_func, x0, transformed_bounds)
