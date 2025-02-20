@@ -1412,6 +1412,7 @@ class Runner():
             ignore_rows=0,
         )
         return mcsamples
+
     def plot_progress(
             self,
             ext="svg",
@@ -1419,6 +1420,7 @@ class Runner():
             convergence=True,
             trace=True,
             slices=False,
+            corner=False,
     ):
         """
         Creates some progress plots and saves them at path (assumes path exists).
@@ -1439,12 +1441,19 @@ class Runner():
             parameters.
 
         slices : bool (default: False)
-            Plots slices per training samples (slow, use for diagnosis only).
+            Plots slices per training samples.
+            Slow -- use for diagnosis only.
+
+        corner : bool (default: False)
+            Creates a corner plot (contours for current GP shown only if using NORA).
+            Slow -- use for diagnosis only.
         """
         if not mpi.is_main_process:
             return
         self.ensure_paths(plots=True)
-        import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+        # pylint: disable=import-outside-toplevel
+        import matplotlib
+        import matplotlib.pyplot as plt
         if timing:
             self.progress.plot_timing(
                 truth=True, save=os.path.join(self.plots_path, f"timing.{ext}")
@@ -1463,6 +1472,39 @@ class Runner():
         if slices:
             gpplt.plot_slices(self.model, self.gpr, self.acquisition)
             plt.savefig(os.path.join(self.plots_path, f"slices.{ext}"))
+        if corner:
+            mc_samples = {}
+            filled = {}
+            if self.fiducial_MC_X is not None:
+                mc_samples["Fiducial"] = self._fiducial_MC_as_getdist()
+            if hasattr(self.acquisition, "last_MC_sample"):
+                nora_key = f"Last NORA sample ({len(self.gpr.X_train_all)} evals.)"
+                mc_samples[nora_key] = self.acquisition.last_MC_sample_getdist(self.model)
+            markers = {}
+            if self.fiducial_X is not None:
+                markers = dict(
+                    zip(self.model.parameterization.sampled_params(), self.fiducial_X)
+                )
+            output_corner = os.path.join(
+                self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
+            )
+            # Temporarily switch to Agg backend
+            prev_backend = matplotlib.get_backend()
+            matplotlib.use("Agg")
+            try:
+                gpplt.plot_corner_getdist(
+                    mc_samples,
+                    filled=filled,
+                    training={nora_key: self.gpr},
+                    markers=markers,
+                    output=output_corner,
+                    output_dpi=200,
+                )
+            except Exception as excpt:  # pylint: disable=broad-exception-caught
+                warnings.warn(str(excpt))
+            finally:
+                # Switch back to prev backend
+                matplotlib.use(prev_backend)
         plt.close("all")
 
     def generate_mc_sample(
