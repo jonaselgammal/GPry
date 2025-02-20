@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from tqdm import tqdm
 
 from gpry.gpr import GaussianProcessRegressor
 from gpry.mc import process_gdsamples
@@ -21,6 +22,7 @@ from gpry.tools import (
     volume_sphere,
     gaussian_distance,
     delta_logp_of_1d_nstd,
+    generic_params_names,
 )
 
 # Use latex labels when available
@@ -50,18 +52,193 @@ def param_samples_for_slices(X, i, bounds, n=200):
     generates a list of points per sample, where the `i` coordinate is sliced within the
     region defined by `bounds`, and the rest of them are kept fixed.
     """
-    # TODO: could take a GPR, reduce the limits to finite region, and resample.
-    #       The while loop is a leftover from an attempt.
     X = np.atleast_2d(X)
-    bounds_changed = True
-    while bounds_changed:
-        Xs_i = np.linspace(bounds[0], bounds[1], n)
-        X_slices = np.empty(shape=(X.shape[0], n, X.shape[1]), dtype=float)
-        for j, X_j in enumerate(X):
-            X_slices[j, :, :] = n * [X_j]
-        X_slices[:, :, i] = Xs_i
-        break
+    Xs_i = np.linspace(bounds[0], bounds[1], n)
+    X_slices = np.empty(shape=(X.shape[0], n, X.shape[1]), dtype=float)
+    for j, X_j in enumerate(X):
+        X_slices[j, :, :] = n * [X_j]
+    X_slices[:, :, i] = Xs_i
     return X_slices
+
+
+def prepare_slices_func(func, X_fiducial, bounds, indices=None, n=50):
+    """
+    Prepare slices of the given function,
+
+    Parameters
+    ----------
+    func : callable
+        Function for which to prepare slices. It needs to take arguments in the way
+        ``X_fiducial`` is passed: ``func(*X_fiducial)`` if ``X_fiducual`` is a list, or
+        ``func(**X_fiducial)`` if X_fiducial is a dictionary.
+
+    X_fiducial : array-like, shape = (n_dimensions), or dict
+        Fiducial point for the slices: slice ``i`` corresponds to fixing all parameters
+        but that with index ``i``, which is evaluaded on a grid within its bounds. It can
+        be a dictionary with arguments of ``func`` as keys.
+
+    bounds : array-like, shape = (n_dimensions, 2), or dict
+        Bounds for the slices per parameter.
+
+    indices : list, optional
+        A list of integers (if ``X_fiducial`` is a list) or parameter names (if
+        ``X_fiducial`` is a dict), denoting the parameters for which the slices will be
+        prepared (all of them, if left unspecified).
+
+    n : int
+        Number of samples per slice (default: 50). Careful if the posterior is slow!
+
+    Returns
+    -------
+    indices, params, Xs, ys : list(int), list(str) len=len(indices), array-like
+                     shape=(len(indices), n, dim)), array-like shape=(len(indices, n))
+    """
+    # Parse and check input
+    if isinstance(X_fiducial, Mapping):
+        is_kwarg = True
+        dim = len(X_fiducial)
+        X_fiducial = np.array(list(X_fiducial.values()))
+        params = list(X_fiducial)
+        if indices is None:
+            indices = params
+        try:  # Assumes indices is a list of str
+            indices = [params.index(p) for p in indices]
+        except ValueError as excpt:
+            raise ValueError(
+                "`indices` is not a list of parameter names, or contains names not in "
+                "`X_fiducial`."
+            ) from excpt
+        try:  # Assumes bonds is a Mapping
+            bounds = [bounds[p] for p in params]
+        except (TypeError, IndexError) as excpt:
+            raise ValueError(
+                "`bounds` is not a dict, or bounds could not be founds for all "
+                "parameters."
+            ) from excpt
+    else:
+        is_kwarg = False
+        X_fiducial = np.atleast_1d(X_fiducial)
+        dim = len(X_fiducial)
+        params = generic_params_names(dim)
+        if indices is None:
+            indices = list(range(dim))
+        # Assumes indices is a list of int
+        if not all((isinstance(i, int) and i < dim) for i in indices):
+            raise ValueError(
+                "`indices` is not a list of integer indices, or contains indices larger "
+                "than the length of `X_fiducial`."
+            )
+        # Assumes bonds is a (2d) list
+        if len(bounds) < len(params):
+            raise ValueError("`bounds` is not a list of bounds of the right lenght.")
+    if not isinstance(n, int) or n < 2:
+        raise ValueError("`n` must be a positive integer > 2.")
+    # Prepare and evaluate slices
+    Xs, ys = np.empty(shape=(len(indices), n, dim)), np.empty(shape=(len(indices), n))
+    for j, index in enumerate(indices):
+        Xs[j] = param_samples_for_slices([X_fiducial], index, bounds[index], n=n)[0]
+        progress_bar_desc = f"Slicing param {j + 1} of {len(indices)}"
+        for k, x in tqdm(enumerate(Xs[j]), total=n, desc=progress_bar_desc):
+            try:
+                if is_kwarg:
+                    x_arg = dict(zip(params, x))
+                    ys[j][k] = func(**x_arg)
+                else:
+                    x_arg = x
+                    ys[j][k] = func(*x_arg)
+            except TypeError as excpt:
+                raise TypeError(
+                    f"Could not call the target function with arguments {x_arg}. Maybe "
+                    "`X_fiducial` contained keys that are not argument names of the "
+                    f"function? Err msg: {excpt}"
+                ) from excpt
+            except Exception as excpt:  # pylint: disable=broad-exception-caught
+                warnings.warn(
+                    f"The function failed when called with arguments {x_arg}. Using NaN."
+                    f"Err masg: {excpt}"
+                )
+                ys[j][k] = np.nan
+    return indices, [params[i] for i in indices], Xs, ys
+
+
+def plot_slices_func(
+        func, X_fiducial, bounds, indices=None, n=50, fig_kwargs=None, labels=None,
+):
+    """
+    Plot slices of the given function,
+
+    Parameters
+    ----------
+
+    func : callable
+        Function for which to prepare slices. It needs to take arguments in the way
+        ``X_fiducial`` is passed: ``func(*X_fiducial)`` if ``X_fiducual`` is a list, or
+        ``func(**X_fiducial)`` if X_fiducial is a dictionary.
+
+    X_fiducial : array-like, shape = (n_dimensions), or dict
+        Fiducial point for the slices: slice ``i`` corresponds to fixing all parameters
+        but that with index ``i``, which is evaluaded on a grid within its bounds. It can
+        be a dictionary with arguments of ``func`` as keys.
+
+    bounds : array-like, shape = (n_dimensions, 2), or dict
+        Bounds for the slices per parameter.
+
+    indices : list, optional
+        A list of integers (if ``X_fiducial`` is a list) or parameter names (if
+        ``X_fiducial`` is a dict), denoting the parameters for which the slices will be
+        prepared (all of them, if left unspecified).
+
+    n : int
+        Number of samples per slice (default: 50). Careful if the posterior is slow!
+
+    fig_kwargs : dict, optional
+        Dict of kw arguments to pass to the `subplots` constructor. Only ``layout``,
+        ``dpi`` considered safe.
+
+    labels : lst(str), optional
+        Strings (possibly Latex) to use for axes labels. Length cases: None or len=0:
+        plain parameter names for x labels and no y label; len=1: used as y label, plain
+        names for x labels; len=len(indices): used as x labels; len=len(indices)+1: used
+        as x labels and y label, in that order.
+
+    Returns
+    -------
+    fig, axarr: figure and array of axes used for the plot.
+    """
+    indices, params, Xs, ys = prepare_slices_func(
+        func, X_fiducial, bounds, indices=indices, n=n
+    )
+    if not isinstance(labels, Sequence) or len(labels) == 0:
+        x_labels = params
+        y_label = None
+    elif len(labels) == 1:
+        x_labels = params
+        y_label = labels[0]
+    elif len(labels) == len(params):
+        x_labels = labels
+        y_label = None
+    elif len(labels) == len(params) + 1:
+        x_labels = labels[:-1]
+        y_label = labels[-1]
+    else:
+        raise ValueError("Value for `labels` not recognised, or length not valid.")
+    fig_kwargs_defaults = dict(
+        nrows=1,
+        ncols=len(indices),
+        layout="constrained",
+        figsize=(4 * len(indices), 2),
+        dpi=200,
+    )
+    fig_kwargs_defaults.update(fig_kwargs or {})
+    fig, axes = plt.subplots(**fig_kwargs_defaults)
+    color = "tab:blue"
+    for j, (i, p) in enumerate(zip(indices, params)):
+        axes[j].axvline(X_fiducial[i], c="0.75", ls="--")
+        axes[j].plot(Xs[j, :, i], ys[j], c=color)
+        axes[j].scatter(Xs[j, :, i], ys[j], marker=".", s=10, c=color)
+        axes[j].set_xlabel(x_labels[j])
+        axes[j].set_ylabel(y_label)
+    return fig, axes
 
 
 def plot_slices(model, gpr, acquisition, X=None, reference=None):
