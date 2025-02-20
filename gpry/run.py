@@ -7,6 +7,7 @@ import os
 import warnings
 from copy import deepcopy
 from typing import Mapping, Sequence
+from numbers import Number
 import numpy as np
 from tqdm import tqdm
 
@@ -319,6 +320,14 @@ class Runner():
         self.last_mc_surr_info, self.last_mc_sampler = None, None
         self._last_mc_samples = None
         self._is_model_saved = False
+        # Placeholders for fiducial quantities
+        self.fiducial_X = None
+        self.fiducial_logpost = None
+        self.fiducial_loglike = None
+        self.fiducial_MC_X = None
+        self.fiducial_MC_weight = None
+        self.fiducial_MC_logpost = None
+        self.fiducial_MC_loglike = None
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -1283,6 +1292,126 @@ class Runner():
                 setattr(self, attr, value)
             mpi.share_attr(self, attr)
 
+    def set_fiducial_point(self, X, logpost=None, loglike=None):
+        """
+        Set a single fiducial point in parameter space, to be included in the plots and in
+        some tests.
+
+        Recover with ``self.fiducial_[X|logpost|loglike|weight]``.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_dim)
+            Fiducial point coordinates.
+
+        logpost : float, optional
+            Fiducial point log-posterior density
+
+        loglike : float, optional
+            Fiducial point log-likelihood density (use if the prior density not known).
+
+        Raises
+        ------
+        TypeError : if a mismatch found between the different inputs.
+        """
+        X = np.atleast_1d(X).copy()
+        if len(X.shape) > 1 or len(X) != self.gpr.d:
+            raise TypeError(
+                f"`X` appears not to have the right dimension: passed {X.shape} but "
+                f"expected shape=({self.gpr.d},)."
+            )
+        self.fiducial_X = X
+        if logpost is not None and loglike is not None:
+            raise TypeError(
+                "Pass either the log-posterior or the log-likelihood, not both."
+            )
+        if logpost is not None:
+            if not isinstance(logpost, Number):
+                raise TypeError("`logpost` must be a scalar.")
+            self.fiducial_logpost = logpost
+            logprior = self.model.prior.logp(self.fiducial_X)
+            self.fiducial_loglike = self.fiducial_logpost - logprior
+        elif loglike is not None:
+            if not isinstance(loglike, Number):
+                raise TypeError("`loglike` must be a scalar.")
+            self.fiducial_loglike = loglike
+            logprior = self.model.prior.logp(self.fiducial_X)
+            self.fiducial_logpost = self.fiducial_loglike + logprior
+
+    def set_fiducial_MC(self, X, logpost=None, loglike=None, weights=None):
+        """
+        Set a reference Monte Carlo sample of the true posterior, to be included in the
+        plots and in some tests.
+
+        Recover with ``self.fiducial_MC_[X|logpost|loglike|weight]``.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_dim)
+            Fiducial 2d array of MC samples.
+
+        logpost : array-like, shape = (n_samples), optional
+            Log-posterior density for the points in the MC sample.
+
+        loglike : array-like, shape = (n_samples), optional
+            Log-likelihood density for the points in the MC sample (use if the prior
+            density is not known).
+
+        weights : array-like, shape = (n_samples), optional
+            Weights of points in the MC sample (assumed equal weights if not specified).
+
+        Raises
+        ------
+        TypeError : if a mismatch found between the different inputs.
+        """
+        X = np.atleast_2d(X).copy()
+        if X.shape[1] != self.gpr.d:
+            raise TypeError(
+                f"`X` appears not to have the right dimension: passed {X.shape[1]} but "
+                f"expected {self.gpr.d}."
+            )
+        self.fiducial_MC_X = X
+        if weights is not None:
+            weights = np.atleast_1d(weights).copy()
+            if len(weights) != len(self.fiducial_MC_X):
+                raise TypeError("`weights` and `X` have different numbers of samples.")
+            self.fiducial_MC_weight = weights
+        if logpost is not None and loglike is not None:
+            raise TypeError(
+                "Pass either the log-posterior or the log-likelihood, not both,"
+            )
+        if logpost is not None:
+            logpost = np.atleast_1d(logpost).copy()
+            if len(logpost) != len(self.fiducial_MC_X):
+                raise TypeError("`logpost` and `X` have different numbers of samples.")
+            self.fiducial_MC_logpost = logpost
+            logprior = np.array([self.model.prior.logp(x) for x in self.fiducial_MC_X])
+            self.fiducial_MC_loglike = self.fiducial_MC_logpost - logprior
+        elif loglike is not None:
+            loglike = np.atleast_1d(loglike).copy()
+            if len(loglike) != len(self.fiducial_MC_X):
+                raise TypeError("`loglike` and `X` have different numbers of samples.")
+            self.fiducial_MC_loglike = loglike
+            logprior = np.array([self.model.prior.logp(x) for x in self.fiducial_MC_X])
+            self.fiducial_MC_logpost = self.fiducial_MC_loglike + logprior
+
+    def _fiducial_MC_as_getdist(self):
+        if self.fiducial_MC_X is None:
+            return None
+        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
+        params = list(self.model.parameterization.sampled_params())
+        labels = self.model.parameterization.labels()
+        labels_list = [labels.get(p) for p in params]
+        mcsamples = MCSamples(
+            samples=self.fiducial_MC_X,
+            weights=self.fiducial_MC_weight,
+            loglikes=None,
+            names=params,
+            labels=labels_list,
+            ranges=dict(zip(params, self.gpr.bounds)),
+            ignore_rows=0,
+        )
+        return mcsamples
     def plot_progress(
             self,
             ext="svg",
@@ -1324,9 +1453,11 @@ class Runner():
             fig, ax = gpplt.plot_convergence(self.convergence)
             plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
         if trace:
+            reference = None
+            if self.fiducial_MC_X is not None:
+                reference = self._fiducial_MC_as_getdist()
             gpplt.plot_trace(
-                self.model, self.gpr, self.convergence, self.progress,
-                reference=self.last_mc_samples()
+                self.model, self.gpr, self.convergence, self.progress, reference=reference
             )
             plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
