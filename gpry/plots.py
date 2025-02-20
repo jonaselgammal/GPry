@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 from gpry.gpr import GaussianProcessRegressor
+from gpry.mc import process_gdsamples
 from gpry.tools import (
     credibility_of_nstd,
     nstd_of_1d_nstd,
@@ -229,9 +230,121 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
                 axes[i].axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
+def plot_corner_getdist(
+        mc_samples,
+        params=None,
+        filled=None,
+        training=None,
+        markers=None,
+        output=None,
+        output_dpi=200,
+        subplot_size=2,
+):
+    """
+    Creates a corner plot the given MC samples, and optionally shows evaluation locations.
+
+    If called repeatedly, it may leak memory, unfortunately. To avoid this, execute it
+    like this:
+
+    .. code:: python
+
+        # Temporarily switch to Agg backend
+        prev_backend = matplotlib.get_backend()
+        matplotlib.use("Agg")
+        try:
+            plot_corner_getdist(...)
+        except:
+            ...
+        finally:
+            # Switch back to prev backend
+            mpl.use(prev_backend)
+
+    Parameters
+    ----------
+
+    mc_samples: dict(str, (cobaya.SampleCollection, getdist.MCSamples, str))
+        Dict of MC samples, with their plot label as key, and the sample as value, either
+        as GetDist or Cobaya samples, or as a path where there are samples saved.
+
+    params : list(str), optional
+        List of parameter names to be plotted, by default all of the ones in the first
+        MC sample, included derived ones like probability densities.
+
+    filled : dict(str, bool)
+        Dictionary with labels as keys specifying the `filled` property of the contours.
+        Contours are filled by default when unspecified (including key missing for a
+        passed sample).
+
+    training : GaussianProcessRegressor, dict(str, GaussianProcessRegressor), optional
+        If a GPR is passed, it plots the training samples (including the discarded ones)
+        on top of the contours. Samples outside the axes ranges are not plotted.
+        The parameters of the GPR need to be assumed, since the GPR does not save names:
+        if a GPR is passed, the sampled parameters of the first MC sample will be used; if
+        a single-key dict is passed with a label as a key, it will used the parameter
+        names from the MC sample with that label.
+
+    subplot_size : float, default = 2
+        Size of each subplot in the corner plot.
+
+    output : str, optional (default=None)
+        Path, including name, of the saved figure. Not saved if left unspecified.
+
+    output_dpi : int (default: 200)
+        The resolution of the generated plot in DPI.
+
+    Returns
+    -------
+    getdist.plots.GetDistPlotter object containing the figure.
+    """
+    if not isinstance(mc_samples, Mapping):
+        raise TypeError(
+            "The first argument must be a list of MC samples with the sample legend "
+            "labels as keys."
+        )
+    gdsamples_dict = process_gdsamples(mc_samples)
+    # Prepare training samples early -- fail asap.
+    training_params = None
+    if training is not None:
+        if isinstance(training, Mapping):
+            training_label = list(training)[0]
+            if training_label not in mc_samples:
+                raise ValueError(
+                    "`training` passed as dict, but key not found in mc_samples."
+                )
+            training = list(training.values())[0]
+        else:
+            training_label = list(gdsamples_dict)[0]
+        if not isinstance(training, GaussianProcessRegressor):
+            raise TypeError("'training' is not a GaussianProcessRegressor instance.")
+        training_params = gdsamples_dict[training_label].getParamNames().getRunningNames()
+    import getdist.plots as gdplt  # pylint: disable=import-outside-toplevel
+    gdplot = gdplt.get_subplot_plotter(subplot_size=subplot_size, auto_close=True)
+    gdplot.settings.line_styles = 'tab10'
+    gdplot.settings.solid_colors = 'tab10'
+    triang_args = [list(gdsamples_dict.values())]
+    if params is not None:
+        triang_args.append(params)
+    triang_kwargs = {
+        "legend_labels": list(gdsamples_dict),
+        "filled": [(filled or {}).get(k, True) for k in gdsamples_dict],
+        "markers": markers,
+    }
+    try:
+        gdplot.triangle_plot(*triang_args, **triang_kwargs)
+    except Exception as excpt:
+        raise ValueError(
+            f"Could not do corner plot. GetDist err. msg.: {excpt}"
+        ) from excpt
+    if training is not None and training.d > 1:
+        getdist_add_training(gdplot, training_params, training, highlight_last=True)
+    if output is not None:
+        plt.savefig(output, dpi=output_dpi)
+    return gdplot
+
+
 def getdist_add_training(
     getdist_plot,
-    model,
+    params,
     gpr,
     colormap="viridis",
     marker=".",
@@ -247,8 +360,9 @@ def getdist_add_training(
     getdist_plot : `GetDist triangle plot <https://getdist.readthedocs.io/en/latest/plots.html?highlight=triangle_plot#getdist.plots.GetDistPlotter.triangle_plot>`_
         Contains the marginalized contours and potentially other things.
 
-    model : Cobaya model
-        The model that was used to run the GP on
+    params : list(str)
+        The assumed parameter names for the GPR samples. Need to be a subset of the ones
+        plotted by the GetDistPlotter.
 
     gpr : GaussianProcessRegressor
         The trained GP Regressor containing the samples.
@@ -271,12 +385,11 @@ def getdist_add_training(
     The GetDist triangle plot with the added training points.
     """
     # Gather axes and bounds
-    sampled_params = list(model.parameterization.sampled_params())
-    d = len(sampled_params)
+    d = len(params)
     ax_dict = {}
-    bounds = [None] * len(sampled_params)
-    for i, pi in enumerate(sampled_params):
-        for j, pj in enumerate(sampled_params):
+    bounds = [None] * len(params)
+    for i, pi in enumerate(params):
+        for j, pj in enumerate(params):
             ax = getdist_plot.get_axes_for_params(pi, pj, ordered=True)
             if not ax:
                 continue

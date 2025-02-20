@@ -13,6 +13,7 @@ from cobaya.output import get_output
 from cobaya.sampler import get_sampler
 from cobaya.collection import SampleCollection
 from getdist.mcsamples import MCSamples, loadMCSamples
+from getdist.gaussian_mixtures import GaussianND
 
 from gpry import mpi
 from gpry.gpr import GaussianProcessRegressor
@@ -354,7 +355,7 @@ def process_gdsamples(gdsamples_dict):
             return_dict[k] = loadMCSamples(root)
         elif isinstance(v, SampleCollection):
             return_dict[k] = v.to_getdist(label=k)
-        elif isinstance(v, MCSamples):
+        elif isinstance(v, (MCSamples, GaussianND)):
             return_dict[k] = v
         else:
             raise ValueError(
