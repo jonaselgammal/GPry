@@ -456,13 +456,14 @@ def plot_corner_getdist(
         Contours are filled by default when unspecified (including key missing for a
         passed sample).
 
-    training : GaussianProcessRegressor, dict(str, GaussianProcessRegressor), optional
+    training : GaussianProcessRegressor, dict(str or tuple, GaussianProcessRegressor), optional
         If a GPR is passed, it plots the training samples (including the discarded ones)
         on top of the contours. Samples outside the axes ranges are not plotted.
         The parameters of the GPR need to be assumed, since the GPR does not save names:
         if a GPR is passed, the sampled parameters of the first MC sample will be used; if
-        a single-key dict is passed with a label as a key, it will used the parameter
-        names from the MC sample with that label.
+        a single-key dict is passed with a str as a key, it will used the parameter names
+        from the MC sample with that label; if the key is a tuple of strings, they will be
+        used as parameters
 
     subplot_size : float, default = 2
         Size of each subplot in the corner plot.
@@ -488,17 +489,23 @@ def plot_corner_getdist(
     training_params = None
     if training is not None:
         if isinstance(training, Mapping):
-            training_label = list(training)[0]
-            if training_label not in mc_samples:
-                raise ValueError(
-                    "`training` passed as dict, but key not found in mc_samples."
-                )
+            training_key = list(training)[0]
             training = list(training.values())[0]
+            if isinstance(training_key, tuple):
+                training_params = training_key
+            else:  # assumed key corresponding to passed mcsamples
+                if training_key not in mc_samples:
+                    raise ValueError(
+                        "`training` passed as dict, but key not found in mc_samples."
+                    )
+                training_params = \
+                    gdsamples_dict[training_key].getParamNames().getRunningNames()
+        elif isinstance(training, GaussianProcessRegressor):
+            # Use first MC passed
+            training_params = \
+                gdsamples_dict[list(gdsamples_dict)[0]].getParamNames().getRunningNames()
         else:
-            training_label = list(gdsamples_dict)[0]
-        if not isinstance(training, GaussianProcessRegressor):
             raise TypeError("'training' is not a GaussianProcessRegressor instance.")
-        training_params = gdsamples_dict[training_label].getParamNames().getRunningNames()
     import getdist.plots as gdplt  # pylint: disable=import-outside-toplevel
     gdplot = gdplt.get_subplot_plotter(subplot_size=subplot_size, auto_close=True)
     gdplot.settings.line_styles = 'tab10'

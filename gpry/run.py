@@ -1501,20 +1501,24 @@ class Runner():
             # Temporarily switch to Agg backend
             prev_backend = matplotlib.get_backend()
             matplotlib.use("Agg")
-            plot_params = \
-                list(self.model.parameterization.sampled_params()) + [gpplt._name_logp]
+            sampled_params = list(self.model.parameterization.sampled_params())
             output_dpi = 200
             try:
-                gpplt.plot_corner_getdist(
-                    mc_samples,
-                    params=plot_params,
-                    filled=filled,
-                    training={acq_key: self.gpr},
-                    training_highlight_last=True,
-                    markers=markers,
-                    output=output_corner,
-                    output_dpi=output_dpi,
-                )
+                if len(mc_samples) > 0:
+                    gpplt.plot_corner_getdist(
+                        mc_samples,
+                        params=sampled_params + [gpplt._name_logp],
+                        filled=filled,
+                        training={tuple(sampled_params): self.gpr},
+                        training_highlight_last=True,
+                        markers=markers,
+                        output=output_corner,
+                        output_dpi=output_dpi,
+                    )
+                else:
+                    warnings.warn(
+                        "No acquisition or fiducial sample to do the corner plot."
+                    )
                 if self.has_converged:
                     self.plot_mc(output_dpi=output_dpi, ext=ext)
             except Exception as excpt:  # pylint: disable=broad-exception-caught
