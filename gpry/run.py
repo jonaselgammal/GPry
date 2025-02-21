@@ -1478,9 +1478,10 @@ class Runner():
             if self.fiducial_MC_X is not None:
                 mc_samples["Fiducial"] = self._fiducial_MC_as_getdist()
             if hasattr(self.acquisition, "last_MC_sample"):
-                nora_key = f"Last NORA sample ({len(self.gpr.X_train_all)} evals.)"
+                rw = "-- reweighted " if self.acquisition.is_last_MC_reweighted else ""
+                nora_key = f"Acq. sample {rw}({len(self.gpr.X_train_all)} evals.)"
                 mc_samples[nora_key] = self.acquisition.last_MC_sample_getdist(self.model)
-            markers = {}
+            markers = None
             if self.fiducial_X is not None:
                 markers = dict(
                     zip(self.model.parameterization.sampled_params(), self.fiducial_X)
@@ -1491,15 +1492,19 @@ class Runner():
             # Temporarily switch to Agg backend
             prev_backend = matplotlib.get_backend()
             matplotlib.use("Agg")
+            output_dpi = 200
             try:
                 gpplt.plot_corner_getdist(
                     mc_samples,
                     filled=filled,
                     training={nora_key: self.gpr},
+                    training_highlight_last=True,
                     markers=markers,
                     output=output_corner,
-                    output_dpi=200,
+                    output_dpi=output_dpi,
                 )
+                if self.has_converged:
+                    self.plot_mc(output_dpi=output_dpi, ext=ext)
             except Exception as excpt:  # pylint: disable=broad-exception-caught
                 warnings.warn(str(excpt))
             finally:
@@ -1615,7 +1620,6 @@ class Runner():
         success = mpi.comm.bcast(success if mpi.is_main_process else None)
         return success
 
-    # pylint: disable=import-outside-toplevel
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
                 add_samples=None, output=None, output_dpi=200, ext="svg"):
         """
@@ -1654,6 +1658,10 @@ class Runner():
                 "Running plotting function from non-root MPI process. Doing nothing."
             )
             return
+        self.ensure_paths(plots=True)
+        mc_samples = {}
+        if self.fiducial_MC_X is not None:
+            mc_samples["Fiducial"] = self._fiducial_MC_as_getdist()
         base_label = f"MC samples from GP ({len(self.gpr.X_train_all)} evals.)"
         if samples_or_samples_folder is None:
             if self._last_mc_samples is None:
@@ -1662,30 +1670,29 @@ class Runner():
                     "the generate_mc_sample() method first, or pass samples or a path "
                     "to them as first argument."
                 )
-            gdsamples_dict = {base_label: self.last_mc_samples()}
+            mc_samples[base_label] = self.last_mc_samples()
         else:
-            gdsamples_dict = {base_label: samples_or_samples_folder}
+            mc_samples[base_label] = samples_or_samples_folder
         if add_samples is None:
             add_samples = {}
         elif not isinstance(add_samples, Mapping):
             add_samples = {"Add. samples": add_samples}
-        gdsamples_dict.update(add_samples)
-        gdsamples_dict = process_gdsamples(gdsamples_dict)
-        import getdist.plots as gdplt
-        from gpry.plots import getdist_add_training
-        import matplotlib.pyplot as plt
-        self.ensure_paths(plots=True)
-        gdplot = gdplt.get_subplot_plotter(subplot_size=2, auto_close=True)
-        gdplot.settings.line_styles = 'tab10'
-        gdplot.settings.solid_colors = 'tab10'
-        gdplot.triangle_plot(
-            list(gdsamples_dict.values()), self.model.parameterization.sampled_params(),
-            filled=True, legend_labels=list(gdsamples_dict))
-        if add_training and self.d > 1:
-            getdist_add_training(gdplot, self.model, self.gpr)
+        mc_samples.update(add_samples)
+        markers = None
+        if self.fiducial_X is not None:
+            markers = dict(
+                zip(self.model.parameterization.sampled_params(), self.fiducial_X)
+            )
         if output is None:
             output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
-        plt.savefig(output, dpi=output_dpi)
+        gdplot = gpplt.plot_corner_getdist(
+            mc_samples,
+            training={base_label: self.gpr} if add_training else None,
+            training_highlight_last=False,
+            markers=markers,
+            output=output,
+            output_dpi=output_dpi,
+        )
         return gdplot
 
     def plot_distance_distribution(

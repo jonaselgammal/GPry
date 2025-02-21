@@ -412,6 +412,7 @@ def plot_corner_getdist(
         params=None,
         filled=None,
         training=None,
+        training_highlight_last=False,
         markers=None,
         output=None,
         output_dpi=200,
@@ -464,7 +465,8 @@ def plot_corner_getdist(
         Size of each subplot in the corner plot.
 
     output : str, optional (default=None)
-        Path, including name, of the saved figure. Not saved if left unspecified.
+        Path, including name and extension, of the saved figure.
+        Not saved if left unspecified.
 
     output_dpi : int (default: 200)
         The resolution of the generated plot in DPI.
@@ -513,7 +515,9 @@ def plot_corner_getdist(
             f"Could not do corner plot. GetDist err. msg.: {excpt}"
         ) from excpt
     if training is not None and training.d > 1:
-        getdist_add_training(gdplot, training_params, training, highlight_last=True)
+        getdist_add_training(
+            gdplot, training_params, training, highlight_last=training_highlight_last
+        )
     if output is not None:
         plt.savefig(output, dpi=output_dpi)
     return gdplot
