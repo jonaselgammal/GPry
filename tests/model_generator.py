@@ -24,9 +24,11 @@ class Model_generator(metaclass=ABCMeta):
     def auto_generate_parameter_names(self, input_params, dim):
         if input_params is None:
             self.input_params = [f"x_{d}" for d in range(dim)]
+            self.input_labels = dict(zip(self.input_params, self.input_params))
         else:
             assert len(input_params) == ndim, "Length of parameter name list doesn't match ndim"
             self.input_params = input_params
+            self.input_labels = {}
 
 class Random_gaussian(Model_generator):
     """
@@ -69,9 +71,15 @@ class Random_gaussian(Model_generator):
         for k, p in enumerate(self.input_params):
             p_max = (self.prior_size_in_std*self.std[k])
             p_min = (-self.prior_size_in_std*self.std[k])
-            info["params"][p] = {"prior": {"min": p_min, "max": p_max}}
+            info["params"][p] = {
+                "prior": {"min": p_min, "max": p_max},
+                "latex": self.input_labels.get(p, p)
+            }
         model = get_model(info)
         return model
+
+    def get_samples(self, n, rng=None):
+        return self.rv.rvs(size=int(n), random_state=rng)
 
 class Loggaussian(Random_gaussian):
     """
