@@ -234,6 +234,8 @@ def plot_slices_func(
     )
     fig_kwargs_defaults.update(fig_kwargs or {})
     fig, axes = plt.subplots(**fig_kwargs_defaults)
+    if not isinstance(axes, Sequence):
+        axes = [axes]
     color = "tab:blue"
     for j, (i, p) in enumerate(zip(indices, params)):
         axes[j].axvline(X_fiducial[i], c="0.75", ls="--")
