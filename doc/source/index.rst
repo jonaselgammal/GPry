@@ -30,6 +30,7 @@ Contents:
   convergence
   running_cobaya
   callback
+  strategy
   modules
 
 Indices and tables

@@ -1,0 +1,116 @@
+Strategy and troubleshooting
+============================
+
+If GPry does not converge for your problem with the default settings, or does not do so efficiently enough, here is a list of things to try, from easier and more general, to more specific diagnoses.
+
+.. note::
+
+   In general, if there are problems, it is recommended to use the NORA [TODO: add reference] acquisition engine, since it allows for better diagnosis tools.
+
+
+How does healthy convergence look like?
+---------------------------------------
+
+[TODO]
+
+Show plot with logp trace:
+
+- initial state will prob feed the SVM (lots of rejections)
+- intermediate state will probably climb towards the mode
+- late state should diffuse around the mode (converging at some point)
+
+
+Incorporate known information to simplify the problem
+-----------------------------------------------------
+
+- Cut the prior to more tightly contain the region where the mode is expected. To help you with this, you can :ref:`plot a slice of the posterior <help_plot_slice>`, but be careful not to cut to tight: degeneracies between parameters that are not visible in a slice can leave out parts of the mode.
+- If available, use a different parameterization for which the posterior may be more Gaussian and less correlated.
+
+
+Try GPry on an easier version of the same problem
+-------------------------------------------------
+
+- Simplify the likelihood computation (e.g. downgrading its precision, turning off contributions) to be able to iterate faster until the problem is solved.
+- Fix a number of parameters to their fiducial/expected value to test on a lower-dimensional version of the problem.
+
+In this simpler scenario, you may be able to get an approximate MCMC/Nested sample to compare with, and :ref:`use it as a reference <help_reference>`.
+
+
+.. _help_plot_slice:
+
+Plot slices of the posterior
+----------------------------
+
+Usually, plotting a slice of the posterior/likelihood is useful to uncover features that may be spoiling the Gaussian Process modelling. To do this, you can use the slice plotter implemented in :func:`~gpry.plot.plot_slice_func`, preferably using a point close to the posterior mode.
+
+For example, in the following slice we can see two different relevant features:
+
+.. image:: images/help_slice_noise_discont.png
+   :width: 550
+   :align: center
+
+- The likelihood seems to have some numerical noise. To deal with this, you should pass a non-null value for the ``noise_level`` of the GPR [TODO: add reference], here approx.\ ``noise_level=0.1``.
+- There is a discontinuity at :math:`x_1\approx 0.75`. In general, this would spoil a GPR fit, that expects a nearly-continuous function. Ideally, this would persist in the rest of the dimensions, without presenting degeneracies, and a prior cut :math:`x_1 < 0.75` could be implemented. Otherwise, if the discontinuity leads to posterior values that are low enough, one can choose the ``inf_threshold`` of the GPR [TODO: add reference] so that it always discards these values, here approx. ``inf_threshold=20``.
+
+.. note::
+
+   In general it is not recommended to use the slice plot to derive a prior cut from it, since there may be parameter degeneracies in the posterior that are not visible in a slice and could let to part of the mode being left out.
+
+
+.. _help_reference:
+
+Supply a reference (approximate) MC sample if available
+-------------------------------------------------------
+
+If you have a precise or approximate fiducial MC sample of the posterior, you can pass it to the :class:`gpry.run.Runner` instance before calling the :func:`~gpry.run.Runner.run`` method using the :func:`~gpry.run.Runner.set_fiducial_MC` method:
+
+.. code:: python
+
+   runner = Runner([...])
+   runner.set_fiducial_MC(X, logpost=..., weights=...)
+
+Note that you can pass instead the loglikelihood (via the ``loglike`` arg), if you are letting GPry compute the prior density.
+
+Similarly, you can pass a single fiducial reference point (e.g. the expected MAP or best fit) using :func:`~gpry.run.Runner.set_fiducial_point` method (same arguments, this time scalars).
+
+This fiducial MC and point will be shown in the :ref:`progress plots <turn_on_plots>`, and will let you learn about where GPry is mapping versus where the mode actually is.
+
+.. image:: images/help_fiducial_corner.png
+   :width: 550
+   :align: center
+
+
+.. _turn_on_plots:
+
+Turn on the debug output and progress plots
+-------------------------------------------
+
+[TODO]
+
+Debug text output: what is printed.
+
+Is the true posterior returning the expected values (see (X, log(p)) prints at the [eval] phase.
+
+progress_plots: how to activate and ask for *all* of them
+
+What to look for in the trace plot:
+
+- convergence criterion oscillating but top not too far from limit: maybe that's as good as it gets, so reduce it.
+- step-like progress for some parameter with NORA: increase freq of mc_sample
+
+If convergence is not signalled, but the triangle plot seems stable through iterations and mostly on top of the training set (and if fiducial MC passed, the NORA MC and the fiducial are close enough), maybe the convergence criterion is too stringent, or the likelihood is numerically noisy (deterministically but not captured by ``noise_level``; if stochastically, problematic!).
+
+
+Start with high-precision settings
+----------------------------------
+
+[TODO]
+
+- NORA MC often (look out for ladder-like progression in parameter values)
+- Hyperparameter fit often.
+
+
+Something about initialisation
+------------------------------
+
+[TODO]
