@@ -29,6 +29,9 @@ from gpry.tools import (
 plt.rcParams["text.usetex"] = True
 _plot_dist_fontsize = 7
 
+# Param name and label for log-posterior in corner plots
+_name_logp, _label_logp = "logpost", r"\log(p)"
+
 
 def simple_latex_sci_notation(string):
     """

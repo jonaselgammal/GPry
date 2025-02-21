@@ -1405,12 +1405,19 @@ class Runner():
         mcsamples = MCSamples(
             samples=self.fiducial_MC_X,
             weights=self.fiducial_MC_weight,
-            loglikes=None,
+            loglikes=-self.fiducial_MC_logpost,
             names=params,
             labels=labels_list,
             ranges=dict(zip(params, self.gpr.bounds)),
             ignore_rows=0,
         )
+        if self.fiducial_MC_logpost is not None:
+            if not np.isclose(
+                    max(self.fiducial_MC_logpost) - min(self.fiducial_MC_logpost), 0
+            ):
+                mcsamples.addDerived(
+                    -mcsamples.loglikes, gpplt._name_logp, label=gpplt._label_logp
+                )
         return mcsamples
 
     def plot_progress(
@@ -1461,12 +1468,12 @@ class Runner():
         if convergence:
             fig, ax = gpplt.plot_convergence(self.convergence)
             plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
+        fid_MC = None
+        if trace or corner and self.fiducial_MC_X is not None:
+            fid_MC = self._fiducial_MC_as_getdist()
         if trace:
-            reference = None
-            if self.fiducial_MC_X is not None:
-                reference = self._fiducial_MC_as_getdist()
             gpplt.plot_trace(
-                self.model, self.gpr, self.convergence, self.progress, reference=reference
+                self.model, self.gpr, self.convergence, self.progress, reference=fid_MC,
             )
             plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
@@ -1475,29 +1482,34 @@ class Runner():
         if corner:
             mc_samples = {}
             filled = {}
-            if self.fiducial_MC_X is not None:
-                mc_samples["Fiducial"] = self._fiducial_MC_as_getdist()
+            if fid_MC is not None:
+                mc_samples["Fiducial"] = fid_MC
             if hasattr(self.acquisition, "last_MC_sample"):
                 rw = "-- reweighted " if self.acquisition.is_last_MC_reweighted else ""
-                nora_key = f"Acq. sample {rw}({len(self.gpr.X_train_all)} evals.)"
-                mc_samples[nora_key] = self.acquisition.last_MC_sample_getdist(self.model)
+                acq_key = f"Acq. sample {rw}({len(self.gpr.X_train_all)} evals.)"
+                mc_samples[acq_key] = self.acquisition.last_MC_sample_getdist(self.model)
             markers = None
             if self.fiducial_X is not None:
                 markers = dict(
                     zip(self.model.parameterization.sampled_params(), self.fiducial_X)
                 )
+                if self.fiducial_logpost is not None:
+                    markers[gpplt._name_logp] = self.fiducial_logpost
             output_corner = os.path.join(
                 self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
             )
             # Temporarily switch to Agg backend
             prev_backend = matplotlib.get_backend()
             matplotlib.use("Agg")
+            plot_params = \
+                list(self.model.parameterization.sampled_params()) + [gpplt._name_logp]
             output_dpi = 200
             try:
                 gpplt.plot_corner_getdist(
                     mc_samples,
+                    params=plot_params,
                     filled=filled,
-                    training={nora_key: self.gpr},
+                    training={acq_key: self.gpr},
                     training_highlight_last=True,
                     markers=markers,
                     output=output_corner,
@@ -1581,7 +1593,11 @@ class Runner():
         :class:`cobaya.SampleCollection`.
         """
         if as_getdist and self._last_mc_samples is not None:
-            return self._last_mc_samples.to_getdist(model=self.model)
+            mcsamples = self._last_mc_samples.to_getdist(model=self.model)
+            mcsamples.addDerived(
+                -mcsamples.loglikes, gpplt._name_logp, label=gpplt._label_logp
+            )
+            return mcsamples
         return self._last_mc_samples
 
     def diagnose_last_mc_sample(self):
@@ -1683,10 +1699,15 @@ class Runner():
             markers = dict(
                 zip(self.model.parameterization.sampled_params(), self.fiducial_X)
             )
+            if self.fiducial_logpost is not None:
+                markers[gpplt._name_logp] = self.fiducial_logpost
+        plot_params = \
+            list(self.model.parameterization.sampled_params()) + [gpplt._name_logp]
         if output is None:
             output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
         gdplot = gpplt.plot_corner_getdist(
             mc_samples,
+            params=plot_params,
             training={base_label: self.gpr} if add_training else None,
             training_highlight_last=False,
             markers=markers,
