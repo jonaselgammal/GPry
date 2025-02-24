@@ -164,6 +164,7 @@ def prepare_slices_func(func, X_fiducial, bounds, indices=None, n=50):
     return indices, [params[i] for i in indices], Xs, ys
 
 
+# NB: use this one in the future to reformulate the other ones: more generic
 def plot_slices_func(
         func, X_fiducial, bounds, indices=None, n=50, fig_kwargs=None, labels=None,
 ):
@@ -172,7 +173,6 @@ def plot_slices_func(
 
     Parameters
     ----------
-
     func : callable
         Function for which to prepare slices. It needs to take arguments in the way
         ``X_fiducial`` is passed: ``func(*X_fiducial)`` if ``X_fiducual`` is a list, or
@@ -225,13 +225,13 @@ def plot_slices_func(
         y_label = labels[-1]
     else:
         raise ValueError("Value for `labels` not recognised, or length not valid.")
-    fig_kwargs_defaults = dict(
-        nrows=1,
-        ncols=len(indices),
-        layout="constrained",
-        figsize=(4 * len(indices), 2),
-        dpi=200,
-    )
+    fig_kwargs_defaults = {
+        "nrows": 1,
+        "ncols": len(indices),
+        "layout": "constrained",
+        "figsize": (4 * len(indices), 2),
+        "dpi": 200,
+    }
     fig_kwargs_defaults.update(fig_kwargs or {})
     fig, axes = plt.subplots(**fig_kwargs_defaults)
     if not isinstance(axes, Sequence):
@@ -444,7 +444,6 @@ def plot_corner_getdist(
 
     Parameters
     ----------
-
     mc_samples: dict(str, (cobaya.SampleCollection, getdist.MCSamples, str))
         Dict of MC samples, with their plot label as key, and the sample as value, either
         as GetDist or Cobaya samples, or as a path where there are samples saved.
@@ -481,6 +480,7 @@ def plot_corner_getdist(
     -------
     getdist.plots.GetDistPlotter object containing the figure.
     """
+    # TODO: manage whether to plot log-post/like, add kwarg opt
     if not isinstance(mc_samples, Mapping):
         raise TypeError(
             "The first argument must be a list of MC samples with the sample legend "
@@ -505,7 +505,7 @@ def plot_corner_getdist(
         elif isinstance(training, GaussianProcessRegressor):
             # Use first MC passed
             training_params = \
-                gdsamples_dict[list(gdsamples_dict)[0]].getParamNames().getRunningNames()
+                list(gdsamples_dict.values())[0].getParamNames().getRunningNames()
         else:
             raise TypeError("'training' is not a GaussianProcessRegressor instance.")
     import getdist.plots as gdplt  # pylint: disable=import-outside-toplevel
@@ -514,6 +514,10 @@ def plot_corner_getdist(
     gdplot.settings.solid_colors = 'tab10'
     triang_args = [list(gdsamples_dict.values())]
     if params is not None:
+        # GetDist failsafe: can only plot the params of the last sample in the input
+        at_most_params = \
+            list(gdsamples_dict.values())[-1].getParamNames().getRunningNames()
+        params = [p for p in params if p in at_most_params]
         triang_args.append(params)
     triang_kwargs = {
         "legend_labels": list(gdsamples_dict),
@@ -596,18 +600,18 @@ def getdist_add_training(
     Xs_infinite = np.copy(gpr.X_train_infinite)
     for i, (mini, maxi) in enumerate(bounds):
         i_within_finite = np.argwhere(
-            np.logical_and(mini < Xs_finite[:, i], Xs_finite[:, i] < maxi)
+            np.logical_or(mini < Xs_finite[:, i], Xs_finite[:, i] < maxi)
         )
         Xs_finite = np.atleast_2d(np.squeeze(Xs_finite[i_within_finite]))
         ys_finite = np.atleast_1d(np.squeeze(ys_finite[i_within_finite]))
         i_within_infinite = np.argwhere(
-            np.logical_and(mini < Xs_infinite[:, i], Xs_infinite[:, i] < maxi)
+            np.logical_or(mini < Xs_infinite[:, i], Xs_infinite[:, i] < maxi)
         )
         Xs_infinite = np.atleast_2d(np.squeeze(Xs_infinite[i_within_infinite]))
         if highlight_last:
             Xs_last = gpr.last_appended[0]
             i_within_last = np.argwhere(
-                np.logical_and(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
+                np.logical_or(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
             )
             Xs_last = np.atleast_2d(np.squeeze(Xs_last[i_within_last]))
     if len(Xs_finite) == 0 and len(Xs_infinite) == 0:  # no points within plotting ranges
