@@ -1484,12 +1484,28 @@ class Runner():
         if corner:
             mc_samples = {}
             filled = {}
+            sampled_params = list(self.model.parameterization.sampled_params())
             if fid_MC is not None:
                 mc_samples["Fiducial"] = fid_MC
+            # # Leave as option to plot Train Gaussian Approx -- set filled = False
+            # mean_train, covmat_train = mean_covmat_from_evals(
+            #     self.gpr.X_train, self.gpr.y_train
+            # )
+            # k_train = "Gaussian from training set"
+            # from getdist.gaussian_mixtures import GaussianND
+            # mc_samples[k_train] = GaussianND(
+            #     mean_train, covmat_train, names=sampled_params
+            # )
+            # filled[k_train] = False
             if hasattr(self.acquisition, "last_MC_sample"):
                 rw = "-- reweighted " if self.acquisition.is_last_MC_reweighted else ""
                 acq_key = f"Acq. sample {rw}({len(self.gpr.X_train_all)} evals.)"
-                mc_samples[acq_key] = self.acquisition.last_MC_sample_getdist(self.model)
+                try:
+                    mc_samples[acq_key] = self.acquisition.last_MC_sample_getdist(
+                        self.model, warn_reweight=False
+                    )
+                except ValueError:
+                    warnings.warn("Aquisition sample could not be loaded.")
             markers = None
             if self.fiducial_X is not None:
                 markers = dict(
@@ -1503,7 +1519,6 @@ class Runner():
             # Temporarily switch to Agg backend
             prev_backend = matplotlib.get_backend()
             matplotlib.use("Agg")
-            sampled_params = list(self.model.parameterization.sampled_params())
             output_dpi = 200
             try:
                 if len(mc_samples) > 0:
@@ -1524,6 +1539,7 @@ class Runner():
                 if self.has_converged:
                     self.plot_mc(output_dpi=output_dpi, ext=ext)
             except Exception as excpt:  # pylint: disable=broad-exception-caught
+                # Usually fails with reweighted Acquisition samples
                 warnings.warn(str(excpt))
             finally:
                 # Switch back to prev backend
