@@ -1330,13 +1330,11 @@ class RankedPool():
             Uses the one-by-one algorithm ("single", with pre-sorting according to X if
             "single sort X"), or the bulk algorithm.
         """
-        if len(X.shape) < 2:
-            self.add(X, y, sigma, method=method)
-            return
-        if X.shape[1] == 1:
-            self.add(
-                X[0], y[0] if y else None, sigma[0] if sigma else None, method=method)
-            return
+        X = np.atleast_2d(X)
+        if y is not None:
+            y = np.atleast_1d(y)
+        if sigma is not None:
+            sigma = np.atleast_1d(sigma)
         if y is None:
             y, sigma = self._gpr.predict(X, return_std=True, validate=False)
         elif sigma is None:
