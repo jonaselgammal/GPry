@@ -940,7 +940,7 @@ class Runner():
                 if mpi.is_main_process:
                     self.log(
                         "[MC+DIAGNOSIS] Obtained MC sample. "
-                        f"Diagnosis passed: *{diag_success}*",
+                        f"Diagnosis passed? *{diag_success}*",
                         level=3
                     )
                 if not diag_success:
@@ -1365,6 +1365,8 @@ class Runner():
         TypeError : if a mismatch found between the different inputs.
         """
         X = np.atleast_2d(X).copy()
+        if self.gpr.d == 1 and len(X) == 1:
+            X = X.T  # corner case: input was a 1-d array in dim 1
         if X.shape[1] != self.gpr.d:
             raise TypeError(
                 f"`X` appears not to have the right dimension: passed {X.shape[1]} but "

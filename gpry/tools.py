@@ -64,6 +64,7 @@ def kl_mc(X, logq_func, logp=None, logp_func=None, weight=None):
 
 def is_valid_covmat(covmat):
     """Returns True for a Real, positive-definite, symmetric matrix."""
+    covmat = np.atleast_2d(covmat)
     try:
         if np.allclose(covmat.T, covmat) and np.all(eigh(covmat, eigvals_only=True) > 0):
             return True
