@@ -11,13 +11,19 @@ If GPry does not converge for your problem with the default settings, or does no
 How does healthy convergence look like?
 ---------------------------------------
 
-[TODO]
+In order to identify possible problems, it is useful to know how convergence looks like in a trace plot [TODO: reference to trace plots]. Here we show the trace for the target log-posterior and the first 2 variables of a 16-dimensional Gaussian for which GPry has successfully converged, and mark its difference stages:
 
-Show plot with logp trace:
+.. image:: images/help_trace.png
+   :width: 550
+   :align: center
 
-- initial state will prob feed the SVM (lots of rejections)
-- intermediate state will probably climb towards the mode
-- late state should diffuse around the mode (converging at some point)
+- **A**: In high-dimensional cases and cases where the mode is very small with respect to the posterior, there will be an initial phase where GPry is **constraining** the problem towards the relevant region of the prior where the value of the posterior density is significant, while the SVM learns the classification between the areas with zero and non-zero posterior density. A lot of points are rejected at this stage (crosses in the :math:`x_1` and :math:`x_2` traces), and the log-posterior seems not to be climbing.
+- **B**: The problem has already being constrained, and GPry is mostly **optimizing** towards the top of the mode, with the acquisition function value of new proposals being driven by their expected log-posterior.
+- **C**: The maximum (or at least the one discovered so far) has been reached, and GPry is now **diffusing**, with the acquisition function value of new proposals now also driven by their standard deviation. **Convergence** should happen at some point in this phase, if the convergence criterion is not overly strict.
+
+Notice the **jump** indicated in the image (and a smaller one later in the trace): either/both because of the acquisition of a new point with higher posterior density or a strong re-fit of the hyperparameters, the GPR model now predicts a new region with high posterior density, where new points are being proposed.
+
+If your run is not presenting this sort of progress, or seems stuck in one of the phases, you can find below a list of approaches that could help.
 
 
 Incorporate known information to simplify the problem
