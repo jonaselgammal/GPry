@@ -8,6 +8,8 @@ If GPry does not converge for your problem with the default settings, or does no
    In general, if there are problems, it is recommended to use the NORA [TODO: add reference] acquisition engine, since it allows for better diagnosis tools.
 
 
+.. _help_healthy:
+
 How does healthy convergence look like?
 ---------------------------------------
 
@@ -25,27 +27,10 @@ Notice the **jump** indicated in the image (and a smaller one later in the trace
 
 If your run is not presenting this sort of progress, or seems stuck in one of the phases, you can find below a list of approaches that could help.
 
-
-Incorporate known information to simplify the problem
------------------------------------------------------
-
-- Cut the prior to more tightly contain the region where the mode is expected. To help you with this, you can :ref:`plot a slice of the posterior <help_plot_slice>`, but be careful not to cut to tight: degeneracies between parameters that are not visible in a slice can leave out parts of the mode.
-- If available, use a different parameterization for which the posterior may be more Gaussian and less correlated.
-
-
-Try GPry on an easier version of the same problem
--------------------------------------------------
-
-- Simplify the likelihood computation (e.g. downgrading its precision, turning off contributions) to be able to iterate faster until the problem is solved.
-- Fix a number of parameters to their fiducial/expected value to test on a lower-dimensional version of the problem.
-
-In this simpler scenario, you may be able to get an approximate MCMC/Nested sample to compare with, and :ref:`use it as a reference <help_reference>`.
-
-
 .. _help_plot_slice:
 
-Plot slices of the posterior
-----------------------------
+I. Learn more about your problem
+--------------------------------
 
 Usually, plotting a slice of the posterior/likelihood is useful to uncover features that may be spoiling the Gaussian Process modelling. To do this, you can use the slice plotter implemented in :func:`~gpry.plot.plot_slice_func`, preferably using a point close to the posterior mode.
 
@@ -63,10 +48,27 @@ For example, in the following slice we can see two different relevant features:
    In general it is not recommended to use the slice plot to derive a prior cut from it, since there may be parameter degeneracies in the posterior that are not visible in a slice and could let to part of the mode being left out.
 
 
+II. Incorporate known information to simplify the problem
+---------------------------------------------------------
+
+- Cut the prior to more tightly contain the region where the mode is expected. To help you with this, you can :ref:`plot a slice of the posterior <help_plot_slice>`, but be careful not to cut to tight: degeneracies between parameters that are not visible in a slice can leave out parts of the mode.
+- If available, use a different parameterization for which the posterior may be more Gaussian and less correlated.
+- [TODO] Something about initialization
+
+
+III. Try GPry on an easier version of the same problem
+------------------------------------------------------
+
+- Simplify the likelihood computation (e.g. downgrading its precision, turning off contributions) to be able to iterate faster until the problem is solved.
+- Fix a number of parameters to their fiducial/expected value to test on a lower-dimensional version of the problem.
+
+In this simpler scenario, you may be able to get an approximate MCMC/Nested sample to compare with, and :ref:`use it as a reference <help_reference>`.
+
+
 .. _help_reference:
 
-Supply a reference (approximate) MC sample if available
--------------------------------------------------------
+IV. Supply a reference (approximate) MC sample if available
+-----------------------------------------------------------
 
 If you have a precise or approximate fiducial MC sample of the posterior, you can pass it to the :class:`gpry.run.Runner` instance before calling the :func:`~gpry.run.Runner.run`` method using the :func:`~gpry.run.Runner.set_fiducial_MC` method:
 
@@ -88,35 +90,24 @@ This fiducial MC and point will be shown in the :ref:`progress plots <turn_on_pl
 
 .. _turn_on_plots:
 
-Turn on the debug output and progress plots
--------------------------------------------
+IV. Turn on the debug output and progress plots
+-----------------------------------------------
 
-[TODO]
+There are two settings of the Runner :func:`~gpry.run.Runner` that can help with debugging deficient convergence:
 
-Debug text output: what is printed.
+- ``verbose``: if set to 4 (by default 3), GPry will produce much more output, including the exact coordinates of the proposed points and the true log-posterior density obtained at evaluation. This can sometimes reveal unexpected behaviour by the true model.
+- ``plots``: if set to ``True``, GPry will produce some plots at the end of every iteration. Plots that are particularly expensive are skipped by default, and need to be requested explicitly. For a full set of progress plots, instead of ``True``, set ``plots={[plot_type]: True, [...]}`` where plot types are the arguments of the :func:`~gpry.run.Runner.plot_progress` method.
 
-Is the true posterior returning the expected values (see (X, log(p)) prints at the [eval] phase.
+  In particular, ``corner: True`` can reveal if GPry is mapping the right region, especially when a :ref:`reference MC sample <help_reference>` has been passed: if the acquisition MC sample seems stable through iterations and mostly on top of the training set, maybe the convergence criterion is too stringent, or the likelihood is more numerically noisy than the `noise_level` parameter accounts for.
 
-progress_plots: how to activate and ask for *all* of them
-
-What to look for in the trace plot:
-
-- convergence criterion oscillating but top not too far from limit: maybe that's as good as it gets, so reduce it.
-- step-like progress for some parameter with NORA: increase freq of mc_sample
-
-If convergence is not signalled, but the triangle plot seems stable through iterations and mostly on top of the training set (and if fiducial MC passed, the NORA MC and the fiducial are close enough), maybe the convergence criterion is too stringent, or the likelihood is numerically noisy (deterministically but not captured by ``noise_level``; if stochastically, problematic!).
+  Though also expensive, ``slice: True`` is particularly useful for diagnosing misbehaviour by the SVM infinities classifier.
 
 
-Start with high-precision settings
-----------------------------------
+V. Start with high-precision settings
+-------------------------------------
 
-[TODO]
+As expected, turning on the `precision paramters` of the algorithm can make it more likely to converge in exchange for additional computational costs. Two good starting points are:
 
-- NORA MC often (look out for ladder-like progression in parameter values)
-- Hyperparameter fit often.
+- If using NORA [TODO: reference], decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
 
-
-Something about initialisation
-------------------------------
-
-[TODO]
+- You can increase the frequency with which hyperparameters are fit with the ``fit_full_every`` option of the runner. This will make it more likely that the best GPR configuration is reached as soon as possible, but at a very high computational cost for dimensions larger than 10.
