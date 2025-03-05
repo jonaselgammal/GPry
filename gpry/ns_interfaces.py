@@ -189,8 +189,8 @@ class InterfacePolyChord(NSInterface):
             )
         # Process results
         if keep_all:
-            all_X_all = mpi.comm.gather(self.X_all)
-            all_y_all = mpi.comm.gather(self.y_all)
+            all_X_all = mpi.gather(self.X_all)
+            all_y_all = mpi.gather(self.y_all)
             if mpi.is_main_process:
                 self.X_all = np.concatenate(all_X_all)
                 self.y_all = np.concatenate(all_y_all)

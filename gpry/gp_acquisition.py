@@ -450,7 +450,7 @@ class BatchOptimizer(GenericGPAcquisition):
             # the optimization. The GP will be reset after the
             # Acquisition is done.
             gpr_ = deepcopy(gpr)
-        gpr_ = mpi.comm.bcast(gpr_ if mpi.is_main_process else None)
+        gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
         n_acq_per_process = \
             mpi.split_number_for_parallel_processes(self.n_restarts_optimizer)
         n_acq_this_process = n_acq_per_process[mpi.RANK]
@@ -500,9 +500,9 @@ class BatchOptimizer(GenericGPAcquisition):
                 y_lies[ipoint] = y_lie[0]
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
-            gpr_ = mpi.comm.bcast(gpr_ if mpi.is_main_process else None)
+            gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
         gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
-        return mpi.comm.bcast(
+        return mpi.bcast(
             (X_opts, y_lies, acq_vals) if mpi.is_main_process else (None, None, None))
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
@@ -891,12 +891,12 @@ class NORA(GenericGPAcquisition):
         X_excpt, y_excpt = None, None
         if mpi.is_main_process and self._X_mc is None:
             X_excpt = ValueError("No samples yet!")
-        X_excpt = mpi.comm.bcast(X_excpt)
+        X_excpt = mpi.bcast(X_excpt)
         if X_excpt is not None:
             raise X_excpt
         if mpi.is_main_process and self._y_mc is None:
             y_excpt = ValueError("Original logp was not stored. Cannot reweight!")
-        y_excpt = mpi.comm.bcast(y_excpt)
+        y_excpt = mpi.bcast(y_excpt)
         if y_excpt is not None:
             raise y_excpt
         # Ensure y and sigma_y (optional) are computed
@@ -1173,13 +1173,13 @@ class NORA(GenericGPAcquisition):
         rank-0 process returns [X, y, sigma, acq], where the last two are the
         unconditioned input ones.
         """
-        pool_X = mpi.comm.gather(self.pool.X[:len(self.pool)])
-        pool_y = mpi.comm.gather(self.pool.y[:len(self.pool)])
-        pool_sigma = mpi.comm.gather(self.pool.sigma[:len(self.pool)])
-        pool_acq = mpi.comm.gather(self.pool.acq[:len(self.pool)])
+        pool_X = mpi.gather(self.pool.X[:len(self.pool)])
+        pool_y = mpi.gather(self.pool.y[:len(self.pool)])
+        pool_sigma = mpi.gather(self.pool.sigma[:len(self.pool)])
+        pool_acq = mpi.gather(self.pool.acq[:len(self.pool)])
         # Using the conditional acq value just to discard empty slots (acq=-inf)
         # Later discarded (not returned), since they need to be recomputed anyway.
-        pool_acq_cond = mpi.comm.gather(self.pool.acq_cond[:len(self.pool)])
+        pool_acq_cond = mpi.gather(self.pool.acq_cond[:len(self.pool)])
         if mpi.is_main_process:
             # Discard unfilled positions
             pool_acq_cond = np.concatenate(pool_acq_cond)
@@ -1208,7 +1208,7 @@ class NORA(GenericGPAcquisition):
                 n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
                 verbose=self.pool.verbose)
             merged_pool.add(pool_X, pool_y, pool_sigma, pool_acq, method=method)
-        merged_pool = mpi.comm.bcast(merged_pool)
+        merged_pool = mpi.bcast(merged_pool)
         return merged_pool
 
 

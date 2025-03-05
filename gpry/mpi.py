@@ -1,18 +1,31 @@
 # Defining some helpers for parallelisation.
 import dill
-from mpi4py import MPI
 import numpy as np
+from warnings import warn
 from numpy.random import SeedSequence, default_rng, Generator
 
-# Use dill pickler (can seriealize more stuff, e.g. lambdas)
-MPI.pickle.__init__(dill.dumps, dill.loads)
+try:
+    from mpi4py import MPI
 
-# Define some interfaces
-comm = MPI.COMM_WORLD
-SIZE = comm.Get_size()
-RANK = comm.Get_rank()
-is_main_process = not bool(RANK)
-multiple_processes = SIZE > 1
+    # Use dill pickler (can seriealize more stuff, e.g. lambdas)
+    MPI.pickle.__init__(dill.dumps, dill.loads)
+    # Define some interfaces
+    comm = MPI.COMM_WORLD
+    SIZE = comm.Get_size()
+    RANK = comm.Get_rank()
+    is_main_process = not bool(RANK)
+    multiple_processes = SIZE > 1
+except ImportError:
+    warn(
+        "mpi4py could not be imported. "
+        "It is optional but recommended for faster running in parallel."
+    )
+    # Define dummy interfaces
+    comm = None
+    SIZE = 1
+    RANK = 0
+    is_main_process = True
+    multiple_processes = False
 
 
 def get_random_generator(seed=None):
@@ -31,8 +44,37 @@ def get_random_generator(seed=None):
     if is_main_process:
         ss = SeedSequence(seed)
         child_seeds = ss.spawn(SIZE)
+    if not multiple_processes:
+        return default_rng(child_seeds[0])
     ss = comm.scatter(child_seeds if is_main_process else None)
     return default_rng(ss)
+
+
+def bcast(args, root=None):
+    """
+    Wrapper for MPI.comm.bcast, that works if MPI not present.
+    """
+    if multiple_processes:
+        return comm.bcast(args, root=root)
+    return args
+
+
+def gather(args, root=None):
+    """
+    Wrapper for MPI.comm.gather, that works if MPI not present.
+    """
+    if multiple_processes:
+        return comm.gather(args, root=root)
+    return [args]
+
+
+def allgather(args):
+    """
+    Wrapper for MPI.allgather, that works if MPI not present.
+    """
+    if multiple_processes:
+        return comm.allgather(args)
+    return [args]
 
 
 def split_number_for_parallel_processes(n, n_proc=SIZE):
@@ -67,6 +109,8 @@ def step_split(values):
     If starting from sorted arrays, it preserves "computational scaling" among
     processes, but producing similar-in-content partial arrays.
     """
+    if not multiple_processes:
+        return values
     values = comm.bcast(values)
     return values[RANK::SIZE]
 
@@ -76,6 +120,8 @@ def merge_step_split(values):
     Gather step-split (with ``::mpi.SIZE``) arrays and returns the merged set for the
     rank=0 process (``None`` for the rest).
     """
+    if not multiple_processes:
+        return values
     values_step = comm.gather(values)
     if is_main_process:
         values_merged = np.zeros(sum(len(v) for v in values_step))
@@ -103,22 +149,24 @@ def multi_gather_array(arrs):
     if not isinstance(arrs, (list, tuple)):
         arrs = [arrs]
     Nobj = len(arrs)
-    if multiple_processes:
-        all_arrs = comm.gather(arrs)
-        if is_main_process:
-            arrs = [np.concatenate([all_arrs[r][i]
-                                   for r in range(SIZE)]) for i in range(Nobj)]
-            return arrs
-        else:
-            return [None for i in range(Nobj)]
-    else:
+    if not multiple_processes:
         return arrs
+    all_arrs = comm.gather(arrs)
+    if is_main_process:
+        arrs = [
+            np.concatenate([all_arrs[r][i] for r in range(SIZE)]) for i in range(Nobj)
+        ]
+        return arrs
+    else:
+        return [None for i in range(Nobj)]
 
 
 def sync_processes():
     """
     Makes all processes halt here until all have reached this point.
     """
+    if not multiple_processes:
+        return
     comm.barrier()
 
 
@@ -126,8 +174,9 @@ def share_attr(instance, attr_name, root=0):
     """Broadcasts ``attr`` of ``instance`` from process of rank ``root``."""
     if not multiple_processes:
         return
-    setattr(instance, attr_name,
-            comm.bcast(getattr(instance, attr_name, None), root=root))
+    setattr(
+        instance, attr_name, comm.bcast(getattr(instance, attr_name, None), root=root)
+    )
 
 
 def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
@@ -137,7 +186,8 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
     Returns the resulting `(y, sigma_y)` arrays (computed or given) for rank 0, and
     ``None`` otherwise.
     """
-    y = comm.bcast(y)
+    if multiple_processes:
+        y = comm.bcast(y)
     if y is None:  # assume sigma_y is also None
         this_X = step_split(X)
         if len(this_X) > 0:

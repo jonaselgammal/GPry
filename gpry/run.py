@@ -300,7 +300,7 @@ class Runner():
                 mpi.share_attr(self, "callback")
             else:  # for check of whether to call it
                 callback_func = callback
-                self.callback = mpi.comm.bcast(
+                self.callback = mpi.bcast(
                     (callback is not None) if mpi.is_main_process else None)
                 if mpi.is_main_process:
                     self.callback = callback_func
@@ -712,12 +712,12 @@ class Runner():
             mpi_awareness = [cc.is_MPI_aware for cc in self.convergence]
         else:
             mpi_awareness = None
-        mpi_awareness = mpi.comm.bcast(mpi_awareness)
+        mpi_awareness = mpi.bcast(mpi_awareness)
         if not mpi.is_main_process:
             self.convergence = [gpryconv.DummyMPIConvergeCriterion()] * len(mpi_awareness)
         for i, (cc, is_MPI) in enumerate(zip(self.convergence, mpi_awareness)):
             if is_MPI:
-                self.convergence[i] = mpi.comm.bcast(cc)
+                self.convergence[i] = mpi.bcast(cc)
 
     def run(self):
         r"""
@@ -845,7 +845,7 @@ class Runner():
                             level=1,
                         )
                         no_more_candidates = True
-                no_more_candidates = mpi.comm.bcast(no_more_candidates)
+                no_more_candidates = mpi.bcast(no_more_candidates)
                 if no_more_candidates:
                     break
                 if mpi.is_main_process:
@@ -881,7 +881,7 @@ class Runner():
                 self.log(f"Current GPR kernel: {self.gpr.kernel_}", level=3)
             mpi.sync_processes()
             # Share new_X, new_y and y_pred to the runner instance
-            self.new_X, self.new_y, self.y_pred = mpi.comm.bcast(
+            self.new_X, self.new_y, self.y_pred = mpi.bcast(
                 (new_X, new_y, y_pred) if mpi.is_main_process else (None, None, None))
             # We *could* check the max_total/finite condition and stop now, but it is
             # good to run the convergence criterion anyway, in case it has converged
@@ -1046,7 +1046,7 @@ class Runner():
             n_still_needed = np.max([0, self.n_initial - pretrained])
             n_to_sample_per_process = int(np.ceil(n_still_needed / mpi.SIZE))
         if mpi.multiple_processes:
-            n_to_sample_per_process = mpi.comm.bcast(
+            n_to_sample_per_process = mpi.bcast(
                 n_to_sample_per_process if mpi.is_main_process else None)
         if n_to_sample_per_process == 0 and self.verbose > 1:  # Enough pre-training
             warnings.warn("The number of pretrained points exceeds the number of "
@@ -1091,8 +1091,8 @@ class Runner():
                 # Gather points and decide whether to break.
                 if mpi.multiple_processes:
                     # GATHER keeps rank order (MPI standard): we can do X and y separately
-                    all_points = mpi.comm.gather(X_init_loop)
-                    all_posts = mpi.comm.gather(y_init_loop)
+                    all_points = mpi.gather(X_init_loop)
+                    all_posts = mpi.gather(y_init_loop)
                 else:
                     all_points = [X_init_loop]
                     all_posts = [y_init_loop]
@@ -1106,7 +1106,7 @@ class Runner():
                     # Break loop if the desired number of initial samples is reached
                     finished = n_finite_new >= n_still_needed
                 if mpi.multiple_processes:
-                    finished = mpi.comm.bcast(finished if mpi.is_main_process else None)
+                    finished = mpi.bcast(finished if mpi.is_main_process else None)
                 if finished:
                     break
                 else:
@@ -1163,12 +1163,12 @@ class Runner():
         # Collect (if parallel) and append to the current model
         if mpi.multiple_processes:
             # GATHER keeps rank order (MPI standard): we can do X and y separately
-            new_Xs = mpi.comm.gather(new_X_this_process)
-            new_ys = mpi.comm.gather(new_y_this_process)
+            new_Xs = mpi.gather(new_X_this_process)
+            new_ys = mpi.gather(new_y_this_process)
             if mpi.is_main_process:
                 new_X = np.concatenate(new_Xs)
                 new_y = np.concatenate(new_ys)
-            new_X, new_y = mpi.comm.bcast(
+            new_X, new_y = mpi.bcast(
                 (new_X, new_y) if mpi.is_main_process else (None, None))
         else:
             new_y = new_y_this_process
@@ -1193,7 +1193,7 @@ class Runner():
         #     hyperparams_bounds = self.gpr.kernel_.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
         fit_gpr_kwargs = {
-            "hyperparameter_bounds": mpi.comm.bcast(hyperparams_bounds),
+            "hyperparameter_bounds": mpi.bcast(hyperparams_bounds),
             "start_from_current": mpi.is_main_process,
         }
         is_this_iter = lambda every: self.current_iteration % every == every - 1
@@ -1230,7 +1230,7 @@ class Runner():
             )
             lml = -np.inf
         # Pick best and share it
-        lmls = mpi.comm.allgather((mpi.RANK, lml))
+        lmls = mpi.allgather((mpi.RANK, lml))
         best_i = lmls[np.argmax([l for i, l in lmls])][0]
         if mpi.is_main_process:
             self.log(
@@ -1643,7 +1643,7 @@ class Runner():
             )
             success = \
                 kl_norm(mean_last_mc, cov_last_mc, mean_training, cov_training) < self.d
-        success = mpi.comm.bcast(success if mpi.is_main_process else None)
+        success = mpi.bcast(success if mpi.is_main_process else None)
         if not hasattr(self.acquisition, "last_MC_sample"):
             return success
         if mpi.is_main_process:
@@ -1655,11 +1655,11 @@ class Runner():
                 pass  # If failed, consider training test sufficient
             else:
                 success &= kl_norm(mean_last_mc, cov_last_mc, mean_acq, cov_acq) < self.d
-        success = mpi.comm.bcast(success if mpi.is_main_process else None)
+        success = mpi.bcast(success if mpi.is_main_process else None)
         return success
 
     def plot_mc(self, samples_or_samples_folder=None, add_training=True,
-                add_samples=None, output=None, output_dpi=200, ext="svg"):
+                add_samples=None, output=None, output_dpi=200, ext="png"):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
         shows some evaluation locations.

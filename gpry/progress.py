@@ -150,10 +150,10 @@ class Progress:
     def _bcast_operation(self, column, operation):
         f = {"root": None, "max": max, "sum": sum}[operation.lower()]
         all_values = np.array(
-            mpi.comm.gather(self.data.iloc[-1, self.data.columns.get_loc(column)])
+            mpi.gather(self.data.iloc[-1, self.data.columns.get_loc(column)])
         )
         if f is None:
-            self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.comm.bcast(
+            self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.bcast(
                 all_values[0] if mpi.is_main_process else None
             )
             return
@@ -161,7 +161,7 @@ class Progress:
         if mpi.is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
-        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.comm.bcast(max_value)
+        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.bcast(max_value)
 
     def _x_ticks_for_bar_plot(self, fig, ax):
         fig.canvas.draw()

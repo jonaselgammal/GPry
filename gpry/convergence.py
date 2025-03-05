@@ -174,7 +174,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
             convergence_policy = self._convergence_policy
         else:
             convergence_policy = None
-        return mpi.comm.bcast(convergence_policy)
+        return mpi.bcast(convergence_policy)
 
     def is_converged_MPIwrapped(self, *args, **kwargs):
         """
@@ -194,11 +194,11 @@ class ConvergenceCriterion(metaclass=ABCMeta):
             except ConvergenceCheckError as excpt:
                 failed = True
                 err_msg = str(excpt)
-        if any(mpi.comm.allgather(failed)):
+        if any(mpi.allgather(failed)):
             # Take lowest-rank non-null error message
-            err_msg = [msg for msg in mpi.comm.allgather(err_msg) if msg is not None][0]
+            err_msg = [msg for msg in mpi.allgather(err_msg) if msg is not None][0]
             raise ConvergenceCheckError(err_msg)
-        return mpi.comm.bcast(has_converged)
+        return mpi.bcast(has_converged)
 
 
 class DummyMPIConvergeCriterion(ConvergenceCriterion):
@@ -354,15 +354,15 @@ class GaussianKL(ConvergenceCriterion):
                     cov = np.atleast_2d(np.cov(X.T, aweights=w, ddof=0))
                 except (ValueError, TypeError) as excpt:
                     num_error = excpt
-        attr_error = mpi.comm.bcast(attr_error)
+        attr_error = mpi.bcast(attr_error)
         if attr_error:
             raise AttributeError from attr_error  # all processes!
-        num_error = mpi.comm.bcast(num_error)
+        num_error = mpi.bcast(num_error)
         if num_error:
             raise ConvergenceCheckError(
                 f"Numerical error when computing new mean and cov: {num_error}"
             ) from num_error
-        return mpi.comm.bcast((mean, cov) if mpi.is_main_process else None)
+        return mpi.bcast((mean, cov) if mpi.is_main_process else None)
 
     def _get_new_mean_and_cov_from_mc(self, gp):
         self.thres.append(self.limit)
@@ -403,10 +403,10 @@ class GaussianKL(ConvergenceCriterion):
                     self.n_reused += 1
                     reused = True
         if mpi.multiple_processes:
-            reused = mpi.comm.bcast(reused if mpi.is_main_process else None)
+            reused = mpi.bcast(reused if mpi.is_main_process else None)
         if reused:
             if mpi.multiple_processes:
-                mean_reweighted, cov_reweighted = mpi.comm.bcast(
+                mean_reweighted, cov_reweighted = mpi.bcast(
                     (mean_reweighted, cov_reweighted) if mpi.is_main_process else None
                 )
             return mean_reweighted, cov_reweighted
@@ -419,7 +419,7 @@ class GaussianKL(ConvergenceCriterion):
             self._last_collection = samples
         # Broadcast results
         if mpi.multiple_processes:
-            mean_new, cov_new = mpi.comm.bcast(
+            mean_new, cov_new = mpi.bcast(
                 (mean_new, cov_new) if mpi.is_main_process else None
             )
         return mean_new, cov_new
@@ -460,7 +460,7 @@ class GaussianKL(ConvergenceCriterion):
         except LoggedError:
             success = False
         if mpi.multiple_processes:
-            success = all(mpi.comm.allgather(success))
+            success = all(mpi.allgather(success))
         if not success:
             raise ConvergenceCheckError
         updated_info = model.info()
