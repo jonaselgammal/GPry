@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpry"
+dynamic = ["version"]
+authors = [
+    {name = "Jonas El Gammal", email = "jonas.el.gammal@rwth-aachen.de"},
+    {name = "Jesus Torrado"} ,
+    {name = "Nils Schoeneberg"},
+    {name = "Christian Fidler"},  
+]
+description = "A package for fast bayesian inference of expensive Likelihoods"
+readme = "README.rst"
+license = {file = "LICENSE"}
+keywords = ["inference", "gaussianprocesses", "sampling", "cosmology"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13"
+]
+
+requires-python = ">=3.8.0"
+dependencies = [
+    "cobaya>=3.2.2", "scikit-learn", "dill", "mpi4py", "tqdm"
+]
+
+[project.optional-dependencies]
+dev = ["flake8", "flake8-pyproject", "pre-commit"] # " ## pydocstyle
+test = ["pytest", "pytest-xdist", "flaky"]
+docs = ["sphinx", "sphinx_rtd_theme", "sphinx-favicon"]
+
+[tool.setuptools.dynamic]
+version = { attr = "gpry.__version__" }
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]
+
+[tool.setuptools.packages.find]
+exclude = ["docs", "tests", "examples"]
+
+[project.urls]
+Homepage = "https://gpry.readthedocs.io"
+Documentation = "https://gpry.readthedocs.io"
+Repository = "https://github.com/jonaselgammal/GPry"
+Issues = "https://github.com/jonaselgammal/GPry/issues"
