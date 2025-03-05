@@ -52,5 +52,13 @@ exclude = ["docs", "tests", "examples"]
 [project.urls]
 Homepage = "https://gpry.readthedocs.io"
 Documentation = "https://gpry.readthedocs.io"
-Repository = "https://github.com/jonaselgammal/GPry"
+Source = "https://github.com/jonaselgammal/GPry"
 Issues = "https://github.com/jonaselgammal/GPry/issues"
+
+[tool.flake8]
+ignore = ['E231', 'E241']
+per-file-ignores = [
+    '__init__.py:F401',
+]
+max-line-length = 88
+count = true

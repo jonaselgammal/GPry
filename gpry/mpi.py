@@ -50,7 +50,7 @@ def get_random_generator(seed=None):
     return default_rng(ss)
 
 
-def bcast(args, root=None):
+def bcast(args, root=0):
     """
     Wrapper for MPI.comm.bcast, that works if MPI not present.
     """
@@ -59,7 +59,7 @@ def bcast(args, root=None):
     return args
 
 
-def gather(args, root=None):
+def gather(args, root=0):
     """
     Wrapper for MPI.comm.gather, that works if MPI not present.
     """
