@@ -1427,7 +1427,7 @@ class Runner():
 
     def plot_progress(
             self,
-            ext="svg",
+            ext="png",
             timing=True,
             convergence=True,
             trace=True,
@@ -1439,7 +1439,7 @@ class Runner():
 
         Parameters
         ----------
-        ext : str (default ``"svg"``)
+        ext : str (default ``"png"``)
             Format for the plots, among the available ones in ``matplotlib``.
 
         timing : bool (default: True)
@@ -1691,7 +1691,7 @@ class Runner():
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
 
-        ext : str (default: "svg" if `output` not defined; else ignore)
+        ext : str (default: "png" if `output` not defined; else ignore)
             Format for the plot.
         """
         if not mpi.is_main_process:
@@ -1743,7 +1743,7 @@ class Runner():
 
     def plot_distance_distribution(
             self, samples_or_samples_folder=None, show_added=True, output=None,
-            output_dpi=200, ext="svg"):
+            output_dpi=200, ext="png"):
         """
         Plots the distance distribution of the training points with respect to the
         confidence ellipsoids (in a Gaussian approx) derived from an MC sample of the
@@ -1769,7 +1769,7 @@ class Runner():
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
 
-        ext : str (default: "svg" if `output` not defined; else ignore)
+        ext : str (default: "png" if `output` not defined; else ignore)
             Format for the plot
         """
         if not mpi.is_main_process:
