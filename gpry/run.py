@@ -949,6 +949,8 @@ class Runner():
             self.save_checkpoint()
             if mpi.is_main_process and self.plots:
                 try:
+                    if mpi.is_main_process:
+                        self.log("[PLOTS] Creating and saving progress plots...", level=3)
                     self.plot_progress(
                         **(self.plots if isinstance(self.plots, Mapping) else {})
                     )
