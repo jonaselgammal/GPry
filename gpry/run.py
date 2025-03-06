@@ -1404,10 +1404,13 @@ class Runner():
         params = list(self.model.parameterization.sampled_params())
         labels = self.model.parameterization.labels()
         labels_list = [labels.get(p) for p in params]
+        minuslogpost = (
+            -self.fiducial_MC_logpost if self.fiducial_MC_logpost is not None else None
+        )
         mcsamples = MCSamples(
             samples=self.fiducial_MC_X,
             weights=self.fiducial_MC_weight,
-            loglikes=-self.fiducial_MC_logpost,
+            loglikes=minuslogpost,
             names=params,
             labels=labels_list,
             ranges=dict(zip(params, self.gpr.bounds)),
