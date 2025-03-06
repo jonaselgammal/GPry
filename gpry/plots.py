@@ -415,6 +415,7 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
 def plot_corner_getdist(
         mc_samples,
         params=None,
+        bounds=None,
         filled=None,
         training=None,
         training_highlight_last=False,
@@ -452,10 +453,13 @@ def plot_corner_getdist(
         List of parameter names to be plotted, by default all of the ones in the first
         MC sample, included derived ones like probability densities.
 
-    filled : dict(str, bool)
+    bounds :array-like, shape = (len(params), 2), list(array-like, shape = (2))
+        Dict or list (sorted as ``params``) of parameter bounds.
+
+    filled : dict(str, bool), list
         Dictionary with labels as keys specifying the `filled` property of the contours.
         Contours are filled by default when unspecified (including key missing for a
-        passed sample).
+        passed sample). If it is a list, the same order as in ``mc_samples`` is assumed.
 
     training : GaussianProcessRegressor, dict(str or tuple, GaussianProcessRegressor), optional
         If a GPR is passed, it plots the training samples (including the discarded ones)
@@ -519,9 +523,22 @@ def plot_corner_getdist(
             list(gdsamples_dict.values())[-1].getParamNames().getRunningNames()
         params = [p for p in params if p in at_most_params]
         triang_args.append(params)
+    if isinstance(bounds, Mapping):
+        bounds = {p: bounds.get(p) for p in params}
+    elif isinstance(bounds, (Sequence, np.ndarray)):
+        if len(bounds) != len(params):
+            raise ValueError("`bounds` and `params` have different number of elements.")
+        bounds = {p: bounds[i] for i, p in enumerate(params)}
+    if isinstance(filled, Sequence):
+        # Assume it refers to the first samples if not complete; the rest are filled.
+        filled = {
+            name: (filled[i] if i < len(filled) else True)
+            for i, name in enumerate(gdsamples_dict)
+        }
     triang_kwargs = {
         "legend_labels": list(gdsamples_dict),
         "filled": [(filled or {}).get(k, True) for k in gdsamples_dict],
+        "param_limits": bounds,
         "markers": markers,
     }
     try:
