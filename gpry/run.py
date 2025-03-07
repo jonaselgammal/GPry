@@ -480,7 +480,7 @@ class Runner():
             convergence_criterion = {"CorrectCounter": {"policy": "s"}}
             if acq_has_mc:
                 convergence_criterion["GaussianKL"] = {"policy": "s"}
-                convergence_criterion["GaussianKLTrain"] = {"policy": "n"}
+                convergence_criterion["TrainAlignment"] = {"policy": "n"}
         if isinstance(convergence_criterion, Mapping):
             # In principle, deepcopy, but keep values that are ConvergenceCriterion as is!
             convergence_criterion_copy = {}
@@ -1640,14 +1640,13 @@ class Runner():
         """
         if mpi.is_main_process:
             last_mc_samples = self.last_mc_samples(as_getdist=False)
-            first_third = int(np.floor(len(last_mc_samples) / 3))
-            mean_last_mc = last_mc_samples.mean(first=first_third)
-            cov_last_mc = last_mc_samples.cov(first=first_third)
-            mean_training, cov_training = mean_covmat_from_evals(
-                self.gpr.X_train, self.gpr.y_train
+            mean_last_mc = last_mc_samples.mean()
+            cov_last_mc = last_mc_samples.cov()
+            mean_training, _ = mean_covmat_from_evals(self.gpr.X_train, self.gpr.y_train)
+            cred = gpryconv.TrainAlignment.criterion_value_from_means_cov(
+                mean_last_mc, mean_training, cov_last_mc
             )
-            success = \
-                kl_norm(mean_last_mc, cov_last_mc, mean_training, cov_training) < self.d
+            success = 0 < cred < 0.5
         success = mpi.bcast(success if mpi.is_main_process else None)
         if not hasattr(self.acquisition, "last_MC_sample"):
             return success

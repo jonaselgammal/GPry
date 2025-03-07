@@ -13,7 +13,8 @@ from abc import ABCMeta, abstractmethod
 import numpy as np
 
 from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
-from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd, mean_covmat_from_evals
+from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd, mean_covmat_from_evals, \
+    credibility_of_nstd
 from gpry import mpi
 
 # Policies and default ("necessary") for convergence criteria
@@ -276,7 +277,7 @@ class GaussianKL(ConvergenceCriterion):
         Dict with the following keys:
 
         * ``"limit"``: Value of the KL divergence for which we consider the algorithm
-                       converged (default ``1e-2``).
+                       converged (default ``2e-2``).
         * ``"limit_times"``: Number of consecutive times that the KL divergence must be
                              lower than the ``limit`` parameter (default ``2``).
         * ``"n_draws"``: Number of steps of the MCMC chain (default: ignored in favour of
@@ -295,7 +296,8 @@ class GaussianKL(ConvergenceCriterion):
         self.prior_bounds = prior_bounds
         self.mean = None
         self.cov = None
-        self.limit = params.get("limit", 1e-2)
+        # The limit cannot be too strict, since the NS sample is not so stable itself
+        self.limit = params.get("limit", 2e-2)
         d = len(self.prior_bounds)
         # Needs to at least encompass 2 full MC samples -- TODO: fix in run.py at init
         self.limit_times = int(np.round(params.get("limit_times", d)))
@@ -570,7 +572,7 @@ class GaussianKLTrain(GaussianKL):
         Dict with the following keys:
 
         * ``"limit"``: Value of the KL divergence for which we consider the algorithm
-                       converged (default ``1e-2``).
+                       converged (default ``2e-2``).
         * ``"limit_times"``: Number of consecutive times that the KL divergence must be
                              lower than the ``limit`` parameter (default ``2``).
         * ``"n_draws"``: Number of steps of the MCMC chain (default: ignored in favour of
@@ -586,7 +588,7 @@ class GaussianKLTrain(GaussianKL):
         if params.get("limit") is None:
             params["limit"] = len(prior_bounds)
         if params.get("limit_times") is None:
-            params["limit_times"] = 1
+            params["limit_times"] = 2
         super().__init__(prior_bounds, params)
 
     def _get_mean_and_cov_from_training(self, gp):
@@ -633,6 +635,121 @@ class GaussianKLTrain(GaussianKL):
             self.n_accepted_evals.append(gp.n)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
         return kl
+
+
+class TrainAlignment(GaussianKL):
+    """
+    This criterion is not aimed at estimating convergence, but at discarding cases in
+    which a MC sample from the GPR (the last one obtained by the acquisition step, if it
+    exists, otherwise computed on the fly) would not sample the mode mapped by the
+    training set, but instead some overshooting or large baseline plateau.
+
+    It computes the minimum central confidence level of the mean of the training set with
+    respect to a Gaussian approximation of the surrogate posterior.
+
+    Its maximum value is obviously 1, and for the kind of test that this criterion
+    addresses a value below 0.5 should be enough. It's minimum value is clipped at 0.001,
+    to avoid spoiling the convergence plots with numerical noise.
+
+    Since its a check in the current iteration, by default it is enough for this criterion
+    to be satisfied in the last step, and with a high tolerance, since it affects extreme
+    cases only.
+
+    At the moment, it assumes that there is a single mode.
+
+    If a valid GPAcquisition instance is passed to ``is_converged``, mean and covariance
+    will be extracted from it. Otherwise, it estimates the mean and covariance by running
+    an MCMC sampler on the GP (slow).
+
+    In the second case, this convergence criterion is MPI-aware, such that it will run as
+    many parallel MCMC chains as running processes to improve the estimation of the mean
+    and covariance.
+
+    Parameters
+    ----------
+    prior_bounds : list
+        List of prior bounds.
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"frac_training"``: fraction, starting from the latest, of the training set to
+                               be used (default: 1)
+        * ``"limit"``: Probability mass within the minimum CL enclosing the training mean
+                       (default ``0.5``).
+        * ``"limit_times"``: Number of consecutive times that the criterion must be
+                             fulfilled (default ``1``).
+        * ``"n_draws"``: Number of steps of the MCMC chain (default: ignored in favour of
+                         ``"n_draws_per_dimsquared"``).
+        * ``"n_draws_per_dimsquared"``: idem, as a factor of the dimensionality squared
+                                        (default 10).
+        * ``"max_reused"``: number of times a sample can be reweighted and reused (may
+                            miss new high-value regions) (default 4).
+    """
+
+    def __init__(self, prior_bounds, params):
+        params = params or {}
+        self.frac_training = params.get("frac_training", 1)
+        if params.get("limit") is None:
+            params["limit"] = 0.5
+        if params.get("limit_times") is None:
+            params["limit_times"] = 1
+        super().__init__(prior_bounds, params)
+
+    def _get_mean_from_training(self, gp):
+        Nfrac = int(gp.n * self.frac_training)
+        return mean_covmat_from_evals(gp.X_train[-Nfrac:], gp.y_train[-Nfrac:])[0]
+
+    @staticmethod
+    def criterion_value_from_means_cov(mean1, mean2, cov):
+        mean_diff = mean1 - mean2
+        chi2 = mean_diff @ np.linalg.inv(cov) @ mean_diff
+        return credibility_of_nstd(np.sqrt(chi2), len(mean1))
+
+    def criterion_value(self, gp, gp_2=None, acquisition=None):
+        try:
+            mean_new, cov_new = self._get_new_mean_and_cov(gp, acquisition=acquisition)
+        except ConvergenceCheckError as excpt:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(
+                f"Error when computing mean and covmat: {excpt}"
+            ) from excpt
+        try:
+            mean_training = self._get_mean_from_training(gp)
+        except Exception as excpt:
+            self.values.append(np.nan)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(
+                f"Error when computing mean and covmat from training: {excpt}"
+            ) from excpt
+        if gp_2 is not None:
+            # TODO: Nothing yet to do with gp2
+            pass
+        # Compute the CL corresponding to the Chi-squared of the mean of the training set
+        try:
+            eps = self.criterion_value_from_means_cov(mean_new, mean_training, cov_new)
+            if eps < 0:
+                raise ValueError("Negative credibility -> undefined")
+            eps = max(eps, 1e-3)  # cap to avoid plotting numerical noise
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(eps)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+        except Exception as excpt:
+            eps = np.nan
+            self.mean = mean_new
+            self.cov = cov_new
+            self.values.append(eps)
+            self.n_posterior_evals.append(gp.n_total)
+            self.n_accepted_evals.append(gp.n)
+            raise ConvergenceCheckError(
+                f"Computation error in train mean alignment: {excpt}"
+            ) from excpt
+        return eps
 
 
 class CorrectCounter(ConvergenceCriterion):
