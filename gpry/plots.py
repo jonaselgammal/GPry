@@ -538,7 +538,7 @@ def plot_corner_getdist(
     triang_kwargs = {
         "legend_labels": list(gdsamples_dict),
         "filled": [(filled or {}).get(k, True) for k in gdsamples_dict],
-        "param_limits": bounds,
+        "param_limits": bounds or {},
         "markers": markers,
     }
     try:
