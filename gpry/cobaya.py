@@ -62,22 +62,26 @@ class CobayaWrapper(Sampler):
         self.mc_sampler_instance = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
         # Default to Runner & Acq defaults: (recusively) remove keys with None value:
+        if self.gpr is None:
+            self.gpr = {}
         for k, v in list(self.gpr.items()):
             if v is None:
                 self.gpr.pop(k)
+        if self.gp_acquisition is None:
+            self.gp_acquisition = {}
         for k, v in list(self.gp_acquisition.items()):
             if v is None:
                 self.gp_acquisition.pop(k)
-        gq_acq_input = deepcopy(self.gp_acquisition)
-        gp_acq_engine = gq_acq_input.pop("engine", "BatchOptimizer")
+        gp_acq_input = deepcopy(self.gp_acquisition)
+        gp_acq_engine = gp_acq_input.pop("engine", "BatchOptimizer")
         # Grab the relevant acq options, merge them, and kick out the unused ones
         gp_acq_engine_options = None
-        for k in list(gq_acq_input):
+        for k in list(gp_acq_input):
             if k.startswith("options_"):
-                gp_acq_engine_options = gq_acq_input.pop(k)
+                gp_acq_engine_options = gp_acq_input.pop(k)
                 if k.lower().endswith(gp_acq_engine.lower()):
-                    gq_acq_input.update(gp_acq_engine_options or {})
-        gp_acq_input = {gp_acq_engine: gq_acq_input}
+                    gp_acq_input.update(gp_acq_engine_options or {})
+        gp_acq_input = {gp_acq_engine: gp_acq_input}
         # Initialize the runner
         try:
             self.gpry_runner = Runner(
@@ -179,7 +183,7 @@ class CobayaWrapper(Sampler):
             prefix = self.surrogate_prefix
         self.gpry_runner.generate_mc_sample(
             sampler=self.mc_sampler if sampler is None else sampler,
-            add_option=add_options,
+            add_options=add_options,
             output=prefix,
             resume=resume,
         )
@@ -193,14 +197,14 @@ class CobayaWrapper(Sampler):
         """
         return bool(getattr(self.gpry_runner, "_last_mc_samples", False))
 
-    def do_plots(self, format="svg"):
+    def do_plots(self, ext="png"):
         """
         Produces some results and diagnosis plots.
         """
-        self.gpry_runner.plot_progress(format=format)
         self.gpry_runner.plot_distance_distribution(format=format)
+        self.gpry_runner.plot_progress(ext=ext)
         if self.is_mc_sampled:
-            self.gpry_runner.plot_mc(format=format)
+            self.gpry_runner.plot_mc(ext=ext)
 
     def samples(
             self,

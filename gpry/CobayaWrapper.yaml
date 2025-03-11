@@ -47,6 +47,9 @@ gpr:
   n_restarts_optimizer: 3d
   # Verbosity (set only if different from the overall verbosity)
   verbose:
+  # Shrinkage of the model region, if necessary for speed and robustness
+  trust_region_nstd:
+  trust_region_factor:
   # [Not interfaced yet] Preprocessors for input and output scales
   # preprocessing_X: Normalize_bounds
   # preprocessing_y: Normalize_y
@@ -56,9 +59,6 @@ gp_acquisition:
   # Acquisition function and its arguments
   acq_func:
     LogExp: {zeta_scaling: 0.85}
-  # Shrinkage of the acquisition region, if necessary for speed and robustness
-  shrink_1d_nstd:
-  shrink_with_factor:
   # Verbosity (set only if different from the overall verbosity)
   verbose:
   # Acquisition engine: NORA or BatchOptimizer
