@@ -1,6 +1,56 @@
 How does GPry work
 ==================
 
+GPry creates an interpolating model of the log-posterior density function. It does so using the least amount of evaluations possible. The locations in parameter space of these evaluations are chosen sequentially, so that they maximise the amount of information that can be obtained by evaluating the posterior there.
+
+Here we explain some of the key aspects of the GPry algorithm.
+
+
+Active learning of a Gaussian Process
+-------------------------------------
+
+GPry does not need any pre-training: it trains its surrogate model at run time by selecting optimal evaluation locations. The process of selecting these optimal locations based on current information is commonly known as **active learning**. It involves finding the maximum of an **acquisition function** measuring the amount of information about the true model expected to be gained by evaluating it at a given point. Acquisition functions must manage a good balance between **exploration** (getting an overall-good model of the true function) versus **exploitation** (prioritising a better modelling of the true function where its value is the highest). The default acquisition function used by GPry is described in [TODO: reference]
+
+You can see the way active learning works in the following figure: the top plots show the current GP model, and the bottom ones the value of the acquisition function (for this simple example, the GP standard deviation times the exponential of the double of the GP mean); every column is an iteration of the algorithm. Notice how at every step an evaluation of the true function at the previous maximum of the acquisition function has been added:
+
+.. image:: images/active_learning.png
+   :width: 950
+   :align: center
+
+.. note::
+
+   This aspect of GPry is one of the main difference with **amortised** approaches, such as forward-modelling (or simulation-based) inference: the latter can produce inference at very low cost in exchange for some usually-costly pre-training; instead, the cost of inference in active learning approaches is higher (due both to the need for evaluating the true posterior at least a few times, and the overhead from active sampling), but they do not need pre-training.
+
+
+Acquisition mechanism
+---------------------
+
+NORA vs BatchOpt
+
+
+Kriging-believer
+----------------
+
+Useful regardless for saving overhead, BUT especially useful with expensive posteriors in combination with parallelization!
+
+
+Hyperparameter fit
+------------------
+
+
+Convergence check
+-----------------
+
+
+MCMC from GP
+------------
+
+The algorithm, putting everything together
+------------------------------------------
+
+- Flow-chart
+
+
 From old README
 ===============
 
@@ -20,7 +70,7 @@ The requirements that your likelihood/posterior has to fulfil in order for this 
 
 - The likelihood/posterior should be *smooth* (continuous) and you should know how smooth (how many times differentiable).
 (there can be a little noise, but it must be deterministic!!!!)
-  
+
 - The likelihood/posterior evaluation should be *slow*. What slow means depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if your MCMC takes longer to converge than you're willing to wait you should give it a shot.
 - The likelihood should be *low-dimensional* (d<20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
 
