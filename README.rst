@@ -11,7 +11,7 @@
 
 :Support: For questions drop me an `email <mailto:jonas.e.elgammal@uis.no>`_. For issues/bugs please use `GitHub's Issues <https://github.com/jonaselgammal/GPry/issues>`_.
 
-:Installation: ``pip install gpry``
+:Installation: ``pip install gpry`` (for MPI and nested samplers, see `here <https://gpry.readthedocs.io/en/latest/installation.html>`_)
 
 GPry is a drop-in alternative to traditional Monte Carlo samplers (such as MCMC or Nested Sampling), for likelihood-based inference. It is aimed at speeding up posterior exploration and inference of marginal quantities from computationally expensive likelihoods, reducing the cost of inference by a factor of 100 or more.
 
@@ -29,7 +29,7 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
    runner = Runner(log_likelihood, bounds, checkpoint="output/")
    runner.run()
 
-.. image:: ../../doc/source/images/readme_animation.gif
+.. image:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
    :width: 400px
    :align: center
 
