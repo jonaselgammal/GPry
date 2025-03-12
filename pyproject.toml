@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["flake8", "flake8-pyproject", "pre-commit"] # " ## pydocstyle
 test = ["pytest", "pytest-xdist", "flaky"]
-docs = ["sphinx", "sphinx_rtd_theme", "sphinx-favicon"]
+docs = ["sphinx", "sphinx_book_theme", "sphinx-favicon"]
 
 [tool.setuptools.dynamic]
 version = { attr = "gpry.__version__" }
