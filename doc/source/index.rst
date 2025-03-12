@@ -2,21 +2,38 @@
 
 Contents:
 =========
-.. toctree::
-  :maxdepth: 2
 
-  installation
-  how_does_gpry_work
-  intro_example
-  adv_example
-  running
-  initialisation
-  gpr
-  convergence
-  running_cobaya
-  callback
-  strategy
-  modules
+.. toctree::
+   :caption: The basics
+   :maxdepth: 2
+
+   installation
+   intro_example
+   adv_example
+
+.. toctree::
+   :caption: Digging deeper
+   :maxdepth: 2
+
+   how_does_gpry_work
+   strategy
+
+.. toctree::
+   :caption: Finer configuration
+   :maxdepth: 2
+
+   running
+   initialisation
+   gpr
+   convergence
+   running_cobaya
+   callback
+
+.. toctree::
+   :caption: Modules
+   :maxdepth: 2
+
+   modules
 
 Indices and tables
 ==================
