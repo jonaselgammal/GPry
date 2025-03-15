@@ -3,7 +3,7 @@ How does GPry work
 
 GPry creates an interpolating model of the log-posterior density function. It does so using the least amount of evaluations possible. The locations in parameter space of these evaluations are chosen sequentially, so that they maximise the amount of information that can be obtained by evaluating the posterior there.
 
-Here we explain some of the key aspects of the GPry algorithm.
+Here we explain some of the key aspects of the GPry algorithm. Most of what follows is not exclusive to GPry, but typical in active learning approaches.
 
 
 Active learning of a Gaussian Process
@@ -22,16 +22,28 @@ You can see the way active learning works in the following figure: the top plots
    This aspect of GPry is one of the main difference with **amortised** approaches, such as forward-modelling (or simulation-based) inference: the latter can produce inference at very low cost in exchange for some usually-costly pre-training; instead, the cost of inference in active learning approaches is higher (due both to the need for evaluating the true posterior at least a few times, and the overhead from active sampling), but they do not need pre-training.
 
 
+Parallelising truth evaluation with kriging-believer
+----------------------------------------------------
+
+The active learning approach described above is sequential: one candidate is proposed for evaluation of the true posterior at a time. But being this evaluation often the slowest step, if one has sufficient computational resources available to perform :math:`n` posterior evaluations in parallel it would be desirable to obtain not just the next optimal location, but the next :math:`n` optimal ones.
+
+However, simultaneously optimizing the acquisition function for a set of candidate locations is not a trivial problem: each of the candidates modifies the landscape of the acquisition function for the rest, so that we cannot simply assume that a set of local maxima is a viable solution.
+
+But there is one way to give up some effectiveness (total information gained) of the solution in exchange for the possibility to turn this into a sequential problem: we can find the global maximum, assume an evaluation of the true model there, to which the **mean of the GP** is assigned, create with it an *augmented model*, and repeat this procedure using the augmented model, as many times as desired. This approach is called *kriging-believer* (KB), and though suboptimal, it at least includes the effect of the *exploration* term of the acquisition function, reducing the amount of redundant information with respect to a naive multiple-candidate solution.
+
+Obviously, this procedure only makes sense up to a certain amount of iterations, or we risk assuming completely false information about the model. In GPry, we recommend at most a number of KB steps equals to the dimensionality of the problem (times some factor smaller or equal the number of expected posterior modes, if more than one).
+
+In the following figure, to be compared with the one above, we only evaluate the posterior every two steps, the red stars in being the temporary kriging-believer evaluations that will be assigned their true values in the next iteration.
+
+.. image:: images/active_learning_kb.png
+   :width: 950
+   :align: center
+
+
 Acquisition mechanism
 ---------------------
 
 NORA vs BatchOpt
-
-
-Kriging-believer
-----------------
-
-Useful regardless for saving overhead, BUT especially useful with expensive posteriors in combination with parallelization!
 
 
 Hyperparameter fit
