@@ -8,7 +8,7 @@ from typing import Sequence, Mapping
 import numpy as np
 
 from gpry import check_cobaya_installed
-from gpry.tools import check_and_return_bounds, generic_params_names, is_in_bounds
+from gpry.tools import check_and_return_bounds, generic_params_names, is_in_bounds, wrap_likelihood
 
 
 def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
@@ -41,7 +41,6 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
             " a Cobaya model, install Cobaya first: python -m pip install cobaya"
         )
 
-
 class Truth:
     """
     Class holding the true log-posterior and some information about it.
@@ -51,7 +50,6 @@ class Truth:
     """
 
     def __init__(self, loglike, bounds=None, ref_bounds=None, params=None):
-        self._loglike = loglike
         if bounds is None:
             raise ValueError(
                 "'bounds' need to be defined if a likelihood function is passed."
@@ -60,6 +58,7 @@ class Truth:
         self.log_prior_volume = np.sum(
             np.log(self.prior_bounds[:, 1] - self.prior_bounds[:, 0])
         )
+        self._loglike = wrap_likelihood(loglike, self.d)
         self._ref_bounds = self.d * [None]
         self._ref_bounds_default_prior = np.copy(self._prior_bounds)
         if ref_bounds is not None:
@@ -131,7 +130,7 @@ class Truth:
         """
         if not is_in_bounds(X, self.prior_bounds, check_shape=False):
             return -np.inf
-        return 1 / self.log_prior_volume
+        return -1. * self.log_prior_volume
 
     def loglike(self, X):
         """
@@ -171,7 +170,6 @@ class Truth:
                 else dict(zip(self.params, self.labels))
             ),
         }
-
 
 class TruthCobaya(Truth):
     """
