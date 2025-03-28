@@ -32,7 +32,7 @@ classifiers = [
 
 requires-python = ">=3.8.0"
 dependencies = [
-    "scikit-learn", "dill", "tqdm", "ultranest"
+    "scikit-learn", "dill", "tqdm", "ultranest", "pandas",
 ]
 
 [project.optional-dependencies]
