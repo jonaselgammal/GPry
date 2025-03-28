@@ -4,6 +4,7 @@ This module contains general tools used in different parts of the code.
 
 from copy import deepcopy
 from inspect import signature
+import inspect
 from typing import Mapping, Iterable
 from warnings import warn
 
@@ -358,6 +359,42 @@ def shrink_bounds(bounds, samples, factor=1):
     updated_bounds[:, 0] = np.array([updated_bounds[:, 0], bounds[:, 0]]).max(axis=0)
     updated_bounds[:, 1] = np.array([updated_bounds[:, 1], bounds[:, 1]]).min(axis=0)
     return updated_bounds
+
+def wrap_likelihood(loglike, ndim):
+    """
+    Wraps a likelihood function to accept a single argument (a vector of parameters) if it takes
+    multiple arguments.
+    """
+    sig = inspect.signature(loglike)
+    params = sig.parameters
+
+    # Count parameters by kind
+    positional = [
+        p for p in params.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    keyword = [
+        p for p in params.values()
+        if p.kind == inspect.Parameter.KEYWORD_ONLY
+    ]
+    var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values())
+    var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    n_args = len(positional)
+    n_all = n_args + len(keyword)
+
+    # Case 1: function takes exactly ndim arguments (positional/keyword), wrap it
+    if n_args == ndim or n_all == ndim:
+        def wrapped(X):
+            return loglike(*X)
+        return wrapped
+
+    # Case 2: function takes one argument (e.g. already accepts a vector), pass through
+    elif n_args == 1 and not var_positional and not var_keyword:
+        return loglike
+
+    else:
+        raise ValueError(f"Function has signature {sig} which is incompatible with ndim={ndim}")
 
 
 def remove_0_weight_samples(weights, *arrays):
