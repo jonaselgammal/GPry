@@ -264,7 +264,7 @@ def mc_sample_from_gp_cobaya(
     if not gpr.fitted:
         raise ValueError("Cannot run an MC sampler on a GPR that has not been fitted.")
     # Prepare model
-    model_inpute = model_input = cobaya_generate_gp_model_input(
+    model_input = cobaya_generate_gp_model_input(
         gpr, bounds=bounds, params=params
     )
     model_input["debug"] = get_cobaya_log_level(verbose)
@@ -381,7 +381,7 @@ def mc_sample_from_gp_ns(
         bounds = gpr.trust_bounds if gpr.trust_bounds is not None else gpr.bounds
 
     def logp(X):
-        y = gpr.predict(np.array([X]), return_std=False, validate=False)[0]
+        y = gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
         if verbose >=4:
             print(f"GPR: got {X}, mean GP prediction {y}")
         return y
@@ -410,7 +410,7 @@ def mc_sample_from_gp_ns(
     except nsint.NestedSamplerNotInstalledError as excpt:
         # Exception: if "nested" passed, default to UltraNest
         if sampler_name == "nested":
-            warn(
+            warnings.warn(
                 f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
                 "Defaulting to UltraNest."
             )
