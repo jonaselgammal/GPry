@@ -29,9 +29,6 @@ from gpry.tools import (
 plt.rcParams["text.usetex"] = True
 _plot_dist_fontsize = 7
 
-# Param name and label for log-posterior in corner plots
-_name_logp, _label_logp = "logpost", r"\log(p)"
-
 
 def simple_latex_sci_notation(string):
     """
@@ -246,7 +243,7 @@ def plot_slices_func(
     return fig, axes
 
 
-def plot_slices(model, gpr, acquisition, X=None, reference=None):
+def plot_slices(truth, gpr, acquisition, X=None, reference=None):
     """
     Plots slices along parameter coordinates for a series `X` of given points (the GPR
     training set if not specified). For each coordinate, there is a slice per point,
@@ -256,7 +253,7 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
 
     # TODO: make acq func optional
     """
-    params = list(model.parameterization.sampled_params())
+    params = truth.params
     fig, axes = plt.subplots(
         nrows=2,
         ncols=len(params),
@@ -273,13 +270,13 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
         y = gpr.predict(X)
     min_y, max_y = min(y), max(y)
     norm_y = lambda y: (y - min_y) / (max_y - min_y)
-    prior_bounds = model.prior.bounds(confidence_for_unbounded=0.999)
+    prior_bounds = truth.prior_bounds
     Xs_for_plots = dict(
         (p, param_samples_for_slices(X, i, prior_bounds[i], n=200))
         for i, p in enumerate(params)
     )
     if reference is not None:
-        reference = _prepare_reference(reference, model)
+        reference = _prepare_reference(reference, truth)
     cmap = matplotlib.colormaps["viridis"]
     for i, p in enumerate(params):
         for j, Xs_j in enumerate(Xs_for_plots[p]):
@@ -292,7 +289,7 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
             acq_values = acquisition(Xs_j, gpr)
             axes[1, i].plot(Xs_j[:, i], acq_values, c=cmap_norm, alpha=alpha)
             axes[1, i].set_ylabel(r"$\alpha(\mu,\sigma)$")
-            label = model.parameterization.labels()[p]
+            label = truth.labels[i] if truth.labels is not None else p
             if label != p:
                 label = "$" + label + "$"
             axes[1, i].set_xlabel(label)
@@ -309,13 +306,13 @@ def plot_slices(model, gpr, acquisition, X=None, reference=None):
                 ax.axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
-def plot_slices_reference(model, gpr, X, truth=True, reference=None):
+def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
     """
-    Plots slices of the gpr model and true log-posterior (if ``truth=True``) along
+    Plots slices of the gpr model and true log-posterior (if ``plot_truth=True``) along
     parameter coordinates for a given point ``X``, leaving all coordinates of that point
     fixed except for the one being sliced.
     """
-    params = list(model.parameterization.sampled_params())
+    params = truth.params
     fig, axes = plt.subplots(
         nrows=1,
         ncols=len(params),
@@ -324,15 +321,15 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
         figsize=(4 * len(params), 2),
         dpi=200,
     )
-    prior_bounds = model.prior.bounds(confidence_for_unbounded=0.999)
+    prior_bounds = truth.prior_bounds
     if X is None:
         if reference is None:
             raise ValueError("Needs at least a reference point or a reference sample.")
         # TODO: if reference given as a sample, take best point from it.
-    X_array = np.array([X[p] for p in model.parameterization.sampled_params()])
+    X_array = np.array([X[p] for p in params])
     # y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
-    if truth:
-        y_truth_centre = model.logpost(X_array)
+    if plot_truth:
+        y_truth_centre = truth.logp(X_array)
     Xs_for_plots, ys_gpr_for_plot, sigmas_gpr_for_plot, ys_truth_for_plot = {}, {}, {}, {}
     for i, p in enumerate(params):
         Xs_for_plots[p] = param_samples_for_slices([X_array], i, prior_bounds[i], n=200)[
@@ -341,12 +338,12 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
         ys_gpr_for_plot[p], sigmas_gpr_for_plot[p] = gpr.predict(
             Xs_for_plots[p], return_std=True
         )
-        if truth:
-            ys_truth_for_plot[p] = np.array([model.logpost(x) for x in Xs_for_plots[p]])
+        if plot_truth:
+            ys_truth_for_plot[p] = np.array([truth.logp(x) for x in Xs_for_plots[p]])
     # Training set referenced to X and div by X, for distance-based transparency
     X_train_diff = (gpr.X_train - X_array) / X_array
     if reference is not None:
-        reference = _prepare_reference(reference, model)
+        reference = _prepare_reference(reference, truth)
     for i, p in enumerate(params):
         axes[i].fill_between(
             Xs_for_plots[p][:, i],
@@ -364,11 +361,11 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
             alpha=0.25,
             edgecolor="none",
         )
-        if truth:
+        if plot_truth:
             axes[i].plot(Xs_for_plots[p][:, i], ys_truth_for_plot[p], ls="--")
             axes[i].scatter(X[p], y_truth_centre, marker="*")
         axes[i].set_ylabel(r"$\log(p)$")
-        label = model.parameterization.labels()[p]
+        label = truth.labels[i] if truth.labels is not None else p
         if label != p:
             label = "$" + label + "$"
         axes[i].set_xlabel(label)
@@ -378,7 +375,7 @@ def plot_slices_reference(model, gpr, X, truth=True, reference=None):
             try:
                 max_y = max(ys_gpr_for_plot[p])
                 upper_y = max_y
-                if truth:
+                if plot_truth:
                     upper_y = max(max_y, *ys_truth_for_plot[p])
                 axes[i].set_ylim(
                     max_y - 1.05 * diff_min_logp, upper_y + 0.05 * diff_min_logp
@@ -749,7 +746,7 @@ def plot_convergence(
 
 def _prepare_reference(
     reference,
-    model,
+    truth,
 ):
     """
     Turns `reference` into a dict with parameters as keys and a list of 5 numbers as
@@ -767,7 +764,7 @@ def _prepare_reference(
             means = reference.getMeans()
             margstats = reference.getMargeStats()
             bounds = {}
-            for p in model.parameterization.sampled_params():
+            for p in truth.params:
                 # NB: numerOfName doest not use renames; needs to find "original" name
                 p_in_ref = reference.paramNames.parWithName(p).name
                 i_p = reference.paramNames.numberOfName(p_in_ref)
@@ -791,14 +788,14 @@ def _prepare_reference(
         return None
     if not isinstance(reference, Mapping):
         # Assume parameters in order; check right number of them
-        if len(reference) != model.prior.d():
+        if len(reference) != truth.d:
             raise ValueError(
                 "reference must be a list containing bounds per parameter for all of them"
                 ", or a dict with parameters as keys and these same values."
             )
-        reference = dict(zip(model.parameterization.sampled_params(), reference))
+        reference = dict(zip(truth.params, reference))
     # Ensure it contains all parameters and 5 numbers (or None's) per parameter
-    for p in model.parameterization.sampled_params():
+    for p in truth.params:
         if p not in reference:
             reference[p] = [None] * 5
         values = reference[p]
@@ -816,7 +813,7 @@ def _prepare_reference(
 
 
 def plot_trace(
-    model,
+    truth,
     gpr,
     convergence_criterion,
     progress,
@@ -838,9 +835,9 @@ def plot_trace(
     else:
         y_finite = np.full(shape=len(y), fill_value=True)
     if reference is not None:
-        reference = _prepare_reference(reference, model)
+        reference = _prepare_reference(reference, truth)
     fig, axes = plt.subplots(
-        nrows=2 + model.prior.d(),
+        nrows=2 + truth.d,
         ncols=1,
         sharex=True,
         layout="constrained",
@@ -875,7 +872,7 @@ def plot_trace(
     y_min_plot, y_max_plot = axes[1].get_ylim()
     y_max = np.max(y)
     for ns, nsls in nsigmas_styles.items():
-        y_ns = y_max - delta_logp_of_1d_nstd(ns, model.prior.d())
+        y_ns = y_max - delta_logp_of_1d_nstd(ns, truth.d)
         if y_ns > y_min_plot:
             axes[1].axhline(
                 y_ns,
@@ -907,8 +904,8 @@ def plot_trace(
         **scales_kwargs,
     )
     # NEXT: parameters plots
-    for i, p in enumerate(model.parameterization.sampled_params()):
-        label = model.parameterization.labels()[p]
+    for i, p in enumerate(truth.params):
+        label = truth.labels[i] if truth.labels else p
         ax = axes[i + 2]
         if gpr.infinities_classifier is not None and sum(y_finite) < len(X):
             ax.scatter(

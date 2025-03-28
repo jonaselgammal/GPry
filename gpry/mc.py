@@ -8,17 +8,19 @@ import logging
 from copy import deepcopy
 
 import numpy as np
-from cobaya.model import Model, get_model
-from cobaya.output import get_output
-from cobaya.sampler import get_sampler
-from cobaya.collection import SampleCollection
 from getdist.mcsamples import MCSamples, loadMCSamples
 from getdist.gaussian_mixtures import GaussianND
 
-from gpry import mpi
+from gpry import mpi, check_cobaya_installed
 from gpry.gpr import GaussianProcessRegressor
 from gpry.tools import generic_params_names, is_valid_covmat
-from gpry.io import read_checkpoint
+from gpry.io import ensure_gpr
+import gpry.ns_interfaces as nsint
+
+# Keys and plot labels for the MC samples dict
+_name_logp, _label_logp = "logpost", r"\log(p)"
+_name_logprior, _label_logprior = "logprior", r"\log(\pi)"
+_name_loglike, _label_loglike = "loglike", r"\log(\mathrm{L})"
 
 
 def get_cobaya_log_level(verbose):
@@ -37,7 +39,7 @@ def get_cobaya_log_level(verbose):
         raise ValueError(f"Verbosity level {verbose} not understood.")
 
 
-def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model=None):
+def cobaya_generate_gp_model_input(gpr, bounds=None, params=None):
     """
     Returns a Cobaya model input dict corresponding to the GP surrogate model ``gpr``.
 
@@ -58,37 +60,19 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
         If none are provided it tries to extract parameter names from ``true_model``.
         If that fails it uses some dummy strings.
 
-    true_model : Cobaya Model, optional
-        If passed, it uses it to get bounds and parameter names (unless overriden by
-        the corresponding kwargs).
-
     Returns
     -------
     info : dict
         A dict containing the ``prior`` and ``likelihood`` blocks.
     """
-    if true_model is not None and not isinstance(true_model, Model):
-        raise ValueError("`true_model` must be a Cobaya model.")
-    # Get bounds
     if bounds is not None:
         if (
-            np.array(bounds).shape != np.array(gpr.bounds).shape
-            and gpr.bounds is not None
+                np.array(bounds).shape != np.array(gpr.bounds).shape
+                and gpr.bounds is not None
         ):
             raise ValueError(
                 f"``bounds`` has the wrong shape {np.array(bounds).shape}. "
                 f"Expected {np.array(gpr.bounds).shape}."
-            )
-    elif true_model is not None:
-        bounds = true_model.prior.bounds(confidence_for_unbounded=0.99995)
-        if (
-            np.array(bounds).shape != np.array(gpr.bounds).shape
-            and gpr.bounds is not None
-        ):
-            raise ValueError(
-                "The dimensionality of the prior of `true_model` "
-                f"({true_model.prior.d()}) does not correspond to that of "
-                f"the GP ({gpr.d})."
             )
     elif gpr.bounds is not None:
         bounds = deepcopy(gpr.bounds)
@@ -97,32 +81,24 @@ def cobaya_generate_gp_model_input(gpr, bounds=None, paramnames=None, true_model
             "You need to either provide bounds, a model or a GP regressor with bounds."
         )
     # Get labels
-    paramlabels = None
-    if paramnames is not None:
-        if len(paramnames) != gpr.d:
+    if params is not None:
+        if len(params) != gpr.d:
             raise ValueError(
-                f"Passed `paramnames` with {len(paramnames)} "
+                f"Passed `params` with {len(params)} "
                 f"parameters, but the prior has dimension {gpr.d}"
             )
-    elif true_model is not None:
-        paramnames = list(true_model.parameterization.sampled_params())
-        all_labels = true_model.parameterization.labels()
-        paramlabels = [all_labels[p] for p in paramnames]
     else:
-        paramnames = generic_params_names(gpr.d)
-    info = {"params": {p: {"prior": list(b)} for p, b in zip(paramnames, bounds)}}
-    if paramlabels:
-        for p, l in zip(paramnames, paramlabels):
-            info["params"][p]["latex"] = l
+        params = generic_params_names(gpr.d)
+    info = {"params": {p: {"prior": list(b)} for p, b in zip(params, bounds)}}
     log_prior_volume = np.sum(np.log(bounds[:, 1] - bounds[:, 0]))
 
     def lkl(**kwargs):
-        values = [kwargs[name] for name in paramnames]
+        values = [kwargs[name] for name in params]
         # we need to add the log-volume of the prior we define here as the GP
         # interpolates the posterior, not the likelihood.
         return gpr.predict(np.atleast_2d(values), validate=False)[0] + log_prior_volume
 
-    info.update({"likelihood": {"gp": {"external": lkl, "input_params": paramnames}}})
+    info.update({"likelihood": {"gp": {"external": lkl, "input_params": params}}})
     return info
 
 
@@ -193,18 +169,18 @@ def polychord_info_from_run():
     return sampler_info
 
 
-def mc_sample_from_gp(
-    gpr,
-    bounds=None,
-    paramnames=None,
-    true_model=None,
-    sampler="mcmc",
-    add_options=None,
-    output=None,
-    run=True,
-    resume=False,
-    convergence=None,
-    verbose=3,
+def mc_sample_from_gp_cobaya(
+        gpr,
+        bounds=None,
+        params=None,
+        sampler="mcmc",
+        sampler_options=None,
+        covmat=None,
+        covmat_params=None,
+        output=None,
+        run=True,
+        resume=False,
+        verbose=3,
 ):
     """
     Generates a `Cobaya Sampler <https://cobaya.readthedocs.io/en/latest/sampler.html>`_
@@ -221,22 +197,19 @@ def mc_sample_from_gp(
     bounds : List of boundaries (lower,upper), optional
         By default it reads them from the GP regressor.
 
-    paramnames : List of parameter strings, optional
+    params : List of parameter strings, optional
         By default it uses some dummy strings.
 
     true_model : Cobaya Model, optional
         If passed, it uses it to get bounds and parameter names (unless overriden by
         the corresponding kwargs).
 
-    sampler : string (default `"mcmc"`) or dict
-        Sampler to be initialised. If a string, it must be `"mcmc"` or `"polychord"`.
-        It can also be a dict as ``{sampler: {option: value, ...}}``, containing a full
-        sampler definition, see `here
-        <https://cobaya.readthedocs.io/en/latest/sampler.html>`_. In this case, any
-        sampler understood by Cobaya can be used.
+    sampler : string (default `"mcmc"`). or dict
+        Cobaya sampler to be used.
 
-    add_options : dict, optional
-        Dict of additional options to be passed to the sampler.
+    sampler_options : dict, optional
+        Dictionary of options to be passed to the sampler (see Cobaya documentation for
+        the interface of that sampler).
 
     output: path, optional
         The path where the resulting Monte Carlo sample shall be stored.
@@ -247,8 +220,13 @@ def mc_sample_from_gp(
     resume: bool, optional (default=False)
         Whether to resume from existing output files (True) or force overwrite (False)
 
+    acquisition: GPAcquisition, optional
+        The acquisition engine instance that has been used to fit the GP. This is
+        used to extract the covariance matrix if it is available from the
+        GPAcquisition class.
+
     convergence: Convergence_criterion, optional
-        The convergence criterion which has been used to fit the GP. This is
+        The convergence criterion that has been used to fit the GP. This is
         used to extract the covariance matrix if it is available from the
         ConvergenceCriterion class.
 
@@ -267,38 +245,44 @@ def mc_sample_from_gp(
         The sampler instance that has been run (or just initialised). The sampler products
         can be retrieved with the `Sampler.products()` method.
     """
-    loaded_convergence = None
-    if isinstance(gpr, str):
-        _, gpr, _, loaded_convergence, _, _ = read_checkpoint(gpr)
-        if gpr is None:
-            raise RuntimeError("Could not load the GP regressor from checkpoint")
-    if not isinstance(gpr, GaussianProcessRegressor):
-        raise TypeError(
-            "The GP `gpr` needs to be a gpry GP Regressor or a string "
-            "with a path to a checkpoint file."
+    if not check_cobaya_installed():
+        raise ModuleNotFoundError(
+            "You need to install Cobaya ('python -m pip install cobaya) in order to use "
+            "Cobaya as a sampler."
         )
-    if not hasattr(gpr, "y_train"):
-        warnings.warn(
-            "The provided GP hasn't been trained to data "
-            "before. This is likely unintentional..."
+    from cobaya.model import get_model
+    from cobaya.output import get_output
+    from cobaya.sampler import get_sampler
+    if not isinstance(sampler, str):
+        raise ValueError(
+            "`sampler` must be a string specifying a Cobaya sampler interface."
         )
-    model_input = cobaya_generate_gp_model_input(
-        gpr, bounds=bounds, paramnames=paramnames, true_model=true_model
+    sampler_options = sampler_options or {}
+    _, gpr, acquisition, convergence, _, _ = ensure_gpr(gpr)
+    if gpr is None:
+        raise ValueError("Could not load the GP regressor from checkpoint")
+    if not gpr.fitted:
+        raise ValueError("Cannot run an MC sampler on a GPR that has not been fitted.")
+    # Prepare model
+    model_inpute = model_input = cobaya_generate_gp_model_input(
+        gpr, bounds=bounds, params=params
     )
     model_input["debug"] = get_cobaya_log_level(verbose)
     model_surrogate = get_model(model_input)
-    # Check if convergence_criterion is given/loaded: it may contain a covariance matrix
-    covariance_matrix = None
-    covariance_params = paramnames
-    for conv in [convergence, loaded_convergence]:
-        try:
-            covariance_matrix = conv.cov
-        except AttributeError:
-            pass
-    # Otherwise, maybe passed in add_options (prefer this one)
-    if "covmat" in (add_options or {}):
-        covariance_matrix = add_options.pop("covmat")
-        covariance_params = add_options.pop("covmat_params", None)
+    # Prepare covariance matrix -- prefer the one passed directly
+    if covmat is not None:
+        covariance_matrix = covmat
+        if covmat_params is not None:
+            covariance_params = covmat_params
+        else:
+            covariance_params = params
+    else:
+        if acquisition is not None:
+            covariance_matrix = getattr(acquisition, "cov", None)
+        if covariance_matrix is None and convergence is not None:
+            covariance_matrix = getattr(convergence, "cov", None)
+        covariance_params = params
+    # Prepare rest of sampler input
     if sampler.lower() == "mcmc":
         sampler_input = mcmc_info_from_run(
             model_surrogate,
@@ -307,6 +291,14 @@ def mc_sample_from_gp(
             cov_params=covariance_params,
             verbose=verbose,
         )
+        # "ref" from available info (not used at the moment)
+        # best_point_per_mpi_rank = \
+        #     gpr.X_train[np.argsort(gpr.y_train)[-1 + mpi.RANK]]
+        # ref = {
+        #     p: val for p, val in zip(
+        #         paramnames, best_point_per_mpi_rank
+        #     )
+        # }
     elif sampler.lower() == "polychord":
         if output is False:
             warnings.warn(
@@ -314,17 +306,9 @@ def mc_sample_from_gp(
                 "to /tmp/polychord_raw"
             )
         sampler_input = polychord_info_from_run()
-    elif isinstance(sampler, str):
-        raise ValueError("`sampler` must be `mcmc|polychord`")
-    elif not isinstance(sampler, dict):
-        raise ValueError(
-            "`sampler` must be `mcmc|polychord` or a full sampler "
-            "specification as a dict."
-        )
-    else:  # dict
-        sampler_input = sampler
-    sampler_name = list(sampler_input.keys())[0]
-    sampler_input[sampler_name].update(add_options or {})
+    else:
+        sampler_input = {sampler: {"measure_speeds": False}}
+    sampler_input[sampler].update(sampler_options or {})
     out = None
     if output is not None:
         if not resume:
@@ -334,11 +318,115 @@ def mc_sample_from_gp(
     sampler = get_sampler(sampler_input, model=model_surrogate, output=out)
     surr_info = model_surrogate.info()
     if not run:
-        surr_info["sampler"] = {sampler_name: sampler.info()}
+        surr_info["sampler"] = {sampler: sampler.info()}
         return surr_info, sampler
     sampler.run()
-    surr_info["sampler"] = {sampler_name: sampler.info()}
+    surr_info["sampler"] = {sampler: sampler.info()}
     return surr_info, sampler
+
+
+def mc_sample_from_gp_ns(
+    gpr,
+    bounds=None,
+    params=None,
+    sampler="mcmc",
+    sampler_options=None,
+    output=None,
+    run=True,
+    verbose=3,
+):
+    """
+    Generates an MC sample of the surrogate model using one of the NS interfaces.
+
+    Parameters
+    ----------
+    gpr : GaussianProcessRegressor, which has been fit to data and returned from
+        the ``run`` function.
+        Alternatively a string containing a path with the
+        location of a saved GP run (checkpoint) can be provided (the same path
+        that was used to save the checkpoint in the ``run`` function).
+
+    bounds : List of boundaries (lower,upper), optional
+        By default it reads them from the GP regressor.
+
+    sampler : string, optional
+        Nested sampler to be used. If undefined, uses PolyChord if available, otherwise
+        UltraNest.
+
+    sampler_options : dict, optional
+        Dictionary of options to be passed to the nested sampler.
+
+    output: path, optional
+        The path where the resulting Monte Carlo sample shall be stored.
+
+    run: bool, default: True
+        Whether to run the sampler. If ``False``, returns just an initialised sampler.
+
+    verbose: int (default 3)
+        Verbosity level, similarly valued to that of the Runner, e.g. 3 indicates normal
+        output, and 4 'debug' level output; lower-than-three values print only warnings
+        and errors.
+
+    Returns
+    -------
+    (X_MC, y_MC, w_MC)
+    """
+    # Prepare GPR
+    _, gpr, _, _, _, _ = ensure_gpr(gpr)
+    if gpr is None:
+        raise ValueError("Could not load the GP regressor from checkpoint")
+    if not gpr.fitted:
+        raise ValueError("Cannot run an MC sampler on a GPR that has not been fitted.")
+    if bounds is None:
+        bounds = gpr.trust_bounds if gpr.trust_bounds is not None else gpr.bounds
+
+    def logp(X):
+        y = gpr.predict(np.array([X]), return_std=False, validate=False)[0]
+        if verbose >=4:
+            print(f"GPR: got {X}, mean GP prediction {y}")
+        return y
+
+    # Prepare and initialise sampler
+    if sampler is None:
+        sampler = "nested"
+    if not isinstance(sampler, str):
+        raise ValueError(
+            "`sampler` must be a string specifying an interfaced nested sampler: "
+            f"{list(nsint._ns_interfaces)}"
+        )
+    sampler_name = sampler.lower()
+    if sampler_name == "nested":
+        interface = nsint._ns_interfaces["polychord"]
+    else:
+        try:
+            interface = nsint._ns_interfaces[sampler_name]
+        except KeyError as kerr:
+            raise ValueError(
+                f"Nested sampler {sampler_name} unknown. Did you mean any of "
+                f"{list(nsint._ns_interfaces)}?"
+            ) from kerr
+    try:
+        sampler = interface(bounds, verbosity=verbose)
+    except nsint.NestedSamplerNotInstalledError as excpt:
+        # Exception: if "nested" passed, default to UltraNest
+        if sampler_name == "nested":
+            warn(
+                f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
+                "Defaulting to UltraNest."
+            )
+            sampler = nsint._ns_interfaces["ultranest"](bounds, verbosity=verbose)
+        else:
+            raise excpt
+    sampler.set_precision(**(sampler_options or {}))
+    if not run:
+        return sampler
+    # Run sampler
+    X_MC, y_MC, w_MC = sampler.run(
+        logp,
+        param_names=params,
+        out_dir=output,
+    )
+    return X_MC, y_MC, w_MC
 
 
 def process_gdsamples(gdsamples_dict):
@@ -353,13 +441,65 @@ def process_gdsamples(gdsamples_dict):
             if os.path.isdir(root):
                 root += "/"  # to force GetDist to treat it as folder, not prefix
             return_dict[k] = loadMCSamples(root)
-        elif isinstance(v, SampleCollection):
-            return_dict[k] = v.to_getdist(label=k)
         elif isinstance(v, (MCSamples, GaussianND)):
             return_dict[k] = v
         else:
+            if check_cobaya_installed():
+                if isinstance(v, SampleCollection):
+                    return_dict[k] = v.to_getdist(label=k)
             raise ValueError(
                 f"I don't know how to transform object of type {type(v)} "
                 "into getdist.MCSamples."
             )
     return return_dict
+
+
+def samples_dict_to_getdist(samples_dict, params=None, bounds=None, sampler_type=None):
+    """
+    Expects ``samples_dict`` with keys ``w``, ``X``, ``logpost``, ``logprior`` (optional),
+    ``loglike`` (optional).
+
+    ``params`` should be a list of strings, or of tuples ``(name, latex_label)`` where the
+    ``latex_label`` should **not** include the ``$`` delimiters.
+
+    ``bounds`` should be a list of boundaries for the parameters.)
+
+    ``sampler_type`` should be ``nested`` or ``mcmc``.
+    """
+    from getdist import MCSamples  # pylint: disable=import-outside-toplevel
+    if params is None:
+        params = generic_params_names(len(samples_dict["X"][0]))
+    params_list = []
+    labels_list = []
+    for i in range(len(params)):
+        if isinstance(params[0], str):
+            params_list.append(params[i])
+            labels_list.append(params[i])
+        else:  # assume tuple
+            params_list.append(params[i][0])
+            labels_list.append(params[i][1])
+    mlogp = samples_dict.get(_name_logp)
+    if mlogp is not None:
+        mlogp = -1 * mlogp
+    pnames = (_name_logp, _name_logprior, _name_loglike)
+    plabels = (_label_logp, _label_logprior, _label_loglike)
+    samples = np.copy(samples_dict["X"])
+    for n, l in zip(pnames, plabels):
+        y = samples_dict.get(n)
+        if y is not None and not np.isclose(max(y) - min(y), 0):
+            samples = np.concatenate([samples.T, [y]]).T
+            params_list.append(n + "*")
+            labels_list.append(l)
+    mcsamples = MCSamples(
+        samples=samples,
+        weights=samples_dict["w"],
+        loglikes=mlogp,
+        names=params_list,
+        labels=labels_list,
+        ranges=dict(zip(params_list, bounds)),
+        sampler=sampler_type,
+        ignore_rows=0,
+    )
+    return mcsamples
+
+# probar nuevo de NS y Cobaya, ambos..... con y sin trust region (Planck)

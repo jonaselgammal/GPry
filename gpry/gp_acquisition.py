@@ -22,13 +22,7 @@ from gpry import mpi
 from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples, \
     is_in_bounds
 import gpry.ns_interfaces as nsint
-from gpry.plots import _name_logp, _label_logp
-
-_NORA_ns_interfaces = {
-    "polychord": nsint.InterfacePolyChord,
-    "ultranest": nsint.InterfaceUltraNest,
-    "nessai": nsint.InterfaceNessai,
-}
+from gpry.mc import samples_dict_to_getdist, _name_logp
 
 
 def builtin_names():
@@ -678,13 +672,13 @@ class NORA(GenericGPAcquisition):
         # Load the requested sampler
         try:
             self.sampler_interface = \
-                _NORA_ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
+                nsint._ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
         except (AttributeError, KeyError) as excpt:
             if this_sampler.lower() != "uniform":
                 raise ValueError(
                     "No interface found for the requested nested sampler "
-                    f"'{this_sampler}'. Use one of {list(_NORA_ns_interfaces)}"
-            ) from excpt
+                    f"'{this_sampler}'. Use one of {list(nsint._ns_interfaces)}"
+                ) from excpt
         self.sampler = this_sampler
 
     def update_NS_precision(self, gpr):
@@ -966,30 +960,20 @@ class NORA(GenericGPAcquisition):
         Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
         return np.cov(Xs.T, aweights=ws, ddof=0)
 
-    def last_MC_sample_getdist(self, model, warn_reweight=True):
+    def last_MC_sample_getdist(self, params, warn_reweight=True):
         """
         Returns the last MC sample as a ``getdist.MCSamples`` instance.
 
         Prints a warning if it is a reweighted sample.
         """
         X, y, _, w = self.last_MC_sample(warn_reweight=warn_reweight)
-        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
-        params = list(model.parameterization.sampled_params())
-        labels = model.parameterization.labels()
-        labels_list = [labels.get(p) for p in params]
-        mcsamples = MCSamples(
-            samples=X,
-            weights=w,
-            loglikes=-y if y is not None else None,
-            names=params,
-            labels=labels_list,
-            ranges=dict(zip(params, self.bounds_)),
-            sampler="nested",
-            ignore_rows=0,
+        samples_dict = {"w": w, "X": X, _name_logp: y}
+        return samples_dict_to_getdist(
+            samples_dict,
+            params=params,
+            bounds=self.bounds_,
+            sampler_type="nested",
         )
-        if y is not None and not np.isclose(max(y) - min(y), 0):
-            mcsamples.addDerived(-mcsamples.loglikes, _name_logp, label=_label_logp)
-        return mcsamples
 
     def multi_add(
             self, gpr, n_points=1, bounds=None, rng=None, force_resample=False

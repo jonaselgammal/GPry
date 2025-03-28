@@ -27,12 +27,12 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13"
+    "Programming Language :: Python :: 3.13",
 ]
 
 requires-python = ">=3.8.0"
 dependencies = [
-    "cobaya>=3.2.2", "scikit-learn", "dill", "mpi4py", "tqdm"
+    "scikit-learn", "dill", "tqdm", "ultranest"
 ]
 
 [project.optional-dependencies]

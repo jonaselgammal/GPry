@@ -13,7 +13,12 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, generic_params_names, remove_0_weight_samples
+from gpry.tools import (
+    NumpyErrorHandling,
+    generic_params_names,
+    remove_0_weight_samples,
+    check_and_return_bounds,
+)
 
 
 class NestedSamplerNotInstalledError(Exception):
@@ -82,7 +87,8 @@ class InterfacePolyChord(NSInterface):
                 "https://github.com/PolyChord/PolyChordLite "
                 "(or select an alternative nested sampler, e.g. UltraNest)."
             ) from excpt
-        self.dim = len(np.atleast_2d(bounds))
+        bounds = check_and_return_bounds(bounds)
+        self.dim = len(bounds)
         self.polychord_settings = PolyChordSettings(nDims=self.dim, nDerived=0)
         # Don't write unnecessary files: takes lots of space and wastes time
         self.settings = {
@@ -116,7 +122,7 @@ class InterfacePolyChord(NSInterface):
         # pylint: disable=import-outside-toplevel
         from pypolychord.priors import UniformPrior
 
-        self.prior = UniformPrior(*np.atleast_2d(bounds.T))
+        self.prior = UniformPrior(*(bounds.T))
 
     def set_precision(self, **kwargs):
         """Sets precision parameters for the nested sampler."""
@@ -267,7 +273,8 @@ class InterfaceNessai(NSInterface):
                 "https://nessai.readthedocs.io "
                 "(or select an alternative nested sampler, e.g. UltraNest)."
             ) from excpt
-        self.dim = len(np.atleast_2d(bounds))
+        self.set_prior(bounds)
+        self.dim = len(self.bounds)
         self.precision_settings = {}
         self.flow_sampler_settings = {
             "checkpointing": False,
@@ -279,7 +286,6 @@ class InterfaceNessai(NSInterface):
         self.run_settings = {"plot": False, "save": False}
         # TODO: could still avoid dumping nested_sampler_resume.pkl and proposal/
         self.set_verbosity(verbosity)
-        self.set_prior(bounds)
         # Storage of last sample -- will only be defined for rank-0 MPI process
         self.X_all = None
         self.y_all = None
@@ -295,7 +301,7 @@ class InterfaceNessai(NSInterface):
 
     def set_prior(self, bounds):
         """Sets the prior used by the nested sampler."""
-        self.bounds = np.atleast_2d(bounds)
+        self.bounds = check_and_return_bounds(bounds)
 
     def set_precision(self, nlive=None, precision_criterion=None, **kwargs):
         """Sets precision parameters for the nested sampler."""
@@ -407,7 +413,8 @@ class InterfaceUltraNest(NSInterface):
                 "https://johannesbuchner.github.io/UltraNest "
                 "(or select an alternative nested sampler, e.g. PolyChord or nessai)."
             ) from excpt
-        self.dim = len(np.atleast_2d(bounds))
+        self.set_prior(bounds)
+        self.dim = len(self.bounds)
         self.precision_settings = {}
 
         self.sampler_settings = {
@@ -416,7 +423,6 @@ class InterfaceUltraNest(NSInterface):
         }
         self.run_settings = {"viz_callback": False, "show_status": False}
         self.set_verbosity(verbosity)
-        self.set_prior(bounds)
         # Storage of last sample -- will only be defined for rank-0 MPI process
         self.X_all = None
         self.y_all = None
@@ -432,7 +438,7 @@ class InterfaceUltraNest(NSInterface):
 
     def set_prior(self, bounds):
         """Sets the prior used by the nested sampler."""
-        self.bounds = np.atleast_2d(bounds)
+        self.bounds = check_and_return_bounds(bounds)
         widths = self.bounds[:, 1] - self.bounds[:, 0]
         lowers = self.bounds[:, 0]
         self.uniform_prior_transform = lambda quantiles: quantiles * widths + lowers
@@ -489,3 +495,11 @@ class InterfaceUltraNest(NSInterface):
         if not mpi.is_main_process:
             return
         shutil.rmtree(self.output)
+
+
+# Implemented interfaces as a dict, for convenience.
+_ns_interfaces = {
+    "polychord": InterfacePolyChord,
+    "ultranest": InterfaceUltraNest,
+    "nessai": InterfaceNessai,
+}

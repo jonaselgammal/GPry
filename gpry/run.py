@@ -11,9 +11,8 @@ from numbers import Number
 import numpy as np
 from tqdm import tqdm
 
-from cobaya.model import Model
-
 from gpry import mpi
+from gpry.truth import get_truth
 from gpry.proposal import InitialPointProposer, ReferenceProposer, PriorProposer, \
     UniformProposer, MeanCovProposer
 from gpry.gpr import GaussianProcessRegressor
@@ -25,10 +24,10 @@ from gpry.preprocessing import Normalize_bounds, Normalize_y
 import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
-from gpry.mc import mc_sample_from_gp, process_gdsamples
+from gpry import mc
 import gpry.plots as gpplt
-from gpry.tools import create_cobaya_model, get_Xnumber, check_candidates, is_in_bounds, \
-    mean_covmat_from_evals, kl_norm
+from gpry.tools import get_Xnumber, check_candidates, is_in_bounds, \
+    mean_covmat_from_evals, mean_covmat_from_samples, kl_norm
 
 _plots_path = "images"
 
@@ -42,7 +41,7 @@ class Runner():
 
     Parameters
     ----------
-    model : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+    loglike : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
         Likelihood function (returning log-likelihood; requires additional argument
         ``bounds``) or Cobaya Model instance (which contains all information about the
         parameters in the likelihood and their priors as well as the likelihood itself).
@@ -54,7 +53,7 @@ class Runner():
         correspond to the argument names of the ``likelihood`` function, and the values
         can be either bounds specified as ``[min, max]``, or bounds and labels, as
         ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
-        be ignored) if a Cobaya ``Model`` instance is passed as ``model``.
+        be ignored) if a Cobaya ``Model`` instance is passed as ``loglike``.
 
     gpr : GaussianProcessRegressor, str, dict, optional (default="RBF")
         The GP used for interpolating the posterior. If None or "RBF" is given
@@ -188,8 +187,10 @@ class Runner():
     """
 
     def __init__(self,
-                 model=None,
+                 loglike=None,
                  bounds=None,
+                 ref_bounds=None,
+                 params=None,
                  gpr="RBF",
                  gp_acquisition="LogExp",
                  initial_proposer="reference",
@@ -204,122 +205,78 @@ class Runner():
                  verbose=3,
                  ):
         self.verbose = verbose
-        if model is None:
-            if not (checkpoint is not None and str(load_checkpoint).lower() == "resume"):
-                raise ValueError(
-                    "'model' must be specified unless resuming from a checkpoint.")
-        elif isinstance(model, Model):
-            self.model = model
-        elif callable(model):
-            if bounds is None:
-                raise ValueError("'bounds' need to be defined if a likelihood "
-                                 "function is passed.")
-            self.model = create_cobaya_model(model, bounds)
-        self.checkpoint = checkpoint
-        if self.checkpoint is not None:
-            self.plots_path = os.path.join(self.checkpoint, _plots_path)
-            if mpi.is_main_process:
-                create_path(self.checkpoint, verbose=self.verbose >= 3)
-                if plots:
-                    create_path(self.plots_path, verbose=self.verbose >= 3)
-        else:
-            self.plots_path = _plots_path
-            if plots and mpi.is_main_process:
-                create_path(self.plots_path, verbose=self.verbose >= 3)
-        self.plots = plots
-        self.ensure_paths(plots=self.plots)
         self.rng = mpi.get_random_generator(seed)
-        if mpi.is_main_process:
-            self.options = deepcopy(options) or {}
-            # Check if a checkpoint exists already and if so resume from there
-            self.loaded_from_checkpoint = False
-            if checkpoint is not None:
-                if load_checkpoint not in ["resume", "overwrite"]:
-                    raise ValueError("If a checkpoint location is specified you need to "
-                                     "set 'load_checkpoint' to 'resume' or 'overwrite'.")
-                if load_checkpoint == "resume":
-                    self.log("Checking for checkpoint to resume from...", level=3)
-                    checkpoint_files = check_checkpoint(checkpoint)
-                    self.loaded_from_checkpoint = np.all(checkpoint_files)
-                    if self.loaded_from_checkpoint:
-                        self.read_checkpoint(model=model)
-                        # Overwrite internal parameters by those loaded from checkpoint.
-                        model, gpr, gp_acquisition, convergence_criterion, options = \
-                            self.model, self.gpr, self.acquisition, self.convergence, \
-                            self.options
-                        self.log("#########################################\n"
-                                 "Checkpoint found. Resuming from there...\n"
-                                 "If this behaviour is unintentional either\n"
-                                 "turn the checkpoint option off or rename it\n"
-                                 "to a file which doesn't exist.\n"
-                                 "#########################################\n", level=3)
-                    else:
-                        if np.any(checkpoint_files):
-                            self.log("warning: Found checkpoint files but they were "
-                                     "incomplete. Ignoring them...", level=2)
-            # Check model
-            if not isinstance(model, Model) and not callable(model):
-                if load_checkpoint == "resume":
-                    raise ValueError(f"Resuming from checkpoint {checkpoint} failed. "
-                                     "In this case, a 'model' needs to be specified.")
-                else:
-                    raise TypeError("'model' needs to be a likelihood function or a "
-                                    f"Cobaya model. got {model!r}")
-            try:
-                self.prior_bounds = self.model.prior.bounds(
-                    confidence_for_unbounded=0.99995)
-            except Exception as excpt:
-                raise RuntimeError("There seems to be something wrong with "
-                                   f"the model instance: {excpt}") from excpt
-            # Construct the main loop elements (and options):
-            # GPR, GPAcquisition, InitialProposer and ConvergenceCriterion
+        # Set up I/O
+        self.checkpoint = checkpoint
+        _load_checkpoint_vals = ["resume", "overwrite"]
+        try_resuming = False
+        if self.checkpoint is not None:
+            if (
+                    not isinstance(load_checkpoint, str)
+                    or load_checkpoint.lower() not in _load_checkpoint_vals
+            ):
+                raise ValueError(
+                    "If a checkpoint location is specified you need to "
+                    "set 'load_checkpoint' to 'resume' or 'overwrite'."
+                )
+            try_resuming = str(load_checkpoint).lower() == "resume"
+        self.loaded_from_checkpoint = False
+        if try_resuming:
+            if mpi.is_main_process:
+                self.log("Checking for checkpoint to resume from...", level=3)
+                checkpoint_files = check_checkpoint(self.checkpoint)
+                self.loaded_from_checkpoint = all(checkpoint_files)
+                if self.loaded_from_checkpoint:
+                    self.log("#########################################\n"
+                             "Checkpoint found. Resuming from there...\n"
+                             "If this behaviour is unintentional either\n"
+                             "turn the checkpoint option off or rename it\n"
+                             "to a file which doesn't exist.\n"
+                             "#########################################\n", level=3)
+                elif any(checkpoint_files):
+                    self.log("warning: Found checkpoint files but they were "
+                             "incomplete. Ignoring them...", level=2)
+            mpi.share_attr(self, "loaded_from_checkpoint")
+        self.plots = plots
+        self.ensure_paths(plots=bool(self.plots))
+        # Initialise/load the main loop elements and options:
+        # Truth, GPR, GPAcquisition, InitialProposer and ConvergenceCriterion
+        # Truth first because it is preferred if passed, even if resuming.
+        # And do the intialisation per-process, since it may be hard/impossible to pickle
+        if loglike is None and not self.loaded_from_checkpoint:
+            raise ValueError(
+                "You need to specify a loglike/model if not resuming from a checkpoint."
+            )
+        self.truth = get_truth(
+            loglike, bounds=bounds, ref_bounds=ref_bounds, params=params
+        )
+        if self.loaded_from_checkpoint:
+            self.read_checkpoint(truth=self.truth)
+            self._construct_options(self.options)  # needs to set additional attrs
+        else:
             self._construct_gpr(gpr)
             self._construct_gp_acquisition(gp_acquisition)
             self._construct_initial_proposer(initial_proposer)
-            self._construct_convergence_criterion(
-                convergence_criterion,
-                acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
-            )
-            self._construct_options(options)
-            # Callback
-            self.callback = callback
-            self.callback_is_MPI_aware = callback_is_MPI_aware
-            # Print resume
-            self.log("Initialized GPry.", level=3)
-        if mpi.multiple_processes:
-            for attr in ("n_initial", "max_initial", "max_total", "max_finite",
-                         "n_points_per_acq", "fit_full_every", "fit_simple_every",
-                         "options", "acquisition",
-                         "callback_is_MPI_aware", "loaded_from_checkpoint",
-                         "initial_proposer", "progress",
-                         "n_resamples_before_giveup", "resamples"):
-                mpi.share_attr(self, attr)
-            self._share_gpr()
+            if mpi.is_main_process:
+                self._construct_convergence_criterion(
+                    convergence_criterion,
+                    acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
+                )
             self._share_convergence_from_main()
-            if self.callback_is_MPI_aware:
-                mpi.share_attr(self, "callback")
-            else:  # for check of whether to call it
-                callback_func = callback
-                self.callback = mpi.bcast(
-                    (callback is not None) if mpi.is_main_process else None)
-                if mpi.is_main_process:
-                    self.callback = callback_func
-        # Prepare progress summary table; the table key is the iteration number
-        if not self.loaded_from_checkpoint:
             self.progress = Progress()
-        # Prepare logpriorvolume to subtract
-        self.prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
-        self.log_prior_volume = np.sum(
-            np.log(self.prior_bounds[:, 1] - self.prior_bounds[:, 0])
-        )
+            self.options = deepcopy(options)
+            self._construct_options(self.options)
+        # Callback function -- if MPI aware, assumed passed to all processes.
+        self.callback = callback
+        self.callback_is_MPI_aware = callback_is_MPI_aware
+        # Other attributes of the loop and the surrogate model
         self.current_iteration = 0
         self.has_run = False
         self.has_converged = False
+        self._is_truth_saved = False
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
         self.mean, self.cov = None, None
-        self.last_mc_surr_info, self.last_mc_sampler = None, None
-        self._last_mc_samples = None
-        self._is_model_saved = False
+        # Placeholders for the final MC sample
         # Placeholders for fiducial quantities
         self.fiducial_X = None
         self.fiducial_logpost = None
@@ -328,6 +285,8 @@ class Runner():
         self.fiducial_MC_weight = None
         self.fiducial_MC_logpost = None
         self.fiducial_MC_loglike = None
+        if mpi.is_main_process:
+            self.log("Initialized GPry.", level=3)
 
     def _construct_gpr(self, gpr):
         """Constructs or passes the GPR."""
@@ -448,10 +407,10 @@ class Runner():
                 propname_nosuffix = propname_nosuffix[:-len("proposer")]
             if propname_nosuffix == "reference":
                 self.initial_proposer = ReferenceProposer(
-                    self.model, **initial_proposer_args)
+                    self.truth, **initial_proposer_args)
             elif propname_nosuffix == "prior":
                 self.initial_proposer = PriorProposer(
-                    self.model, **initial_proposer_args)
+                    self.truth, **initial_proposer_args)
             elif propname_nosuffix == "uniform":
                 self.initial_proposer = UniformProposer(
                     **initial_proposer_args)
@@ -604,7 +563,23 @@ class Runner():
     @property
     def d(self):
         """Dimensionality of the problem."""
-        return self.model.prior.d()
+        return self.truth.d
+
+    @property
+    def prior_bounds(self):
+        return self.truth.prior_bounds
+
+    @property
+    def params(self):
+        """Returns the list of parameter names."""
+        return self.truth.params
+
+    @property
+    def labels(self):
+        """
+        Returns the list of labels.
+        """
+        return self.truth.labels
 
     def logp(self, X):
         """
@@ -617,6 +592,33 @@ class Runner():
         """
         return self.gpr.predict(np.atleast_2d(X))
 
+    def logp_truth(self, X):
+        """
+        Wrapper for the true log-posterior. Call with a single point.
+
+        This is the full posterior. If the prior is uniform the likelihood function can be
+        recovered by summing ``self.log_prior_volume`` to this function.
+
+        Always returns a scalar.
+        """
+        return self.truth.logp(X)
+
+    def logpost_eval_and_report(self, X, level=None):
+        """
+        Simple wrapper to evaluate and return the true log-posterior at X, and log it
+        with the given ``level``.
+        """
+        self.log(f"[{mpi.RANK}] Evaluating true posterior at\n{X}", level=level)
+        logp = self.logp_truth(X)
+        self.log(f"[{mpi.RANK}] --> log(p) = {logp}", level=4)
+        return logp
+
+    def logprior(self, X):
+        """
+        Returns the log-prior.
+        """
+        return self.truth.logprior(X)
+
     def log(self, msg, level=None):
         """
         Print a message if its verbosity level is equal or lower than the given one (or
@@ -625,10 +627,14 @@ class Runner():
         if level is None or level <= self.verbose:
             print(msg)
 
-    def ensure_paths(self, plots=True):
+    def ensure_paths(self, plots=False):
         """
         Creates paths for checkpoint and plots.
         """
+        if self.checkpoint is not None:
+            self.plots_path = os.path.join(self.checkpoint, _plots_path)
+        else:
+            self.plots_path = _plots_path
         if mpi.is_main_process:
             if self.checkpoint:
                 create_path(self.checkpoint, verbose=self.verbose >= 3)
@@ -666,30 +672,30 @@ class Runner():
                 footer = default_header_footer
             self.log(max_line_length * str(footer), level=level)
 
-    def read_checkpoint(self, model=None):
+    def read_checkpoint(self, truth=None):
         """
         Loads checkpoint files to be able to resume a run or save the results for
         further processing.
 
         Parameters
         ----------
-        model : cobaya.model.Model, optional
+        truth : gpry.truth.Truth, optional
             If passed, it will be used instead of the loaded one.
         """
-        self.model, self.gpr, self.acquisition, self.convergence, self.options, \
-            self.progress = read_checkpoint(self.checkpoint, model=model)
+        self.truth, self.gpr, self.acquisition, self.convergence, self.options, \
+            self.progress = read_checkpoint(self.checkpoint, truth=truth)
 
-    def save_checkpoint(self, update_model=False):
+    def save_checkpoint(self, update_truth=False):
         """
         Saves checkpoint files to be able to resume a run or save the results for
         further processing.
         """
         if mpi.is_main_process:
-            to_save_model = None
-            if update_model or not self._is_model_saved:
-                to_save_model = self.model
-                self._is_model_saved = True
-            save_checkpoint(self.checkpoint, to_save_model, self.gpr, self.acquisition,
+            to_save_truth = None
+            if update_truth or not self._is_truth_saved:
+                to_save_truth = self.truth
+                self._is_truth_saved = True
+            save_checkpoint(self.checkpoint, to_save_truth, self.gpr, self.acquisition,
                             self.convergence, self.options, self.progress)
 
     def _share_gpr(self, root=0):
@@ -919,9 +925,16 @@ class Runner():
                     )
                     self.log(
                         f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
-                        "Evaluated convergence criterion: " + last_values,
+                        "Evaluated convergence criterion: ",
                         level=2
                     )
+                    for cc in self.convergence:
+                        self.log(
+                            f"[CONVERGENCE] - {cc.__class__.__name__} "
+                            f"[{cc.convergence_policy}]: {cc.last_value:.2g} "
+                            "(limit {cc.limit:.2g})",
+                            level=2
+                        )
             mpi.sync_processes()
             self.update_mean_cov()
             # Run the final MC sampler and perform a diagnosis
@@ -954,7 +967,7 @@ class Runner():
                     self.plot_progress(
                         **(self.plots if isinstance(self.plots, Mapping) else {})
                     )
-                except Exception as excpt:
+                except Exception as excpt:  # pylint: disable=broad-exception-caught
                     self.log(f"Failed to plot progress: {excpt}", level=2)
         else:  # check "while" ending condition
             mpi.sync_processes()
@@ -998,16 +1011,6 @@ class Runner():
                                 level=3
                             )
         self.has_run = True
-
-    def logpost_eval_and_report(self, X, level=None):
-        """
-        Simple wrapper to evaluate and return the true log-posterior at X, and log it
-        with the given ``level``.
-        """
-        self.log(f"[{mpi.RANK}] Evaluating true posterior at\n{X}", level=level)
-        logp = self.model.logpost(X)
-        self.log(f"[{mpi.RANK}] --> log(p) = {logp}", level=4)
-        return logp
 
     def do_initial_training(self):
         """
@@ -1120,7 +1123,7 @@ class Runner():
             self.progress.add_truth(timer_truth.time, len(X_init))
         if mpi.is_main_process:
             self.log(f"[EVALUATION] ({timer_truth.time:.2g} sec) "
-                     f"Evaluated the true model at {len(X_init)} location(s)"
+                     f"Evaluated the true log-posterior at {len(X_init)} location(s)"
                      f", of which {n_finite_new} returned a finite value." +
                      (" Each MPI process evaluated at most "
                       f"{max(len(p) for p in all_points)} locations."
@@ -1148,7 +1151,7 @@ class Runner():
 
     def _eval_truth_parallel(self, new_X):
         """
-        Performs the evaluation of the true model in parallel.
+        Performs the evaluation of the true log-posterior in parallel.
 
         Returns all y's at rank 0 (None otherwise), and a short report msg.
         """
@@ -1177,7 +1180,7 @@ class Runner():
         eval_msg = None
         if mpi.is_main_process:
             eval_msg = (
-                f"Evaluated the true model at {len(new_X)} location(s)" +
+                f"Evaluated the true log-posterior at {len(new_X)} location(s)" +
                 (f" (at most {len(new_X_this_process)} per MPI process)"
                  if mpi.multiple_processes else "") +
                 f", of which {sum(np.isfinite(new_y))} returned a finite value."
@@ -1189,7 +1192,7 @@ class Runner():
         hyperparams_bounds = None
         # if self.cov is not None:
         #     stds = np.sqrt(np.diag(self.cov))
-        #     prior_bounds = self.model.prior.bounds(confidence_for_unbounded=0.99995)
+        #     prior_bounds = self.prior_bounds
         #     relative_stds = stds / (prior_bounds[:, 1] - prior_bounds[:, 0])
         #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
         #     hyperparams_bounds = self.gpr.kernel_.bounds.copy()
@@ -1281,16 +1284,22 @@ class Runner():
         else:
             self.has_converged = all_necessary and (any_sufficient or (n_sufficient == 0))
 
-    def update_mean_cov(self):
+    def update_mean_cov(self, use_mc_sample=None):
         """
-        Updates and shares mean and cov if available, checking GPAcquisition first, and
-        Convergence second if not present in GPAcquisition.
+        Updates and shares mean and cov if available, preferring the MC-sample one if
+        indicated, and otherwise checking GPAcquisition first,
+        and Convergence second if not present in GPAcquisition.
         """
-        for attr in ["mean", "cov"]:
+        mean, cov = None, None
+        if use_mc_sample is not None:
+            mean, cov = mean_covmat_from_samples(use_mc_sample["X"], use_mc_sample["w"])
+        for attr, argvalue in zip(("mean", "cov"), (mean, cov)):
             if mpi.is_main_process:
-                value = getattr(self.acquisition, attr, None)
+                value = argvalue
                 if value is None:
-                    value = getattr(self.convergence, attr, None)
+                    value = getattr(self.acquisition, attr, None)
+                    if value is None:
+                        value = getattr(self.convergence, attr, None)
                 setattr(self, attr, value)
             mpi.share_attr(self, attr)
 
@@ -1331,13 +1340,13 @@ class Runner():
             if not isinstance(logpost, Number):
                 raise TypeError("`logpost` must be a scalar.")
             self.fiducial_logpost = logpost
-            logprior = self.model.prior.logp(self.fiducial_X)
+            logprior = self.logprior(self.fiducial_X)
             self.fiducial_loglike = self.fiducial_logpost - logprior
         elif loglike is not None:
             if not isinstance(loglike, Number):
                 raise TypeError("`loglike` must be a scalar.")
             self.fiducial_loglike = loglike
-            logprior = self.model.prior.logp(self.fiducial_X)
+            logprior = self.logprior(self.fiducial_X)
             self.fiducial_logpost = self.fiducial_loglike + logprior
 
     def set_fiducial_MC(self, X, logpost=None, loglike=None, weights=None):
@@ -1389,43 +1398,26 @@ class Runner():
             if len(logpost) != len(self.fiducial_MC_X):
                 raise TypeError("`logpost` and `X` have different numbers of samples.")
             self.fiducial_MC_logpost = logpost
-            logprior = np.array([self.model.prior.logp(x) for x in self.fiducial_MC_X])
+            logprior = np.array([self.logprior(x) for x in self.fiducial_MC_X])
             self.fiducial_MC_loglike = self.fiducial_MC_logpost - logprior
         elif loglike is not None:
             loglike = np.atleast_1d(loglike).copy()
             if len(loglike) != len(self.fiducial_MC_X):
                 raise TypeError("`loglike` and `X` have different numbers of samples.")
             self.fiducial_MC_loglike = loglike
-            logprior = np.array([self.model.prior.logp(x) for x in self.fiducial_MC_X])
+            logprior = np.array([self.logprior(x) for x in self.fiducial_MC_X])
             self.fiducial_MC_logpost = self.fiducial_MC_loglike + logprior
 
     def _fiducial_MC_as_getdist(self):
         if self.fiducial_MC_X is None:
             return None
-        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
-        params = list(self.model.parameterization.sampled_params())
-        labels = self.model.parameterization.labels()
-        labels_list = [labels.get(p) for p in params]
-        minuslogpost = (
-            -self.fiducial_MC_logpost if self.fiducial_MC_logpost is not None else None
-        )
-        mcsamples = MCSamples(
-            samples=self.fiducial_MC_X,
-            weights=self.fiducial_MC_weight,
-            loglikes=minuslogpost,
-            names=params,
-            labels=labels_list,
-            ranges=dict(zip(params, self.gpr.bounds)),
-            ignore_rows=0,
-        )
+        samples_dict = {"X": self.fiducial_MC_X, "w": self.fiducial_MC_weight}
         if self.fiducial_MC_logpost is not None:
-            if not np.isclose(
-                    max(self.fiducial_MC_logpost) - min(self.fiducial_MC_logpost), 0
-            ):
-                mcsamples.addDerived(
-                    -mcsamples.loglikes, gpplt._name_logp, label=gpplt._label_logp
-                )
-        return mcsamples
+            samples_dict[mc._name_logp] = self.fiducial_MC_logpost
+        # NB: for bounds we do not use the trust region, since this is the fiducial sample
+        return mc.samples_dict_to_getdist(
+            samples_dict, params=list(zip(self.params, self.labels)), bounds=self.prior_bounds
+        )
 
     def plot_progress(
             self,
@@ -1480,16 +1472,15 @@ class Runner():
             fid_MC = self._fiducial_MC_as_getdist()
         if trace:
             gpplt.plot_trace(
-                self.model, self.gpr, self.convergence, self.progress, reference=fid_MC,
+                self.truth, self.gpr, self.convergence, self.progress, reference=fid_MC,
             )
             plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
-            gpplt.plot_slices(self.model, self.gpr, self.acquisition)
+            gpplt.plot_slices(self.truth, self.gpr, self.acquisition)
             plt.savefig(os.path.join(self.plots_path, f"slices.{ext}"))
         if corner:
             mc_samples = {}
             filled = {}
-            sampled_params = list(self.model.parameterization.sampled_params())
             if fid_MC is not None:
                 mc_samples["Fiducial"] = fid_MC
             # # Leave as option to plot Train Gaussian Approx -- set filled = False
@@ -1507,17 +1498,17 @@ class Runner():
                 acq_key = f"Acq. sample {rw}({len(self.gpr.X_train_all)} evals.)"
                 try:
                     mc_samples[acq_key] = self.acquisition.last_MC_sample_getdist(
-                        self.model, warn_reweight=False
+                        params=list(zip(self.params, self.labels)), warn_reweight=False
                     )
                 except ValueError:
                     warnings.warn("Aquisition sample could not be loaded.")
             markers = None
             if self.fiducial_X is not None:
                 markers = dict(
-                    zip(self.model.parameterization.sampled_params(), self.fiducial_X)
+                    zip(self.params, self.fiducial_X)
                 )
                 if self.fiducial_logpost is not None:
-                    markers[gpplt._name_logp] = self.fiducial_logpost
+                    markers[mc._name_logp] = self.fiducial_logpost
             output_corner = os.path.join(
                 self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
             )
@@ -1529,9 +1520,10 @@ class Runner():
                 if len(mc_samples) > 0:
                     gpplt.plot_corner_getdist(
                         mc_samples,
-                        params=sampled_params + [gpplt._name_logp],
+                        params=list(self.params) + [mc._name_logp],
+                        # bounds=self.prior_bounds,
                         filled=filled,
-                        training={tuple(sampled_params): self.gpr},
+                        training={tuple(self.params): self.gpr},
                         training_highlight_last=True,
                         markers=markers,
                         output=output_corner,
@@ -1552,7 +1544,7 @@ class Runner():
         plt.close("all")
 
     def generate_mc_sample(
-            self, sampler="mcmc", output=None, add_options=None, resume=False
+            self, sampler="nested", output=None, add_options=None, resume=False
     ):
         """
         Runs an MC process using `Cobaya <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
@@ -1561,15 +1553,20 @@ class Runner():
 
         Parameters
         ----------
-        sampler : string (default `"mcmc"`) or dict
-            Sampler to be initialised. If a string, it must be `"mcmc"` or `"polychord"`.
-            It can also be a dict as ``{sampler: {option: value, ...}}``, containing a
-            full sampler definition, see `here
-            <https://cobaya.readthedocs.io/en/latest/sampler.html>`_. In this case, any
-            sampler understood by Cobaya can be used.
+        sampler : string (default ``nested``) or dict
+            Sampler to be initialised. If a string, it must be ``nested`` or the name of
+            a sampler recognised by Cobaya (e.g. ``mcmc``).
+            If ``nested``, the best available nested sampler is used: PolyChord if
+            available, otherwise UltraNest.
+            If defined as a dict, the options specified as keys and values will be passed
+            to the sampler, in the ``nested`` case ``nlive``, ``num_repeats`` (length of
+            slice chains for PolyChord), ``precision_criterion`` (fraction of the evidence
+            contained in the set of live points), ``nprior`` (number of initial samples of
+            the prior). If using a Cobaya sampler, the options mentioned in the Cobaya
+            documentation of the particular sampler can be passed.
 
         add_options : dict, optional
-            Dict of additional options to be passed to the sampler.
+            *DEPRECATED*: pass options by specifying the ``sampler`` argument as a dict.
 
         output: path, optional (default: ``checkpoint/chains``, if ``checkpoint != None``)
             The path where the resulting Monte Carlo sample shall be stored. If passed
@@ -1579,52 +1576,102 @@ class Runner():
             Whether to resume from existing output files (True) or force overwrite (False)
         """
         if not self.gpr.fitted:
-            raise Exception("You have to have added points to the GPR "
-                            "before you can generate an mc_sample")
+            raise ValueError(
+                "You have to have added points to the GPR before you can generate an MC "
+                "sample"
+            )
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
-        # Add a covariance matrix if it exists (e.g. from MC-based acquisition)
-        if self.cov is not None and "covmat" not in (add_options or {}):
-            if add_options is None:
-                add_options = {}
-            add_options["covmat"] = self.cov
-            # No need to specify parameter names: same order bc same model param info
-        # Update the ref to the available info
-        # TODO: unused at the moment
-        best_point_per_mpi_rank = \
-            self.gpr.X_train[np.argsort(self.gpr.y_train)[-1 + mpi.RANK]]
-        ref = {
-            p: val for p, val in zip(
-                self.model.parameterization.sampled_params(), best_point_per_mpi_rank
+        if isinstance(sampler, str):
+            sampler = {sampler: {}}
+        elif not isinstance(sampler, Mapping):
+            raise ValueError(
+                "'sampler' must be a string ('nested', 'mcmc'...) or a dictionary as "
+                "{'sampler_name': {option: value}."
             )
-        }
-        self.last_mc_surr_info, self.last_mc_sampler = mc_sample_from_gp(
-            self.gpr, true_model=self.model, sampler=sampler,
-            bounds=self.gpr.trust_bounds, convergence=self.convergence, output=output,
-            add_options=add_options, resume=resume, verbose=self.verbose)
-        sampler_name = sampler if isinstance(sampler, str) else list(sampler)[0]
-        self._last_mc_samples = self.last_mc_sampler.samples(
-            combined=True,
-            skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0
-        )
+        sampler_name = list(sampler)[0]
+        sampler_options = sampler[sampler_name] or {}
+        if add_options is not None:
+            raise ValueError(
+                "'add_options' has been deprecated. Pass sampler options by specifying "
+                "the 'sampler' argument as a dictionary."
+            )
+        self._last_mc_bounds = self.truth.prior_bounds
+        if self.gpr.trust_bounds is not None:
+            self._last_mc_bounds = self.gpr.trust_bounds
+        if sampler_name.lower() == "nested":
+            if "nlive" not in sampler_options:
+                sampler_options["nlive"] = 50 * self.d
+            self._last_mc_sampler_type = "nested"
+            X_MC, y_MC, w_MC = mc.mc_sample_from_gp_ns(
+                self.gpr,
+                bounds=self._last_mc_bounds,
+                sampler=None,
+                sampler_options=sampler_options,
+                output=output,
+                verbose=self.verbose
+            )
+            if mpi.is_main_process:
+                logprior_MC = np.array([self.truth.logprior(x) for x in X_MC])
+                self._last_mc_samples = {
+                    "w": w_MC,
+                    "X": X_MC,
+                    mc._name_logp: y_MC,
+                    mc._name_logprior: logprior_MC,
+                    mc._name_loglike: y_MC - logprior_MC,
+                }
+        else:  # assume Cobaya sampler
+            self._last_mc_cobaya_info, self._last_mc_cobaya_sampler = \
+                mc.mc_sample_from_gp_cobaya(
+                    self.gpr,
+                    bounds=self._last_mc_bounds,
+                    params=self.params,
+                    sampler=sampler_name.lower(),
+                    sampler_options=sampler_options,
+                    covmat=self.cov,
+                    output=output,
+                    resume=resume,
+                    verbose=self.verbose
+                )
+            self._last_mc_sampler_type = {"mcmc": "mcmc", "polychord": "nested"}.get(
+                sampler_name, None
+            )
+            _last_mc_samples_cobaya = self._last_mc_cobaya_sampler.samples(
+                combined=True,
+                skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0
+            )
+            if mpi.is_main_process:
+                X_MC = _last_mc_samples_cobaya[self.truth.params].to_numpy()
+                logprior_MC = np.array([self.truth.logprior(x) for x in X_MC])
+                y_MC = -_last_mc_samples_cobaya["minuslogpost"].to_numpy()
+                self._last_mc_samples = {
+                    "w": _last_mc_samples_cobaya["weight"].to_numpy(),
+                    "X": X_MC,
+                    mc._name_logp: y_MC,
+                    mc._name_logprior: logprior_MC,
+                    mc._name_loglike: y_MC - logprior_MC,
+                }
         mpi.share_attr(self, "_last_mc_samples")
+        self.update_mean_cov(use_mc_sample=self.last_mc_samples(copy=False))
         return self._last_mc_samples
 
-    def last_mc_samples(self, as_getdist=True):
+    def last_mc_samples(self, copy=True, as_getdist=False):
         """
-        Returns the last MC sample available from the surrogate model, if any has been
-        generated.
+        Returns the last MC sample from the surrogate model as a dict with keys ``w``
+        (weights), ``X``, ``logpost``, ``logprior`` and ``loglike``.
 
-        If ``as_getdist=True`` (default), they are returned as a
-        :class:`getdist.MCSamples` instance. Otherwise as
-        :class:`cobaya.SampleCollection`.
+        If ``None`` is stored as weights, all samples should be assumed to have equal
+        weight.
         """
-        if as_getdist and self._last_mc_samples is not None:
-            mcsamples = self._last_mc_samples.to_getdist(model=self.model)
-            mcsamples.addDerived(
-                -mcsamples.loglikes, gpplt._name_logp, label=gpplt._label_logp
+        if as_getdist:
+            return mc.samples_dict_to_getdist(
+                self.last_mc_samples(copy=False, as_getdist=False),
+                params=list(zip(self.truth.params, self.truth.labels)),
+                bounds=self._last_mc_bounds,
+                sampler_type=self._last_mc_sampler_type,
             )
-            return mcsamples
+        if copy:
+            return deepcopy(self._last_mc_samples)
         return self._last_mc_samples
 
     def diagnose_last_mc_sample(self):
@@ -1639,9 +1686,13 @@ class Runner():
         ``True`` if the test succeeded, ``False`` otherwise.
         """
         if mpi.is_main_process:
-            last_mc_samples = self.last_mc_samples(as_getdist=False)
-            mean_last_mc = last_mc_samples.mean()
-            cov_last_mc = last_mc_samples.cov()
+            # We assume we have just run the MC sampler and update the mean and cov
+            last_mc_samples = self.last_mc_samples(copy=False, as_getdist=False)
+            # Though usually run just after MC sampling, it won't hurt to enforce the
+            # use of its mean and covmat again, instead of trusting self.mean|cov
+            mean_last_mc, cov_last_mc = mean_covmat_from_samples(
+                last_mc_samples["X"], last_mc_samples["w"]
+            )
             mean_training, _ = mean_covmat_from_evals(self.gpr.X_train, self.gpr.y_train)
             cred = gpryconv.TrainAlignment.criterion_value_from_means_cov(
                 mean_last_mc, mean_training, cov_last_mc
@@ -1712,7 +1763,7 @@ class Runner():
                     "the generate_mc_sample() method first, or pass samples or a path "
                     "to them as first argument."
                 )
-            mc_samples[base_label] = self.last_mc_samples()
+            mc_samples[base_label] = self.last_mc_samples(as_getdist=True)
         else:
             mc_samples[base_label] = samples_or_samples_folder
         if add_samples is None:
@@ -1723,12 +1774,12 @@ class Runner():
         markers = None
         if self.fiducial_X is not None:
             markers = dict(
-                zip(self.model.parameterization.sampled_params(), self.fiducial_X)
+                zip(self.params, self.fiducial_X)
             )
             if self.fiducial_logpost is not None:
-                markers[gpplt._name_logp] = self.fiducial_logpost
+                markers[mc._name_logp] = self.fiducial_logpost
         plot_params = \
-            list(self.model.parameterization.sampled_params()) + [gpplt._name_logp]
+            list(self.params) + [mc._name_logp]
         if output is None:
             output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
         gdplot = gpplt.plot_corner_getdist(
@@ -1788,8 +1839,8 @@ class Runner():
             gdsample = self.last_mc_samples(as_getdist=True)
         else:
             gdsample = samples_or_samples_folder
-        gdsample = list(process_gdsamples({None: gdsample}).values())[0]
-        n_params = len(self.model.parameterization.sampled_params())
+        gdsample = list(mc.process_gdsamples({None: gdsample}).values())[0]
+        n_params = len(self.params)
         mean = gdsample.getMeans()[:n_params]
         covmat = gdsample.getCovMat().matrix[:n_params, :n_params]
         self.ensure_paths(plots=True)

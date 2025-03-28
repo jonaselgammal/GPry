@@ -14,7 +14,6 @@ from scipy.linalg import eigh
 from scipy.special import gamma, erfc
 from scipy.stats import chi2
 from sklearn.utils import check_random_state as check_random_state_sklearn
-from cobaya.model import get_model
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -161,56 +160,6 @@ def generic_params_names(n, prefix="x_"):
     return [prefix + str(i + 1) for i in range(int(n))]
 
 
-# TODO -- this will be inside Cobaya eventually -> remove
-def create_cobaya_model(likelihood, bounds):
-    """
-    Creates a cobaya Model from a likelihood and some bounds.
-
-    Parameters
-    ----------
-    likelihood : callable
-        Function returning a log-likelihood. It needs to take at least as many parameters
-        as contained in ``bounds``.
-
-    bounds : list of [min, max], or dict {name: [min, max],...}
-        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
-        correspond to the argument names of the ``likelihood`` function.
-
-    Returns
-    -------
-    model: a cobaya Model.
-    """
-    if not callable(likelihood):
-        raise TypeError(
-            f"'likelihood' needs to be a callable function. Got {likelihood!r} of type"
-            f" {type(likelihood)}."
-        )
-    params_names = list(signature(likelihood).parameters)
-    if isinstance(bounds, Mapping):
-        assert set(bounds).issubset(params_names), (
-            f"Parameters passed in 'bounds' {list(bounds)} not compatible with the"
-            f" likelihood arguments {params_names}."
-        )
-        params_input = {
-            k: (v if isinstance(v, Mapping) else {"prior": v}) for k, v in bounds.items()
-        }
-    elif isinstance(bounds, Iterable) and not isinstance(bounds, str):
-        assert len(bounds) <= len(params_names), (
-            f"Bounds for {len(bounds)} parameter(s) were passed, but the likelihood "
-            f"depends on {len(params_names)} parameter(s) only (namely {params_names})."
-        )
-        params_input = {
-            params_names[i]: {"prior": bound} for i, bound in enumerate(bounds)
-        }
-    else:
-        raise TypeError(
-            "'bounds' must be a list of [min, max] bounds, or a dictionary "
-            f"containing parameter names as keys and bounds as values. Got {bounds!r}"
-        )
-    likelihood_input = {"likelihood_function": {"external": likelihood}}
-    return get_model({"params": params_input, "likelihood": likelihood_input})
-
-
 class NumpyErrorHandling:
     """
     Context for manual handling of numpy errors (e.g. ignoring, just printing...).
@@ -264,12 +213,14 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
         num_value = float(num_value)
         if X_value is None:  # special case: X value undefined (see docstring)
             return (
-                dtype(num_value), has_X, X_power if X_power is None else float(X_power)
+                dtype(num_value),
+                has_X,
+                X_power if X_power is None else float(X_power),
             )
         if has_X:
             X_multiplier = X_value
             if X_power is not None:
-                X_multiplier = X_multiplier**float(X_power)
+                X_multiplier = X_multiplier ** float(X_power)
         else:
             X_multiplier = 1
         return dtype(num_value * X_multiplier)
@@ -328,12 +279,29 @@ def is_in_bounds(points, bounds, check_shape=False):
     """
     points = np.atleast_2d(points)
     if check_shape:
+        bounds = check_and_return_bounds(bounds)
         if bounds.shape[0] != points.shape[1]:
             raise ValueError(
                 "bounds and point appear to have different dimensionalities: "
                 f"{bounds.shape[0]} for bounds and {points.shape[1]} for point."
             )
     return np.all((points >= bounds[:, 0]) & (points <= bounds[:, 1]), axis=1)
+
+
+def check_and_return_bounds(bounds):
+    """
+    Returns the passed bounds as a (dim, 2)-shaped array if it can be mapped to one,
+    and raises TypeError otherwise.
+    """
+    try:
+        bounds_ = np.atleast_2d(bounds)
+        if bounds_.shape[1] != 2:
+            raise ValueError
+    except ValueError as excpt:
+        raise TypeError(
+            f"bounds must be a (dim, 2) array of bounds, but is {bounds}"
+        ) from excpt
+    return bounds_
 
 
 def shrink_bounds(bounds, samples, factor=1):
@@ -362,15 +330,18 @@ def shrink_bounds(bounds, samples, factor=1):
 
     Raises
     ------
-    ValueError:
+    TypeError:
         If bounds or samples are not well formatted or inconsistent with each other.
     """
-    bounds = np.atleast_2d(bounds)
-    samples = np.atleast_2d(samples)
-    if bounds.shape[1] != 2:
-        raise ValueError("bounds must be a (d, 2) array of bounds.")
+    bounds = check_and_return_bounds(bounds)
+    try:
+        samples = np.atleast_2d(samples)
+    except ValueError as excpt:
+        raise TypeError(
+            "samples are not correctly formatted as an array with sha[e (nsamples, dim)"
+        ) from excpt
     if bounds.shape[0] != samples.shape[1]:
-        raise ValueError(
+        raise TypeError(
             "bounds and samples appear to have different dimensionalities: "
             f"{bounds.shape[0]} for bounds and {samples.shape[1]} for samples."
         )
@@ -408,6 +379,16 @@ def remove_0_weight_samples(weights, *arrays):
         else:
             new_arrays.append(np.delete(array, i_zero_w, axis=0))
     return new_arrays
+
+
+def mean_covmat_from_samples(X, w=None):
+    """
+    Returns an estimation of the mean and covariance of a set ``X`` of points, using their
+    ``logp`` as weights.
+    """
+    mean = np.average(X, weights=w, axis=0)
+    cov = np.cov(X.T, aweights=w)
+    return mean, cov
 
 
 def mean_covmat_from_evals(X, logp):

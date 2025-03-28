@@ -12,12 +12,7 @@ from warnings import warn
 import scipy.stats
 import numpy as np
 
-from cobaya.model import LogPosterior
-from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-from cobaya.tools import resolve_packages_path
-
 from gpry.tools import check_random_state, is_in_bounds
-from gpry.mc import mc_sample_from_gp
 from gpry import mpi
 
 
@@ -101,64 +96,41 @@ class InitialPointProposer(metaclass=ABCMeta):
 
 class ReferenceProposer(Proposer, InitialPointProposer):
     """
-    Generates proposals from the "reference" distribution defined in the model. If no
+    Generates proposals from the "reference" distribution defined in the Truth. If no
     reference distribution is defined it defaults to the prior.
 
     Parameters
     ----------
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        The model from which to draw the samples.
+    truth : Truth
+        The true model from which to draw the samples.
     """
 
-    def __init__(
-        self, model, bounds=None, max_tries=inf, warn_if_tries="10d", ignore_fixed=True
-    ):
-        self.prior = model.prior
-        self.update_bounds(
-            bounds
-            if bounds is not None
-            else model.prior.bounds(confidence_for_unbounded=0.99995)
-        )
-        self.warn = True
-        self.max_tries = max_tries
-        self.warn_if_tries = warn_if_tries
-        self.ignore_fixed = ignore_fixed
+    def __init__(self, truth, bounds=None):
+        self.truth = truth
+        self.update_bounds(bounds if bounds is not None else truth.prior_bounds)
 
     @check_in_bounds
     def get(self, rng=None):
-        ref = self.prior.reference(
-            max_tries=self.max_tries,
-            warn_if_tries=self.warn_if_tries,
-            ignore_fixed=self.ignore_fixed,
-            warn_if_no_ref=self.warn,
-            random_state=rng,
-        )
-        self.warn = False
-        return ref
+        return self.truth.ref_sample(rng)
 
 
 class PriorProposer(Proposer, InitialPointProposer):
     """
-    Generates proposals from the prior of the model.
+    Generates proposals from the prior of the problem.
 
     Parameters
     ----------
-    model : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-        The model from which to draw the samples.
-        max_tries=inf, warn_if_tries='10d', ignore_fixed=False
+    truth : Truth
+        The true model from which to draw the samples.
     """
 
-    def __init__(self, model, bounds=None):
-        self.model = model
-        self.update_bounds(
-            bounds
-            if bounds is not None
-            else model.prior.bounds(confidence_for_unbounded=0.99995)
-        )
+    def __init__(self, truth, bounds=None):
+        self.truth = truth
+        self.update_bounds(bounds if bounds is not None else truth.prior_bounds)
 
     @check_in_bounds
     def get(self, rng=None):
-        return self.model.prior.sample(random_state=rng)[0]
+        return self.truth.prior_sample(rng)
 
 
 class UniformProposer(Proposer, InitialPointProposer):
@@ -283,7 +255,73 @@ class MeanCovProposer(Proposer, InitialPointProposer):
         return self.proposal_function(random_state=rng)
 
 
-# UNUSED (not really, but should not be here, being specific to one problem)
+class CentroidsProposer(Proposer):
+    """
+    Proposes points at the centroids of subsets of dim-1 training points. It
+    perturbs some of the proposals away from the centroids to encourage
+    exploration.
+
+    bounds : array-like, shape=(n_dims,2)
+        Array of bounds of the prior [lower, upper] along each dimension.
+
+    lambda: float, optional (default=1)
+        Controls the scale of the perturbation of samples. Lower values
+        correspond to more exploration.
+    """
+
+    def __init__(self, bounds, lambd=1.0):
+        self.training = None
+        self.training_ = None  # in-bounds subset
+        self.update_bounds(bounds)
+        # TODO: adapt lambda to dimensionality!
+        # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
+        self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
+
+    @property
+    def d(self):
+        """Dimensionality of the prior."""
+        return len(self.bounds)
+
+    # No need for check_in_bounds, by construction (uses np.clip)
+    def get(self, rng=None):
+        rng = check_random_state(rng)
+        m = self.d + 1
+        # If possible, get points inside bounds, otherwise outside (1st iteration(s))
+        try:
+            subset = self.training_[
+                rng.choice(len(self.training_), size=m, replace=False)
+            ]
+        except ValueError:  # m > len(training_)
+            subset = self.training[rng.choice(len(self.training), size=m, replace=False)]
+        centroid = np.average(subset, axis=0)
+        # perturb the point: per dimension, add a random multiple of the difference
+        # between the centroid and one of the points.
+        kick = -centroid + np.array(
+            [
+                subset[j][i]
+                for i, j in enumerate(rng.choice(m, size=self.d, replace=False))
+            ]
+        )
+        kick *= self.kicking_pdf.rvs(self.d, random_state=rng)
+        # This might have to be modified if the optimizer can't deal with
+        # points which are exactly on the edges.
+        return np.clip(centroid + kick, self.bounds[:, 0], self.bounds[:, 1])
+
+    def update(self, gpr):
+        # Get training locations from gpr and save them
+        self.training = np.copy(gpr.X_train)
+
+    def update_bounds(self, bounds):
+        super().update_bounds(bounds)
+        # Save training samples inside new bounds
+        if self.training is None:
+            return
+        self.training_ = self.training[is_in_bounds(self.training, bounds)]
+
+
+# FROM HERE ON, UNUSED, POSSIBLY OUTDATED (and Cobaya-dependent) #########################
+
+
 class MeanAutoCovProposer(Proposer, InitialPointProposer):
     """
     Does the same as :class:`MeanCovProposer` but tries to get an automatically
@@ -299,6 +337,9 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
     """
 
     def __init__(self, mean, model_info):
+        from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
+        from cobaya.tools import resolve_packages_path
+
         cmat_dir = get_best_covmat(model_info, packages_path=resolve_packages_path())
         if np.any(d != 0 for d in cmat_dir["covmat"].shape):
             self.proposal_function = scipy.stats.multivariate_normal(
@@ -315,7 +356,6 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
         return self.proposal_function(random_state=rng)
 
 
-# UNUSED
 class SmallChainProposer(Proposer):
     """
     Uses a short MCMC chain starting from a random training point of the GP to
@@ -368,6 +408,8 @@ class SmallChainProposer(Proposer):
             this_i = rng.choice(range(len(self.gpr.X_train)))
             this_X = np.copy(self.gpr.X_train[this_i])
             logpost = self.gpr.y_train[this_i]
+            from cobaya.model import LogPosterior
+
             self.sampler.current_point.add(this_X, LogPosterior(logpost=logpost))
             # reset random state and number of samples
             self.sampler._rng = rng
@@ -387,79 +429,15 @@ class SmallChainProposer(Proposer):
 
     def update(self, gpr):
         self.samples = []
-        surr_info, sampler = mc_sample_from_gp(
+        from gpry.mc import mc_sample_from_gp_cobaya
+
+        surr_info, sampler = mc_sample_from_gp_cobaya(
             gpr,
             self.bounds,
             sampler="mcmc",
             run=False,
-            add_options={"max_samples": self.npoints, "max_tries": 10 * self.npoints},
+            sampler_options={"max_samples": self.npoints, "max_tries": 10 * self.npoints},
         )
         self.sampler = sampler
         self.parnames = list(surr_info["params"])
         self.gpr = gpr
-
-
-class CentroidsProposer(Proposer):
-    """
-    Proposes points at the centroids of subsets of dim-1 training points. It
-    perturbs some of the proposals away from the centroids to encourage
-    exploration.
-
-    bounds : array-like, shape=(n_dims,2)
-        Array of bounds of the prior [lower, upper] along each dimension.
-
-    lambda: float, optional (default=1)
-        Controls the scale of the perturbation of samples. Lower values
-        correspond to more exploration.
-    """
-
-    def __init__(self, bounds, lambd=1.0):
-        self.training = None
-        self.training_ = None  # in-bounds subset
-        self.update_bounds(bounds)
-        # TODO: adapt lambda to dimensionality!
-        # e.g. 1 seems to work well for d=2, and ~0.5 for d=30
-        self.kicking_pdf = scipy.stats.expon(scale=1 / lambd)
-
-    @property
-    def d(self):
-        """Dimensionality of the prior."""
-        return len(self.bounds)
-
-    # No need for check_in_bounds, by construction (uses np.clip)
-    def get(self, rng=None):
-        rng = check_random_state(rng)
-        m = self.d + 1
-        # If possible, get points inside bounds, otherwise outside (1st iteration(s))
-        try:
-            subset = self.training_[
-                rng.choice(len(self.training_), size=m, replace=False)
-            ]
-        except ValueError:  # m > len(training_)
-            subset = self.training[
-                rng.choice(len(self.training), size=m, replace=False)
-            ]
-        centroid = np.average(subset, axis=0)
-        # perturb the point: per dimension, add a random multiple of the difference
-        # between the centroid and one of the points.
-        kick = -centroid + np.array(
-            [
-                subset[j][i]
-                for i, j in enumerate(rng.choice(m, size=self.d, replace=False))
-            ]
-        )
-        kick *= self.kicking_pdf.rvs(self.d, random_state=rng)
-        # This might have to be modified if the optimizer can't deal with
-        # points which are exactly on the edges.
-        return np.clip(centroid + kick, self.bounds[:, 0], self.bounds[:, 1])
-
-    def update(self, gpr):
-        # Get training locations from gpr and save them
-        self.training = np.copy(gpr.X_train)
-
-    def update_bounds(self, bounds):
-        super().update_bounds(bounds)
-        # Save training samples inside new bounds
-        if self.training is None:
-            return
-        self.training_ = self.training[is_in_bounds(self.training, bounds)]
