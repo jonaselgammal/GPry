@@ -42,7 +42,6 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.mathjax',
     'sphinx.ext.napoleon',
-    'sphinx_favicon',
 ]
 
 # -- Extensions to the  Napoleon GoogleDocstring class ---------------------
