@@ -1,3 +1,5 @@
+.. _strategy-troubleshooting:
+
 Strategy and troubleshooting
 ============================
 

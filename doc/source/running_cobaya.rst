@@ -1,3 +1,5 @@
+.. _running_cobaya:
+
 ===================
 Running with Cobaya
 ===================

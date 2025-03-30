@@ -591,6 +591,15 @@ class Runner():
         Always returns an array.
         """
         return self.gpr.predict(np.atleast_2d(X))
+    
+    def logL(self, X):
+        """
+        Wrapper for the surrogate likelihood. Call with a point or a list of them.
+
+        Always returns an array.
+        """
+        return self.gpr.predict(np.atleast_2d(X)) - self.truth.logprior(X)
+
 
     def logp_truth(self, X):
         """
