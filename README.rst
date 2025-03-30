@@ -41,7 +41,7 @@ GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
 How it works
 ^^^^^^^^^^^^
 
-GPry uses a `Gaussian Process <https://gaussianprocess.org/gpml/>`_ (GP) to create an interpolating model of the log-posterior density function, using as few evaluations as possible. It achieves that using **active learning**: starting from a minimal set of training samples, the next ones are chosen so that they maximise the information gained on the posterior shape. For more details, see section `How GPry works <https://gpry.readthedocs.io/how-it-works>`_ of the documentation, and check out the :ref:`GPry papers <readme_cite>`.
+GPry uses a `Gaussian Process <https://gaussianprocess.org/gpml/>`_ (GP) to create an interpolating model of the log-posterior density function, using as few evaluations as possible. It achieves that using **active learning**: starting from a minimal set of training samples, the next ones are chosen so that they maximise the information gained on the posterior shape. For more details, see section `How GPry works <https://gpry.readthedocs.io/en/latest/how_does_gpry_work.html>`_ of the documentation, and check out the `GPry papers <#readme_cite>`_.
 
 GPry introduces some innovations with respect to previous similar approaches [TODO: citations]:
 
