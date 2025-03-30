@@ -12,7 +12,7 @@ authors = [
     {name = "Christian Fidler"},  
 ]
 description = "A package for fast bayesian inference of expensive Likelihoods"
-readme = "README.rst"
+readme = {file = "README.rst", content-type = "text/x-rst"}
 license = {file = "LICENSE"}
 keywords = ["inference", "gaussianprocesses", "sampling", "cosmology"]
 classifiers = [

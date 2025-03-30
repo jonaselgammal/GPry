@@ -41,9 +41,9 @@ GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
 How it works
 ^^^^^^^^^^^^
 
-GPry uses a `Gaussian Process <https://gaussianprocess.org/gpml/>`_ (GP) to create an interpolating model of the log-posterior density function, using as few evaluations as possible. It achieves that using **active learning**: starting from a minimal set of training samples, the next ones are chosen so that they maximise the information gained on the posterior shape. For more details, see section `How GPry works <https://gpry.readthedocs.io/en/latest/how_does_gpry_work.html>`_ of the documentation, and check out the `GPry papers <#readme_cite>`_.
+GPry uses a `Gaussian Process <https://gaussianprocess.org/gpml/>`_ (GP) to create an interpolating model of the log-posterior density function, using as few evaluations as possible. It achieves that using **active learning**: starting from a minimal set of training samples, the next ones are chosen so that they maximise the information gained on the posterior shape. For more details, see section `How GPry works <https://gpry.readthedocs.io/en/latest/how_does_gpry_work.html>`_ of the documentation, and check out the GPry papers (see below).
 
-GPry introduces some innovations with respect to previous similar approaches [TODO: citations]:
+GPry introduces some innovations with respect to previous similar approaches:
 
 - It imposes weakly-informative priors on the target function, based on a comparison with an n-dimensional Gaussian, and uses that information e.g. for convergence metrics, balancing exploration vs. exploitation, etc.
 
@@ -57,24 +57,25 @@ At the moment, GPry utilizes a modification of the CPU-based `scikit-learn GP im
 What kinds of likelihoods/posteriors should work with GPry?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Non-stochastic log-probability density functions, smooth up to a small amount of (deterministic) numerical noise (:math:`\Delta\log p \sim 0.1`).
+- Non-stochastic log-probability density functions, smooth up to a small amount of (deterministic) numerical noise (less than 0.1 in log posterior).
 
 - Large evaluation times, so that the GPry overhead is subdominant with respect to posterior evaluation. How slow depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if an MCMC takes longer to converge than you're willing to wait you should give it a shot.
 
-- The parameter space needs to be *low-dimensional* (:math:`d<20` as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
+- The parameter space needs to be *low-dimensional* (less than 20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
 
 What may not work so well:
 
 - Highly multimodal posteriors, especially if the separation between modes is large.
 
 - Highly non-Gaussian posteriors, that would not be well modelled by orthogonal constant correlation lengths.
+
 **GPry is under active developing, in order to mitigate some of those issues, so look out for new versions!**
 
 
 It does not work!
 ^^^^^^^^^^^^^^^^^
 
-Please check out the `Strategy and Troubleshooting <https://gpry.readthedocs.io/strategy>`_ page, or get in touch for `issues <https://github.com/jonaselgammal/GPry/issues>`_ or `more general discussions <https://github.com/jonaselgammal/GPry/discussions>`_.
+Please check out the `Strategy and Troubleshooting <https://gpry.readthedocs.io/en/latest/strategy.html>`_ page, or get in touch for `issues <https://github.com/jonaselgammal/GPry/issues>`_ or `more general discussions <https://github.com/jonaselgammal/GPry/discussions>`_.
 
 
 .. _readme_cite:
