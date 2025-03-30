@@ -1,4 +1,4 @@
-__version__ = "3.0a1"
+__version__ = "3.0.0"
 
 def check_cobaya_installed():
     """Returns True or False depending on whether Cobaya can be imported as a package."""
