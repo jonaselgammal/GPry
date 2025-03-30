@@ -899,7 +899,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
     dimension: double, default=None
         the dimension of the parameter space used for auto-scaling the zeta
 
-    zeta_scaling: double, default=1.1
+    zeta_scaling: double, default=0.85
         the scaling power of the zeta with dimension, if auto-scaled
     """
 
@@ -930,7 +930,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         return Hyperparameter(
             "sigma_n", "numeric", fixed=self.fixed)
 
-    def auto_zeta(self, dimension, scaling=1.1):
+    def auto_zeta(self, dimension, scaling=0.85):
         return dimension**(-scaling)
 
     def __call__(self, X, gp, eval_gradient=False):
@@ -1061,14 +1061,17 @@ class LogExp(BaseLogExp):
     dimension: double, default=None
         the dimension of the parameter space used for auto-scaling the zeta
 
-    zeta_scaling: double, default=1.1
+    zeta_scaling: double, default=0.85
         the scaling power of the zeta with dimension, if auto-scaled
     """
 
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
         """Linearized exponentiated log-error bar."""
-        return 2 * zeta * (mu - baseline) + np.log(np.sqrt(np.clip(std**2.-noise_level**2., 0., None)))
+        return (
+            2 * zeta * (mu - baseline) +
+            np.log(np.sqrt(np.clip(std**2. - noise_level**2., 0., None)))
+        )
 
 
 # UNUSED
@@ -1115,7 +1118,7 @@ class NonlinearLogExp(BaseLogExp):
     dimension: double, default=None
         the dimension of the parameter space used for auto-scaling the zeta
 
-    zeta_scaling: double, default=1.1
+    zeta_scaling: double, default=0.85
         the scaling power of the zeta with dimension, if auto-scaled
     """
 

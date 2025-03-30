@@ -1,28 +1,27 @@
-# general purpose stuff
+# Builtin
 import warnings
 from copy import deepcopy
 from operator import itemgetter
 from typing import Mapping
+from numbers import Number
 
-# numpy and scipy
+# External
 import numpy as np
 from scipy.linalg import cholesky, solve_triangular, cho_solve
 from scipy.linalg.blas import dtrmm as tri_mul
 import scipy.optimize
-
-# sklearn GP and kernel utilities
+import pandas as pd
 from sklearn.gaussian_process import GaussianProcessRegressor \
     as sk_GaussianProcessRegressor
 from sklearn.base import clone, BaseEstimator as BE
-
-# sklearn utilities
 from sklearn.utils.validation import check_array
 
-# gpry kernels and SVM
-from gpry.kernels import RBF, Matern, ConstantKernel as C, WhiteKernel
+# Local
+from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.svm import SVM
-from gpry.preprocessing import Normalize_bounds
-from gpry.tools import check_random_state, get_Xnumber, nstd_of_1d_nstd
+from gpry.preprocessing import Normalize_bounds, DummyPreprocessor
+from gpry.tools import check_random_state, get_Xnumber, delta_logp_of_1d_nstd, \
+    generic_params_names, shrink_bounds, is_in_bounds
 
 
 class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
@@ -59,6 +58,12 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         for Matern, pass a single-key dict as ``{"Matern": {"nu": 2.5}}"``. Note
         that the kernel's hyperparameters are optimized during fitting.
 
+    output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
+        Prior for the (non-squared) scale parameter, in normalised logp units.
+
+    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
+        Prior for the length parameters, as a fraction of the parameter priors sizes.
+
     noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
         during fitting. Larger values correspond to increased noise level in the
@@ -66,6 +71,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         If an array is passed, it must have the same number of entries as the
         data used for fitting and is used as datapoint-dependent noise level.
         Note that this is equivalent to adding a WhiteKernel with c=noise_level.
+
+    clip_factor : float, optional (default: 1.1)
+        Factor for upper clipping of the GPR predictions, to avoid overshoots.
 
     optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
         Can either be one of the internally supported optimizers for optimizing
@@ -124,14 +132,34 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         which shall be considered finite in :math:`\sigma` using a :math:`\chi^2`
         distribution. Used only if account_for_inf is not None.
 
+    keep_min_finite : int, optional (default: None)
+        Minimum number of points to be considered finite, and this part of the GPR
+        training set. Useful e.g. if a point with a much larger y-value than the rest is
+        suddenly found. If no infinities classifier selected, it has no effect. Otherwise,
+        if ``None``, is set to the dimensionality of the problem.
+
     bounds : array-like, shape=(n_dims,2), optional
         Array of bounds of the prior [lower, upper] along each dimension. Has
         to be provided when the kernel shall be built automatically by the GP.
 
-    random_state : int or `numpy RandomState <https://numpy.org/doc/stable/reference/random/legacy.html?highlight=randomstate#numpy.random.RandomState>`_, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
+    trust_region_factor : float, optional
+        If defined as a positive float, it defines a trust region as a hypercube
+        containing the GPR (finite) training set, enlarged by the given factor.
+        The bounds of this trust region can be read from the ``trust_bounds`` attribute,
+        and points outside these bounds will cause the ``predict`` method to return a
+        negative infinity. Useful when the posterior can be expected to be much
+        smaller than the prior (but in that case it would be preferable to simply reduce
+        the prior bounds), noticeable e.g. by the acquisition module is taking too long
+        to propose points.
+
+    trust_region_nstd : float, optional
+        If defined as a positive float, the definition of the trust region only takes into
+        account training points corresponding to a significance (assuming a Gaussian
+        posterior) equivalent to this value in 1d standard deviations.
+
+    random_state : int or numpy.random.Generator, optional
+        The generator used to perform random operations of the GPR. If an integer is
+        given, it is used as a seed for the default global numpy random number generator.
 
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity of the GP. 3 prints Infos, Warnings and Errors, 2
@@ -145,6 +173,13 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     d : int
         Dimensionality of the training data.
+
+    bounds : array
+        The bounds with which the GPR was defined.
+
+    trust_bounds : array or None
+        The bounds of the trust region if ``trust_region_factor`` was defined, or ``None``
+        otherwise.
 
     X_train : array-like, shape = (n_samples, n_features)
         Original (untransformed) feature values in training data of the GPR. Intended to
@@ -227,17 +262,24 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         predict
     """
 
-    def __init__(self, kernel="RBF", noise_level=1e-2,
+    def __init__(self, kernel="RBF", output_scale_prior=[1e-2, 1e3],
+                 length_scale_prior=[1e-3, 1e1], noise_level=1e-2, clip_factor=1.1,
                  optimizer="fmin_l_bfgs_b", n_restarts_optimizer=0,
                  preprocessing_X=None, preprocessing_y=None,
-                 account_for_inf="SVM", inf_threshold="20s", bounds=None,
-                 random_state=None, verbose=1):
+                 account_for_inf="SVM", inf_threshold="20s", keep_min_finite=None,
+                 trust_region_factor=None, trust_region_nstd=None,
+                 bounds=None, random_state=None, verbose=1):
         self.n_last_appended = 0
         self.n_last_appended_finite = 0
         self.newly_appended_for_inv = 0
-        self.preprocessing_X = preprocessing_X
-        self.preprocessing_y = preprocessing_y
+        self.preprocessing_X = \
+            DummyPreprocessor if preprocessing_X is None else preprocessing_X
+        self.preprocessing_y = \
+            DummyPreprocessor if preprocessing_y is None else preprocessing_y
         self.noise_level = noise_level
+        if clip_factor < 1:
+            raise ValueError("'clip_factor' must be >= 1, or None for no clippling.")
+        self.clip_factor = clip_factor
         self.n_eval = 0
         self.n_eval_loglike = 0
         self.verbose = verbose
@@ -245,10 +287,18 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.minus_inf_value = -np.inf
         self._fitted = False
         self.bounds = bounds
+        self.trust_bounds = None
+        self.trust_region_factor = trust_region_factor
+        self.trust_region_nstd = trust_region_nstd
         # Initialize SVM if necessary
         self.inf_threshold = inf_threshold
-        if account_for_inf == "SVM":
+        self.keep_min_finite = (
+            keep_min_finite if keep_min_finite is not None else max(2, self.d)
+        )
+        if isinstance(account_for_inf, str) and account_for_inf.lower() == "svm":
             self.infinities_classifier = SVM(random_state=random_state)
+        elif account_for_inf is False:
+            self.infinities_classifier = None
         else:
             self.infinities_classifier = account_for_inf
         if self.infinities_classifier is not None:
@@ -266,13 +316,15 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 raise ValueError(
                     "Specify 'inf_threshold' if using infinities classifier."
                 )
-            value, sigma_units = get_Xnumber(
+            value, is_sigma_units, sigma_power = get_Xnumber(
                 self.inf_threshold, "s", None, dtype=float, varname="inf_threshold"
             )
-            if sigma_units:  # sigma units
-                self.diff_threshold = self.compute_threshold_given_sigma(value, self.d)
+            if sigma_power is not None:
+                raise ValueError("Power for sigma not supported.")
+            if is_sigma_units:
+                self._diff_threshold = self.compute_threshold_given_sigma(value, self.d)
             else:
-                self.diff_threshold = value
+                self._diff_threshold = value
         # Auto-construct inbuilt kernels
         if isinstance(kernel, str):
             kernel = {kernel: {}}
@@ -286,10 +338,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                                  f"constructed '{kernel_name}' kernel without "
                                  "specifying prior bounds.")
             # Transform prior bounds if neccessary
-            if self.preprocessing_X is not None:
-                self.bounds_ = self.preprocessing_X.transform_bounds(self.bounds)
-            else:
-                self.bounds_ = self.bounds
+            self.bounds_ = self.preprocessing_X.transform_bounds(self.bounds)
             # Check if it's a supported kernel
             try:
                 length_corr_kernel = {"rbf": RBF, "matern": Matern}[kernel_name.lower()]
@@ -299,15 +348,31 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     f"supported as standard kernels. Got '{kernel_name}'."
                 ) from excpt
             # Build kernel
-            kernel = C(1.0, [0.001, 1000]) \
-                * length_corr_kernel([0.01] * self.d, "dynamic",
-                                     prior_bounds=self.bounds_, **kernel_args) # + WhiteKernel(1e-5, (1e-7, 0.1))
+            output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
+            length_scale_init = np.sqrt(length_scale_prior[0] * length_scale_prior[1])
+            kernel = (
+                C(
+                    output_scale_init**2,
+                    [output_scale_prior[0]**2, output_scale_prior[1]**2],
+                ) * length_corr_kernel(
+                    [length_scale_init] * self.d,
+                    length_scale_prior,
+                    prior_bounds=self.bounds_,
+                    **kernel_args,
+                )
+            )
         sk_GaussianProcessRegressor.__init__(
             self, kernel=kernel, alpha=noise_level**2., optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
             normalize_y=False, copy_X_train=True,
             random_state=random_state
         )
+        self.X_train, self.y_train = np.empty((0, self.d)), np.empty((0,))
+        self.X_train_, self.y_train_ = None, None
+        self.X_train_all, self.y_train_all = np.empty((0, self.d)), np.empty((0,))
+        self.X_train_all_, self.y_train_all_ = None, None
+        self.noise_level_ = None
+        self.kernel_ = None
         if self.verbose >= 3:
             print("Initializing GP with the following options:")
             print("===========================================")
@@ -389,7 +454,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
     @property
     def fitted(self):
-        """Whether the GPR has been fitted at least once."""
+        """Whether the GPR hyperparameters have been fitted at least once."""
         return self._fitted
 
     @property
@@ -409,9 +474,41 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         return (np.copy(self.X_train[-self.n_last_appended_finite:]),
                 np.copy(self.y_train[-self.n_last_appended_finite:]))
 
-    def is_finite(self, y=None):
+    @property
+    def scales(self):
         """
-        Returns the classification of y (taget) values as finite (True) or not, by
+        Kernel scales as ``(output_scale, (length_scale_1, ...))`` in non-transformed
+        coordinates.
+        """
+        return (
+            self.preprocessing_y.inverse_transform_scale(
+                np.sqrt(self.kernel_.k1.constant_value)),
+            tuple(self.preprocessing_X.inverse_transform_scale(
+                self.kernel_.k2.length_scale))
+        )
+
+    def training_set_as_df(self):
+        """
+        Returns the training set as a pandas DataFrame (created on-the-fly and not saved).
+        """
+        data = dict(zip(generic_params_names(self.d), self.X_train_all.copy().T))
+        data["y"] = self.y_train_all.copy()
+        data["is_finite"] = self.is_finite(data["y"])
+        return pd.DataFrame(data)
+
+    @property
+    def abs_finite_threshold(self):
+        """
+        Absolute threshold for ``y`` values to be considered finite.
+        """
+        threshold = self.infinities_classifier.abs_threshold
+        if self.preprocessing_y is None:
+            return threshold
+        return self.preprocessing_y.inverse_transform_scale(threshold)
+
+    def is_finite(self, y):
+        """
+        Returns the classification of y (target) values as finite (True) or not, by
         comparing them with the current threshold.
 
         Notes
@@ -424,9 +521,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """
         if self.infinities_classifier is None:
             return np.full(shape=len(y), fill_value=True)
-        return self.infinities_classifier.is_finite(
-            self.preprocessing_y.transform(y) if y is not None else None
-        )
+        return self.infinities_classifier.is_finite(self.preprocessing_y.transform(y))
 
     def predict_is_finite(self, X, validate=True):
         """
@@ -439,18 +534,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         attribute, since the arguments of that one may need to be transformed first.
         """
         if self.infinities_classifier is None:
-            return np.full(shape=len(y), fill_value=True)
+            return np.full(shape=(len(self.y_train_all), ), fill_value=True)
         return self.infinities_classifier.predict(
-            self.preprocessing_X.transform(X), validate=validate
-        )
-
-    @property
-    def abs_threshold_finite(self):
-        """Current absolute threshold to decide if a target value is finite."""
-        if self.infinities_classifier is None:
-            return -np.info
-        return self.preprocessing_y.inverse_transform(
-            self.infinities_classifier.abs_threshold
+            np.ascontiguousarray(self.preprocessing_X.transform(X)), validate=validate
         )
 
     def set_random_state(self, random_state):
@@ -465,181 +551,270 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             self.infinities_classifier.random_state = check_random_state(
                 random_state, convert_to_random_state=True)
 
-    def append_to_data(self, X, y, noise_level=None, fit=True, simplified_fit=False,
-                       hyperparameter_bounds=None):
-        r"""Append newly acquired data to the GP Model and updates it.
+    def update_trust_region(self):
+        """
+        Adjusts the boundaries of the trust region.
 
-        Here updating refers to the re-calculation of
-        :math:`(K(X,X)+\sigma_n^2 I)^{-1}` which is needed for predictions. In
-        most cases (except if :math:`f(x_*)=\mu(x_*)`) the hyperparameters
-        :math:`\theta` need to be updated too though. Therefore the function
-        offers two different methods of updating the GPR after the training data
-        (``X_train, y_train``) has been updated:
+        Keeps at least ``d`` points, temporarily lowering the threshold if needed.
+        """
+        if self.trust_region_factor is None:
+            return
+        if self.trust_region_nstd is None:
+            use_X = self.X_train
+        else:
+            trust_region_nstd_ = self.trust_region_nstd
+            use_X = np.empty(shape=(0, self.X_train.shape[1]))
+            while len(use_X) < min(self.d, self.n):
+                use_X = self.X_train[
+                    np.where(max(self.y_train) - self.y_train <
+                             delta_logp_of_1d_nstd(trust_region_nstd_, self.d))
+                ]
+                trust_region_nstd_ = trust_region_nstd_ + 0.1
+        self.trust_bounds = shrink_bounds(
+            self.bounds, use_X, factor=self.trust_region_factor
+        )
 
-           * Refit :math:`\theta` using the
-             internal ``fit`` method.
-           * Keep :math:`\theta` fixed and update
-             :math:`(K(X,X)+\sigma_n^2 I)^{-1}` using a single matrix inversion.
+    def append_to_data(
+            self, X, y, noise_level=None, fit_gpr=True, fit_classifier=True,
+    ):
+        r"""
+        Append newly acquired data to the GP Model and updates it.
 
-        While the first method can always be applied it is considerably slower
-        than the second one. Therefore it can be useful to use the second
-        algorithm in cases where it is worth saving the computational expense
-        such as when performing parallelized active sampling.
+        Here updating refers to the re-calculation of the the GPR inverse matrix
+        :math:`(K(X,X)+\sigma_n^2 I)^{-1}` which is needed for predictions.
 
-         .. note::
+        The highest cost incurred by this method is the refitting of the GPR kernel
+        hyperparameters :math:`\theta`. It can be useful to disable it (``fit_gpr=False``)
+        in cases where it is worth saving the computational expense in exchange for a loss
+        of information, such as when performing parallelized active sampling (NB: this is
+        only possible when the GPR hyperparameters have been fit at least once).
 
-            The second method can only be used if the GPR has previously been
-            trained.
+        An intermediate option is to perform a single GPR hyperparameter optimization run
+        (instead of the default number of restarts) from the current hyperparameter
+        values, using ``fit_gpr='simple'``.
+
+        For an additional speed boost, the refitting of the infinities classifier (if
+        present) can be disabled with ``fit_classifier=False`` (.if a GPR refit is
+        requested this value is overridden).
+
+        If called with ``X=None, y=None``, it re-fits the model without adding new points.
+
+        The following calls should then be equivalent:
+
+        .. code-block:: python
+
+           fit_gpr_kwargs = {"n_restarts": 10}
+           # A
+           gpr.append_to_data(new_X, new_y, fit_gpr=fit_gpr_kwargs)
+           # B
+           gpr.append_to_data(new_X, new_y, fit_gpr=False)
+           gpr.fit_gpr_hyperparameters(**fit_gpr_kwargs)
+           # C
+           gpr.append_to_data(new_X, new_y, fit_gpr=False, fit_classifier=False)
+           gpr.append_to_data(None, None, fit_gpr=fit_gpr_kwargs)
+
 
         Parameters
         ----------
-        X : array-like, shape = (n_samples, n_features)
+        X : array-like, shape = (n_samples, n_features), or None
             Training data to append to the model.
 
-        y : array-like, shape = (n_samples, [n_output_dims])
+        y : array-like, shape = (n_samples, [n_output_dims]), or None
             Target values to append to the data
 
         noise_level : array-like, shape = (n_samples, [n_output_dims])
-            Uncorrelated standard deviations to add to the diagonal part of the
-            covariance matrix. Needs to have the same number of entries as
-            y. If None, the noise_level set in the instance is used. If you pass
-            a single number the noise level will be overwritten. In this case it
-            is advisable to refit the hyperparameters of the kernel.
+            Uncorrelated standard deviations to add to the diagonal part of the covariance
+            matrix. Needs to have the same number of entries as y. If None, the
+            noise_level set in the instance is used. If you pass a single number the noise
+            level will be overwritten. In this case it is advisable to refit the
+            hyperparameters of the kernel.
 
-        fit : Bool, optional (default: True)
-            Whether the model is refit to new :math:`\theta`-parameters
-            or just updated using the blockwise matrix-inversion lemma.
-            NB: if used, the SVM classifier is always fit regardless of this arg.
+        fit_gpr : Bool or 'simple', dict, optional (default: True)
+            Whether the GPR :math:`\theta`-parameters are optimised (``'simple'`` for a
+            single run from last optimum; ``True`` for a more thorough search with
+            multiple restarts), or a simple kernel matrix inversion is performed
+            (``False``) with constant hyperparameters. Can also be passed a dict with
+            arguments to be passed to the `fit_gpr_hyperparameters` method.
 
-        simplified_fit : Bool, optional (default: False)
-            If True and ``fit=True``, hyperparameters are only optimised from the last
-            optimum (otherwise, a number of optimisation processes are also started from
-            samples of the hyperparameters' priors).
+        fit_classifier: Bool, optional (default: True)
+            Whether the infinities classifier is refit. Overridden to ``True`` if
+            ``fit_gpr`` is not ``False``.
 
         Returns
         -------
         self
             Returns an instance of self.
         """
-        # Check if X_train and y_train exist to see if a model has previously been fit
-        if not (hasattr(self, "X_train_all_") and hasattr(self, "y_train_all_")):
-            if not fit and self.verbose > 1:
-                warnings.warn("No model has previously been fit to the data, "
-                              "a model will be fit with X and y instead of just "
-                              "updating with the same kernel hyperparameters")
-            self.fit(X, y, noise_level=noise_level,
-                     hyperparameter_bounds=hyperparameter_bounds)
-            return self
-        self.n_last_appended = y.shape[0]
+        # Ensure fit_gpr --> fit_classifier --> fit_preprocessors
+        fit_preprocessors = False
+        fit_gpr_kwargs = None
+        if fit_gpr is True:
+            fit_classifier = True
+            fit_gpr_kwargs = {}
+        elif str(fit_gpr) == "simple":
+            fit_classifier = True
+            fit_gpr_kwargs = {"simple": True}
+            fit_gpr = True
+        elif isinstance(fit_gpr, Mapping):
+            fit_classifier = True
+            fit_gpr_kwargs = deepcopy(fit_gpr)
+            fit_gpr = True
+        elif fit_gpr is not False:
+            raise ValueError(
+                "`fit_gpr` needs to be bool, 'simple', or a dict of args for the "
+                f"`fit_gpr_hyperparameters` method. Got {fit_gpr}."
+            )
+        if fit_classifier:
+            fit_preprocessors = True
+        force_fit_gpr = False  # to avoid skipping fit if no points added if X,y = None
+        if X is None and y is None:
+            X, y = np.empty((0, self.d)), np.empty((0,))
+            force_fit_gpr = fit_gpr
+            if noise_level is not None:
+                raise ValueError("Cannot give a noise level if X and y are not given.")
+        elif X is None or y is None:  # (None, None) already excluded
+            raise ValueError("If passing X, y needs to be passed too, and viceversa.")
+        noise_level_valid = self._validate_noise_level(noise_level, len(y))
+        # NB: if called with X,y = None, None, we could also have adopted the convention
+        #     that the "last"-named variables refer to the last call with non-null X, y,
+        #     but for now they are reset at every call, turning into 0 if no points given.
+        self.n_last_appended = len(y)
         self.X_train_all = np.append(self.X_train_all, X, axis=0)
         self.y_train_all = np.append(self.y_train_all, y)
-        if self.preprocessing_X is None:
-            X_ = np.copy(X)
-            self.X_train_all_ = np.copy(self.X_train_all)
+        self._update_noise_level(noise_level_valid)
+        # 1. Fit preprocessors with finite points and select finite points in the process,
+        #    and create transformed training set and noises.
+        # NB: which points are finite does not change after SVM refit (as long as
+        #     y-preprocessor is liner), so we can select them now.
+        if self.infinities_classifier is None:
+            is_finite_all = np.full(fill_value=True, shape=(len(self.y_train_all), ))
+            X_finite = np.copy(self.X_train_all)
+            y_finite = np.copy(self.y_train_all)
         else:
-            X_ = self.preprocessing_X.transform(X)
-            self.X_train_all_ = np.append(self.X_train_all_, X_, axis=0)
-        if self.preprocessing_y is None:
-            y_ = np.copy(y)
-            self.y_train_all_ = np.copy(self.y_train_all)
-        else:
-            y_ = self.preprocessing_y.transform(y)
-            self.y_train_all_ = np.append(self.y_train_all_, y_, axis=0)
-        # Re-fit the SVM with the new data and select only finite points for GPR
-        if self.infinities_classifier is not None:
-            if self.preprocessing_y is None:
-                diff_threshold_ = np.copy(self.diff_threshold)
-            else:
-                diff_threshold_ = self.preprocessing_y.transform_noise_level(
-                    self.diff_threshold
-                )
-            finite_last_appended = self.infinities_classifier.fit(
-                self.X_train_all_, self.y_train_all_, diff_threshold_
-            )[-self.n_last_appended:]
-            # If all added values are infinite there's no need to refit the GP
-            if not np.any(finite_last_appended):
-                return self
-            X, X_ = X[finite_last_appended], X_[finite_last_appended]
-            y, y_ = y[finite_last_appended], y_[finite_last_appended]
-            if noise_level is not None and np.iterable(noise_level):
-                noise_level = noise_level[finite_last_appended]
-        # Process the noise level
-        self._reset_noise_level(noise_level, y.shape[0], fit)
-        # Append the new data and maybe re-fit the kernel and preprocessors
-        self.X_train = np.append(self.X_train, X, axis=0)
-        self.y_train = np.append(self.y_train, y)
-        # The number of newly added points. Used for the update_model method
-        self.n_last_appended_finite = y.shape[0]
-        self.newly_appended_for_inv = y.shape[0]
-        if fit:
-            self.fit(simplified=simplified_fit,
-                     hyperparameter_bounds=hyperparameter_bounds
+            # Use the manual method for non-preprocessed input.
+            # Make sure that the threshold is such that there is a min of finite ones.
+            diff_threshold_keep_n = self._diff_threshold_if_keep_n_finite(
+                self.y_train_all, self.keep_min_finite, self._diff_threshold
+            )
+            # pylint: disable=protected-access
+            is_finite_all = self.infinities_classifier._is_finite_raw(
+                self.y_train_all, diff_threshold_keep_n
+            )
+            X_finite = np.copy(self.X_train_all[is_finite_all])
+            y_finite = np.copy(self.y_train_all[is_finite_all])
+        if fit_preprocessors:
+            self.preprocessing_X.fit(X_finite, y_finite)
+            self.preprocessing_y.fit(X_finite, y_finite)
+        self.X_train_all_ = self.preprocessing_X.transform(self.X_train_all)
+        self.y_train_all_ = self.preprocessing_y.transform(self.y_train_all)
+        # The transformed noise level is always an array.
+        noise_level_array = (
+            np.full(fill_value=self.noise_level, shape=(len(self.y_train_all_),))
+            if isinstance(self.noise_level, Number) else self.noise_level
+        )
+        self.noise_level_ = self.preprocessing_y.transform_scale(noise_level_array)
+        # 2. Fit the SVM in the transformed space.
+        if self.infinities_classifier is None:
+            is_finite_last_appended = np.full(
+                fill_value=True, shape=(self.n_last_appended, )
             )
         else:
-            # Append points manually (after pre-processing) and update the kernel matrix
-            self.X_train_ = np.append(self.X_train_, X_, axis=0)
-            self.y_train_ = np.append(self.y_train_, y_)
-            self.alpha = self.noise_level_**2.
+            if fit_classifier:
+                # Again, make sure that we keep a min number of finite points
+                diff_threshold_keep_n_ = self.preprocessing_y.transform_scale(
+                    diff_threshold_keep_n
+                )
+                # The SVM lives in the preprocessed space, and the preprocessor may have
+                # changed, so we need to pass all points every time
+                is_finite_predict = self.infinities_classifier.fit(
+                    self.X_train_all_, self.y_train_all_, diff_threshold_keep_n_
+                )
+                assert np.array_equal(is_finite_all, is_finite_predict), \
+                    "Infinities classifier miss-classified at least 1 point."
+            # Even if assert test fails, use the real classification
+            is_finite_last_appended = is_finite_all[-self.n_last_appended:]
+        # The number of newly added points. Used for the _update_model method
+        self.n_last_appended_finite = sum(is_finite_last_appended)
+        # If all added values are infinite there's no need to refit the GPR,
+        # unless an explicit call for that with X, y = None was made
+        if not self.n_last_appended_finite and not force_fit_gpr:
+            return self
+        # 3. Re-fit the GPR in the transformed space, and maybe hyperparameters
+        self.X_train = X_finite
+        self.y_train = y_finite
+        self.X_train_ = self.preprocessing_X.transform(self.X_train)
+        self.y_train_ = self.preprocessing_y.transform(self.y_train)
+        self.alpha = self.noise_level_[is_finite_all]**2  # NB: different from self.alpha_
+        self.newly_appended_for_inv = self.n_last_appended_finite
+        if fit_gpr:
+            self.fit_gpr_hyperparameters(**fit_gpr_kwargs)
+        else:  # just update the regressor, keeping the kernel constant
             self._update_model()
-        return self
+        self.update_trust_region()
 
-    def _reset_noise_level(self, noise_level, n_train, fit):
-        # Update noise_level, this is a bit complicated because it can be
-        # a number, iterable or None. The noise level is also transformed here
-        # if the data is not refit.
+    def _validate_noise_level(self, noise_level, n_train):
+        """
+        Checks for type and inconsistencies for the given noise level. Separated from the
+        update method to be performed before updating class attributes.
+
+        Returns a validated value that can be used directly.
+        """
+        if n_train == 0 and noise_level is not None:
+            raise ValueError("noise_level must be None if not fitting to new points.")
         if np.iterable(noise_level):
+            noise_level = np.atleast_1d(noise_level)
             if noise_level.shape[0] != n_train:
-                raise ValueError("noise_level must be an array with same "
-                                 "number of entries as y.(%d != %d)"
-                                 % (noise_level.shape[0], n_train))
-            elif np.iterable(self.noise_level):
-                self.noise_level = np.append(self.noise_level,
-                                             noise_level, axis=0)
-                if not fit:
-                    if self.preprocessing_y is not None:
-                        noise_level_transformed = self.preprocessing_y.\
-                            transform_noise_level(noise_level)
-                    else:
-                        noise_level_transformed = noise_level
-                    self.noise_level_ = np.append(self.noise_level_,
-                                                  noise_level_transformed, axis=0)
-            else:
-                if self.verbose > 1:
-                    warnings.warn(
-                        "A new noise level has been assigned to the "
-                        "updated training set while the old training set has a"
-                        " single scalar noise level: %s" % self.noise_level)
-                noise_level = np.append(np.ones(self.y_train_.shape) *
-                                        self.noise_level, noise_level, axis=0)
-                self.noise_level = noise_level
-                if not fit:
-                    if self.preprocessing_y is not None:
-                        noise_level_transformed = self.preprocessing_y.\
-                            transform_noise_level(noise_level)
-                    else:
-                        noise_level_transformed = noise_level
-                    self.noise_level_ = noise_level_transformed
+                raise ValueError(
+                    "noise_level must be an array with same number of entries as y, but "
+                    f"len(n)={noise_level.shape[0]} != len(y)={n_train})"
+                )
+        elif isinstance(noise_level, Number):
+            if np.iterable(self.noise_level):
+                noise_level = np.full(fill_value=noise_level, shape=(n_train,))
         elif noise_level is None:
             if np.iterable(self.noise_level):
-                raise ValueError("No value for the noise level given even "
-                                 "though concrete values were given earlier. Please only "
-                                 "give one scalar value or a different one for each "
-                                 "training point.")
-        elif isinstance(noise_level, int) or isinstance(noise_level, float):
-            if not fit and self.verbose > 1:
-                warnings.warn("Overwriting the noise level with a scalar "
-                              "without refitting the kernel's hyperparamters. This may "
-                              "cause unwanted behaviour.")
-                if self.preprocessing_y is not None:
-                    noise_level_transformed = \
-                        self.preprocessing_y.transform_noise_level(noise_level)
-                else:
-                    noise_level_transformed = noise_level
-                self.noise_level_ = noise_level_transformed
-            self.noise_level = noise_level
+                raise ValueError(
+                    "Need to pass non-null noise_level (scalar or array) because concrete"
+                    " values were given earlier for the training points."
+                )
         else:
-            raise ValueError("noise_level needs to be an iterable, number or "
-                             "None, not %s" % noise_level)
+            raise ValueError(
+                "noise_level needs to be an iterable, number or None. "
+                f"Got type(noise_level)={type(noise_level)}"
+            )
+        return noise_level
+
+    def _update_noise_level(self, noise_level):
+        """
+        Updates the noise level of the training set with the new values (or the lack
+        thereof).
+
+        Assumes possible inconsistencies dealt with by ``_validate_noise_level``.
+        """
+        if np.iterable(noise_level):
+            if not np.iterable(self.noise_level):
+                if self.verbose > 1:
+                    warnings.warn(
+                        "A new noise level has been assigned to the updated training set "
+                        "while the old training set has a single scalar noise level: "
+                        f"{self.noise_level}. Converting to individual levels!"
+                    )
+                self.noise_level = np.full(
+                    fill_value=self.noise_level, shape=(len(self.y_train_all),)
+                )
+            self.noise_level = np.append(self.noise_level, noise_level, axis=0)
+        elif isinstance(noise_level, Number):
+            # NB at validation new=scalar has been converted to array if old=array
+            assert not np.iterable(self.noise_level)
+            if not np.isclose(noise_level, self.noise_level):
+                if self.verbose > 1:
+                    warnings.warn(
+                        "Overwriting the noise level with a scalar. Make sure that "
+                        "kernel's hyperparamters are refitted."
+                    )
+                self.noise_level = noise_level
+        elif noise_level is None:
+            pass  # keep old level for new points.
 
     def remove_from_data(self, position, fit=True):
         r"""
@@ -705,200 +880,116 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         self.n_eval_loglike += 1
         return super().log_marginal_likelihood(*args, **kwargs)
 
-    def fit(self, X=None, y=None, noise_level=None, simplified=False,
-            hyperparameter_bounds=None, n_restarts=None, start_from_current=True):
-        r"""Optimizes the hyperparameters :math:`\theta` for the training data
-        given. The algorithm used to perform the optimization is very similar
-        to the one provided by Scikit-learn. The only major difference is, that
-        gradient information is used in addition to the values of the
-        marginalized log-likelihood.
+    def fit_gpr_hyperparameters(
+            self, simple=False, start_from_current=True, n_restarts=None,
+            hyperparameter_bounds=None
+    ):
+        r"""Optimizes the hyperparameters :math:`\theta` for the current training data.
+        The algorithm used to perform the optimization is very similar to the one provided
+        by Scikit-learn. The only major difference is, that gradient information is used
+        in addition to the values of the marginalized log-likelihood.
 
         Parameters
         ----------
-        X : array-like, shape = (n_samples, n_features), optional
-            (default: None)
-            Training data (full set). If None is given X_train is
-            taken from the instance. None should only be passed if it is called
-            from the ``append to data`` method.
-
-        y : array-like, shape = (n_samples, [n_output_dims]), optional
-            (default: None)
-            Target values (full set). If None is given y_train is taken from the instance.
-            None should only be passed if it is called from the
-            ``append to data`` method.
-
         n_restarts : int, default None
             Number of restarts of the optimizer. If not defined, uses the one set at
-            instantiation.
+            instantiation. ``1`` means a single optimizer run.
 
         start_from_current : bool, default: True
-            Starts the fitting by optimizing from the current hyperparameters. This
-            initial optimization does not count towards ``n_restarts``.
+            Starts the first optimization run from the current hyperparameters (ignored if
+            not previously fitted).
 
-        simplified : bool, default: False
+        simple : bool, default: False
             If True, runs the optimiser only from the last optimum of the hyperparameters,
-            without restarts. Shorthand for ``start_from_current=True, n_restarts=0`` (it
+            without restarts. Shorthand for ``start_from_current=True, n_restarts=1``. (it
             overrides them if True).
+
+        hyperparameter_bounds : array-like, default: None
+            Bounds for the hyperparameters, if different from those declared at init.
 
         Returns
         -------
         self
         """
-        if not hasattr(self, 'kernel_'):
-            self.kernel_ = clone(self.kernel)
-        self._rng = check_random_state(self.random_state)
-        # Prepare data for which we will fit, and noise level
-        # If X and y are not given, it re-fits with the current training set
-        if X is None or y is None:
-            # Check if X AND y are None, else raise ValueError
-            if X is not None or y is not None:
-                raise ValueError("X or y is None, while the other isn't. "
-                                 "Either both need to be provided or both should be None")
-            if noise_level is not None:
-                raise ValueError("Cannot give a noise level if X and y are "
-                                 "not given.")
-            # Take X and y from model. We assume that all infinite values have
-            # been removed by the append_to_data method
-            X = np.copy(self.X_train)
-            y = np.copy(self.y_train)
-            noise_level = np.copy(self.noise_level)
-        else:  # X and y are given as args -- takes them as the *full* training set
-            self.X_train_all = np.copy(X)
-            self.y_train_all = np.copy(y)
-            # Set noise level
-            if noise_level is None:
-                if np.iterable(self.noise_level):
-                    raise ValueError("If None is passed as noise level the "
-                                     "internally saved noise level needs "
-                                     "to be a scalar")
-                noise_level = self.noise_level
-            else:
-                self.noise_level = noise_level
-            if np.iterable(noise_level) and noise_level.shape[0] != y.shape[0]:
-                raise ValueError("noise_level must be a scalar or an array "
-                                 "with same number of entries as y.(%s "
-                                 "!= %s)"
-                                 % (noise_level.shape[0], y.shape[0]))
-            # Account for infinite values
-            # Notice that at the time of this call the preprocessors may not have been fit
-            # This is OK: we can do a first check in the untransformed space, since the
-            # SVM will be re-fitted after the preprocessors below anyway.
-            if self.infinities_classifier is not None:
-                if self.preprocessing_X is None or not self.preprocessing_X.fitted:
-                    X_ = X
-                else:
-                    X_ = self.preprocessing_X.transform(X)
-                if self.preprocessing_y is None or not self.preprocessing_y.fitted:
-                    y_ = y
-                    diff_threshold_ = self.diff_threshold
-                else:
-                    y_ = self.preprocessing_y.transform(y)
-                    diff_threshold_ = self.preprocessing_y.transform_noise_level(
-                        self.diff_threshold
-                    )
-                finite = self.infinities_classifier.fit(X_, y_, diff_threshold_)
-                # If there are no finite values there's no point in fitting the GP.
-                if np.all(~finite):
-                    return self
-                X = X[finite]
-                y = y[finite]
-                if np.iterable(noise_level):
-                    noise_level = noise_level[finite]
-            # Copy X and y for later use
-            self.X_train = np.copy(X)
-            self.y_train = np.copy(y)
-        # (Re)fit preprocessors to *finite* data; store transformed data and noise level
-        if self.preprocessing_X is None:
-            self.X_train_ = X
-            self.X_train_all_ = self.X_train_all
-        else:
-            self.preprocessing_X.fit(X, y)
-            self.X_train_ = self.preprocessing_X.transform(X)
-            self.X_train_all_ = self.preprocessing_X.transform(self.X_train_all)
-        if self.preprocessing_y is None:
-            self.y_train_ = y
-            self.y_train_all_ = self.y_train_all
-            self.noise_level_ = noise_level
-        else:
-            self.preprocessing_y.fit(X, y)
-            self.y_train_ = self.preprocessing_y.transform(y)
-            self.y_train_all_ = self.preprocessing_y.transform(self.y_train_all)
-            self.noise_level_ = self.preprocessing_y.transform_noise_level(noise_level)
-        self.alpha = self.noise_level_**2.
-        if self.infinities_classifier is not None:
-            # If preprocessors fit, the SVM needs to be refit (acts in the transf. space)
-            # NB: this assumes that the finite training points are the same after
-            # re-fitting the y transf., true if it preserves y-y(max) (checked above)
-            if self.preprocessing_y is None:
-                diff_threshold_ = self.diff_threshold
-            else:
-                diff_threshold_ = self.preprocessing_y.transform_noise_level(
-                    self.diff_threshold
-                )
-            _ = self.infinities_classifier.fit(
-                self.X_train_all_, self.y_train_all_, diff_threshold_
-            )
-        # Perform the optimization loop
-        if simplified:
+        if simple:
             start_from_current = True
-            n_restarts = 0
-        elif n_restarts is None:
+            n_restarts = 1
+        if not self._fitted:
+            start_from_current = False
+        if n_restarts is None:
             n_restarts = self.n_restarts_optimizer
-        do_optimization = (
-            self.optimizer is not None and self.kernel_.n_dims > 0 and
-            (start_from_current or n_restarts)
-        )
-        if do_optimization:
-            # Choose hyperparameters based on maximizing the log-marginal
-            # likelihood (potentially starting from several initial values)
-            def obj_func(theta, eval_gradient=True):
-                if eval_gradient:
-                    lml, grad = self.log_marginal_likelihood(
-                        theta, eval_gradient=True, clone_kernel=False)
-                    return -lml, -grad
-                else:
-                    return -self.log_marginal_likelihood(theta, clone_kernel=False)
-
-            if hyperparameter_bounds is None:
-                hyperparameter_bounds = self.kernel_.bounds
-            optima = []
-            # First optimize starting from theta specified in kernel
-            if start_from_current:
-                optima.append(
-                    self._constrained_optimization(
-                        obj_func, self.kernel_.theta, hyperparameter_bounds
-                    )
-                )
-            # Additional runs are performed from log-uniform chosen initial theta
-            if n_restarts > 0:
-                if not np.isfinite(self.kernel_.bounds).all():
-                    raise ValueError(
-                        "Multiple optimizer restarts (n_restarts[_optimizer]>0) "
-                        "requires that all bounds are finite.")
-                for iteration in range(n_restarts):
-                    theta_initial = self._rng.uniform(
-                        hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
-                    )
-                    optima.append(
-                        self._constrained_optimization(
-                            obj_func, theta_initial, hyperparameter_bounds
-                        )
-                    )
-            # Select result from run with minimal (negative) log-marginal likelihood
-            lml_values = list(map(itemgetter(1), optima))
-            self.kernel_.theta = optima[np.argmin(lml_values)][0]
-            # self.kernel_._check_bounds_params()
-            self.log_marginal_likelihood_value_ = -np.min(lml_values)
-        else:
+        no_optimizer = self.optimizer is None
+        no_hyperparams = self.kernel.n_dims == 0
+        no_restarts = n_restarts <= 0
+        if no_optimizer or no_hyperparams or no_restarts:
+            msg_reasons = []
+            if no_optimizer:
+                msg_reasons += ["no optimizer has been specified"]
+            if no_hyperparams:
+                msg_reasons += ["the kernel has no hyperparamenters"]
+            if no_restarts:
+                msg_reasons += ["the number of optimizer restarts requested is 0."]
+            warnings.warn(
+                f"Hyper-parameters not (re)fit. Reason(s): {'; '.join(msg_reasons)}."
+            )
             self.log_marginal_likelihood_value_ = \
                 self.log_marginal_likelihood(self.kernel_.theta, clone_kernel=False)
+            self._update_model()
+            return self
+        # Choose hyperparameters based on maximizing the log-marginal
+        # likelihood (potentially starting from several initial values)
+        # We don't need to clone the kernel here, even if overwritten during optimization,
+        # because it will be recomputed in the final `log_marginal_likelihood` call.
+
+        def obj_func(theta, eval_gradient=True):
+            if eval_gradient:
+                lml, grad = self.log_marginal_likelihood(
+                    theta, eval_gradient=True, clone_kernel=False)
+                return -lml, -grad
+            else:
+                return -self.log_marginal_likelihood(theta, clone_kernel=False)
+
+        if self.kernel_ is None:
+            self.kernel_ = clone(self.kernel)
+        if hyperparameter_bounds is None:
+            hyperparameter_bounds = self.kernel_.bounds
+        else:
+            # TODO: validate dimensions!
+            pass
+        # If at least one run will be sampled from the prior, is has to be finite
+        if n_restarts - int(start_from_current):
+            if not np.isfinite(hyperparameter_bounds).all():
+                raise ValueError(
+                    "There is at least one optimizer run the requires sampling from the "
+                    "hyperparameters' prior, but it has not finite density, because not "
+                    "all bounds are finite. You can pass some finite bounds manually "
+                    "using ``hyperparameter_bounds``."
+                )
+        optima = []
+        self._rng = check_random_state(self.random_state)
+        for iteration in range(n_restarts):
+            if iteration == 0 and start_from_current:
+                # self.kernel_ guaranteed to exist because self.fitted checked above
+                theta_initial = self.kernel_.theta
+            else:
+                # Additional runs are performed from log-uniform chosen initial theta
+                theta_initial = self._rng.uniform(
+                    hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+                )
+            # Run the optimizer!
+            optima.append(
+                self._constrained_optimization(
+                    obj_func, theta_initial, hyperparameter_bounds
+                )
+            )
+        # Select result from run with minimal (negative) log-marginal likelihood,
+        # and ensure recomputation of the kernel with the new hyperparamenters.
+        lml_values = list(map(itemgetter(1), optima))
+        self.log_marginal_likelihood_value_ = -np.min(lml_values)
+        self.kernel_.theta = optima[np.argmin(lml_values)][0]
         # Precompute quantities required for predictions which are independent
         # of actual query points
-        K = self.kernel_(self.X_train_)
-        K[np.diag_indices_from(K)] += self.alpha
-        self._kernel_inverse(K)
-        # Reset newly_appended_for_inv to 0
-        self.newly_appended_for_inv = 0
+        self._update_model()
         self._fitted = True
         return self
 
@@ -917,43 +1008,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         -------
         self
         """
-        # Check if a model has previously been fit to the data, i.e. that a
-        # V_, X_train_ and y_train_ exist. Furthermore check, that
-        # newly_appended_for_inv > 0.
-
+        # Check if there are new points with which to update:
         if self.newly_appended_for_inv < 1:
-            raise ValueError("No new points have been appended to the model. "
-                             "Please append points with the 'append_to_data'-method "
-                             "before trying to update.")
-
-        if getattr(self, "X_train_", None) is None:
-            raise ValueError("X_train_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if getattr(self, "y_train_", None) is None:
-            raise ValueError("y_train_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if getattr(self, "V_", None) is None:
-            raise ValueError("V_ is missing. Most probably the model "
-                             "hasn't been fit to the data previously.")
-
-        if self.V_.shape[0] != self.y_train_.size - self.newly_appended_for_inv:
-            raise ValueError("The number of added points doesn't match the "
-                             "dimensions of the V_ matrix. %s != %s"
-                             % (self.V_.shape[0],
-                                self.y_train_.size - self.newly_appended_for_inv))
-
-        kernel = self.kernel_(self.X_train_)
-        kernel[np.diag_indices_from(kernel)] += self.alpha
-        self._kernel_inverse(kernel)
-
+            warnings.warn("No new points have been appended to the model.")
+            return self
+        K = self.kernel_(self.X_train_)
+        K[np.diag_indices_from(K)] += self.alpha
+        self._kernel_inverse(K)
         # Reset newly_appended_for_inv to 0
         self.newly_appended_for_inv = 0
         return self
 
     def predict(self, X, return_std=False, return_cov=False,
-                return_mean_grad=False, return_std_grad=False, validate=True):
+                return_mean_grad=False, return_std_grad=False, validate=True,
+                ignore_trust_region=False
+        ):
         """
         Predict output for X.
 
@@ -984,6 +1053,11 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             points as rows and dimensions/features as columns, C-contiguous), and no
             checks are performed on it. Reduces overhead. Use only for repeated calls when
             the input is programmatically generated to be correct at each stage.
+
+        ignore_trust_region : bool (default: False)
+            If ``True`` and trust-region definition was used (``trust_region_factor``
+            defined at initialisation), it ignores the trust region and does not return
+            a negative infinity outside the trust region.
 
         .. note::
 
@@ -1027,10 +1101,19 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         elif validate:
             X = check_array(X, ensure_2d=False, dtype=None)
 
+        impose_trust_region = self.trust_bounds is not None and not ignore_trust_region
+        i_outside_trust = None
+        if impose_trust_region:
+            i_outside_trust = np.logical_not(
+                is_in_bounds(X, self.trust_bounds, check_shape=False)
+            )
+
         if not hasattr(self, "X_train_"):  # Not fit; predict based on GP prior
             # we assume that since the GP has not been fit to data the SVM can
             # be ignored
             y_mean = np.zeros(X.shape[0])
+            if impose_trust_region:
+                y_mean[i_outside_trust] = self.minus_inf_value
             if return_std:
                 y_var = self.kernel.diag(X)
                 y_std = np.sqrt(y_var)
@@ -1063,7 +1146,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             grad_mean_full = np.ones((n_samples, n_dims))
             grad_std_full = np.zeros((n_samples, n_dims))
             X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
-            finite = self.infinities_classifier.predict(X_, validate=validate)
+            finite = self.infinities_classifier.predict(
+                np.ascontiguousarray(X_), validate=validate
+            )
             # If all values are infinite there's no point in running the
             # prediction through the GP
             if np.all(~finite):
@@ -1088,25 +1173,38 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             grad_mean_full[~finite] = self.inf_value  # the grad of inf values is +inf
             X = X[finite]  # only predict the finite samples
 
-        if self.preprocessing_X is not None:
-            X = self.preprocessing_X.transform(X)
+        X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
 
         # Predict based on GP posterior
-        K_trans = self.kernel_(X, self.X_train_)
-        y_mean = K_trans.dot(self.alpha_)    # Line 4 (y_mean = f_star)
+        K_trans = self.kernel_(X_, self.X_train_)
+        y_mean_ = K_trans.dot(self.alpha_)    # Line 4 (y_mean = f_star)
         # Undo normalization
-        if self.preprocessing_y is not None:
-            y_mean = self.preprocessing_y.inverse_transform(y_mean)
-        # Put together with SVM predictions
+        if self.preprocessing_y is None:
+            y_mean = y_mean_
+        else:
+            y_mean = self.preprocessing_y.inverse_transform(y_mean_)
+        # Upper clipping to avoid overshoots
+        if self.clip_factor is not None:
+            y_mean = np.clip(
+                y_mean,
+                None,
+                (
+                    self.clip_factor * max(self.y_train) -
+                    (self.clip_factor - 1) * min(self.y_train)
+                )
+            )
+        # Put together with SVM predictions and trust region
         if self.infinities_classifier is not None:
             y_mean_full[finite] = y_mean
             y_mean = y_mean_full
+        if impose_trust_region:
+            y_mean[i_outside_trust] = self.minus_inf_value
 
         if return_std:
             M = tri_mul(1., self.V_, K_trans.T, lower=True)
 
             # Compute variance of predictive distribution
-            y_var = self.kernel_.diag(X)
+            y_var = self.kernel_.diag(X_)
             y_var -= np.einsum("ji,ji->i", M, M, optimize=True)
             # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
             # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
@@ -1126,7 +1224,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # Undo normalization
             if self.preprocessing_y is not None:
                 y_std = self.preprocessing_y.\
-                    inverse_transform_noise_level(y_std)
+                    inverse_transform_scale(y_std)
             # Add infinite values
             if self.infinities_classifier is not None:
                 y_std_full[finite] = y_std
@@ -1136,20 +1234,21 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                 return y_mean, y_std
 
         if return_mean_grad:
-            grad = self.kernel_.gradient_x(X[0], self.X_train_)
+            grad = self.kernel_.gradient_x(X_[0], self.X_train_)
             grad_mean = np.dot(grad.T, self.alpha_)
             # Undo normalization
             if self.preprocessing_y is not None:
                 grad_mean = self.preprocessing_y.\
-                    inverse_transform_noise_level(grad_mean)
+                    inverse_transform_scale(grad_mean)
             # Include infinite values
             if self.infinities_classifier is not None:
                 grad_mean_full[finite] = grad_mean
                 grad_mean = grad_mean_full
             if return_std_grad:
-                grad_std = np.zeros(X.shape[1])
+                grad_std = np.zeros(X_.shape[1])
                 if not np.allclose(y_std, grad_std):
-                    # TODO: This can be made much more efficient, but I don't think it's used currently
+                    # TODO: This can be made much more efficient,
+                    #       but I don't think it's used currently
                     grad_std = -np.dot(K_trans,
                                        np.dot(self.V_.T.dot(self.V_), grad))[0] \
                         / y_std_untransformed
@@ -1157,9 +1256,9 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
                     if self.preprocessing_y is not None:
                         # Apply inverse transformation twice
                         grad_std = self.preprocessing_y.\
-                            inverse_transform_noise_level(grad_std)
+                            inverse_transform_scale(grad_std)
                         grad_std = self.preprocessing_y.\
-                            inverse_transform_noise_level(grad_std)
+                            inverse_transform_scale(grad_std)
                     # Include infinite values
                     if self.infinities_classifier is not None:
                         grad_std_full[finite] = grad_std
@@ -1214,21 +1313,22 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
             # and non-infinite values
             y_std_full = np.zeros(n_samples)  # std is zero when mu is -inf
             X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
-            finite = self.infinities_classifier.predict(X_, validate=validate)
+            finite = self.infinities_classifier.predict(
+                np.ascontiguousarray(X_), validate=validate
+            )
             # If all values are infinite there's no point in running the
             # prediction through the GP
             if np.all(~finite):
                 return np.zeros(n_samples)
             X = X[finite]  # only predict the finite samples
 
-        if self.preprocessing_X is not None:
-            X = self.preprocessing_X.transform(X)
+        X_ = X if self.preprocessing_X is None else self.preprocessing_X.transform(X)
 
         # Predict based on GP posterior
-        K_trans = self.kernel_(X, self.X_train_)
+        K_trans = self.kernel_(X_, self.X_train_)
         M = tri_mul(1., self.V_, K_trans.T, lower=True)
         # Compute variance of predictive distribution
-        y_var = self.kernel_.diag(X)
+        y_var = self.kernel_.diag(X_)
         y_var -= np.einsum("ji,ji->i", M, M, optimize=True)
         # np.einsum("ij,ij->i", np.dot(K_trans, K_inv), K_trans)
         # np.einsum("ki,kj,ij->k", K_trans, K_trans, K_inv)
@@ -1244,7 +1344,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Undo normalization
         if self.preprocessing_y is not None:
             y_std = self.preprocessing_y.\
-                inverse_transform_noise_level(y_std)
+                inverse_transform_scale(y_std)
         # Add infinite values
         if self.infinities_classifier is not None:
             y_std_full[finite] = y_std
@@ -1308,8 +1408,14 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         # Copy the right SVM
         if hasattr(self, "infinities_classifier"):
             c.infinities_classifier = deepcopy(self.infinities_classifier)
-        if hasattr(self, "diff_threshold"):
-            c.diff_threshold = deepcopy(self.diff_threshold)
+        if hasattr(self, "_diff_threshold"):
+            c._diff_threshold = deepcopy(self._diff_threshold)
+        if hasattr(self, "keep_min_finite"):
+            c.keep_min_finite = deepcopy(self.keep_min_finite)
+        if hasattr(self, "trust_region_factor"):
+            c.trust_region_factor = deepcopy(self.trust_region_factor)
+        if hasattr(self, "trust_region_nstd"):
+            c.trust_region_nstd = deepcopy(self.trust_region_nstd)
         if hasattr(self, "inf_value"):
             c.inf_value = deepcopy(self.inf_value)
         if hasattr(self, "minus_inf_value"):
@@ -1348,7 +1454,7 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         """ Compute inverse of the kernel and store relevant quantities"""
         try:
             self.L_ = cholesky(kernel, lower=True)
-            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]),lower=True)
+            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]), lower=True)
         except np.linalg.LinAlgError as exc:
             exc.args = ("The kernel, %s, is not returning a "
                         "positive definite matrix. Try gradually "
@@ -1364,13 +1470,19 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
         Computes threshold value given a number of :math:`\sigma` away from the maximum,
         assuming a :math:`\chi^2` distribution.
         """
-        return 0.5 * nstd_of_1d_nstd(n_sigma, n_dimensions) ** 2
+        return delta_logp_of_1d_nstd(n_sigma, n_dimensions)
 
-    # TO BE DEPRECATED
-    @property
-    def account_for_inf(self):
-        warnings.warn(
-            "This attr has been renamed to 'infinities_classifier'. "
-            "This will raise an error soon."
-        )
-        return self.infinities_classifier
+    @staticmethod
+    def _diff_threshold_if_keep_n_finite(y, n, reference_diff_threshold, epsilon=1e-6):
+        """
+        Recalculation of the relative threshold when imposing that at least ``n`` points
+        must be kept finite (i.e. in the training set). The "at least" imposes that the
+        minimum value returned is the given threshold.
+
+        It requires sorting the ``y`` values, which can be costly in extreme cases.
+        """
+        if n is None or n <= 1:
+            return reference_diff_threshold
+        y_sorted = np.sort(y)
+        difference_to_nth_point = y_sorted[-1] - y_sorted[-min(n, len(y_sorted))]
+        return max(reference_diff_threshold, difference_to_nth_point + epsilon)

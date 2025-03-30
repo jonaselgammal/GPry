@@ -2,6 +2,10 @@
 Advanced example to using GPry
 ==================================
 
+.. warning::
+
+   This code for this example is probably outdated at the moment, but the basics are as presented. It will be updated soon.
+
 This example shows some of the ways in which it is possible to customize the
 Bayesian optimization loop. This will be done using a less standard
 (non-gaussian) likelihood and we will walk through the modules and their
@@ -93,7 +97,7 @@ object also contains the kernel. It's hyperparameters are optimized in every
 iteration of the BO loop.
 
 Kernel
-""""""
+------
 
 Even though the standard RBF kernel would work well enough for this likelihood
 we will spice things up a bit by constructing a custom kernel which consists of
@@ -112,13 +116,13 @@ For details on the kernel construction see :mod:`kernels`.
     provide prior bounds to the kernel.
 
 GP Regressor
-""""""""""""
+------------
 
 Now it's time to construct the actual GP regressor object. In addition to the
 kernel this sets all the variables associated to the optimization procedure of
 the hyperparameters as well as how the data is preprocessed.
 Since we want our model to converge to the correct hyperparameters more robustly
-we increase ``n_restarts_optimizer``(the number of restarts of the optimizer
+we increase ``n_restarts_optimizer`` (the number of restarts of the optimizer
 for the GP's hyperparameters) to 20.
 
 Furthermore it is generally a good idea to scale the parameter space to make it
@@ -160,7 +164,7 @@ The acquisition module contains both the acquisition function as well as the
 optimization procedure for it. It operates similarly to the GP regressor module.
 
 Acquisition function
-""""""""""""""""""""
+--------------------
 
 The acquisition function is the centerpiece of the Bayesion optimization
 procedure and decides which point the algorithm samples next. The

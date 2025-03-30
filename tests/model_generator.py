@@ -24,9 +24,11 @@ class Model_generator(metaclass=ABCMeta):
     def auto_generate_parameter_names(self, input_params, dim):
         if input_params is None:
             self.input_params = [f"x_{d}" for d in range(dim)]
+            self.input_labels = dict(zip(self.input_params, self.input_params))
         else:
             assert len(input_params) == ndim, "Length of parameter name list doesn't match ndim"
             self.input_params = input_params
+            self.input_labels = {}
 
 class Random_gaussian(Model_generator):
     """
@@ -42,19 +44,24 @@ class Random_gaussian(Model_generator):
         self.cov = None
         self.auto_generate_parameter_names(input_params, ndim)
 
-    def redraw(self):
-        rng = default_rng()
+    def redraw(self, rng=None):
+        if rng is None:
+            rng = default_rng()
+        elif isinstance(rng, int):
+            rng = default_rng(rng)
         self.std = rng.uniform(size=self.ndim)
         eigs = rng.uniform(size=self.ndim)
         eigs = eigs / np.sum(eigs) * self.ndim
-        corr = random_correlation.rvs(eigs) if self.ndim > 1 else [[1]]
+        corr = random_correlation.rvs(eigs, random_state=rng) if self.ndim > 1 else [[1]]
         self.cov = np.multiply(np.outer(self.std, self.std), corr)
-        self.mean = rng.uniform(low=-1., size=self.ndim) * self.std * self.random_mean_in_std
+        self.mean = (
+            rng.uniform(low=-1., size=self.ndim) * self.std * self.random_mean_in_std
+        )
         self.rv = multivariate_normal(self.mean, self.cov)
 
-    def get_model(self):
+    def get_model(self, rng=None):
         if self.mean is None:
-            self.redraw()
+            self.redraw(rng=rng)
         def gaussian(**kwargs):
             X = [kwargs[p] for p in self.input_params]
             return np.log(self.rv.pdf(X))
@@ -64,9 +71,15 @@ class Random_gaussian(Model_generator):
         for k, p in enumerate(self.input_params):
             p_max = (self.prior_size_in_std*self.std[k])
             p_min = (-self.prior_size_in_std*self.std[k])
-            info["params"][p] = {"prior": {"min": p_min, "max": p_max}}
+            info["params"][p] = {
+                "prior": {"min": p_min, "max": p_max},
+                "latex": self.input_labels.get(p, p)
+            }
         model = get_model(info)
         return model
+
+    def get_samples(self, n, rng=None):
+        return self.rv.rvs(size=int(n), random_state=rng)
 
 class Loggaussian(Random_gaussian):
     """
@@ -79,9 +92,9 @@ class Loggaussian(Random_gaussian):
         self.ndim_log = ndim_log
         super().__init__(ndim, prior_size_in_std, random_mean_in_std, input_params)
 
-    def get_model(self):
+    def get_model(self, rng=None):
         if self.mean is None:
-            self.redraw()
+            self.redraw(rng=rng)
         def loggaussian(**kwargs):
             X = [kwargs[p] for p in self.input_params]
             for j in range(self.ndim_log):

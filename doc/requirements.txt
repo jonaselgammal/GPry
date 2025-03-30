@@ -1,2 +1,4 @@
 gpry
 mpi4py
+sphinx-favicon
+sphinx-book-theme>=1.0.0

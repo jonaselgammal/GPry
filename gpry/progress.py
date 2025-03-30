@@ -1,7 +1,11 @@
+"""
+Classes for timing and progress tracking.
+"""
+
 import time
 import numpy as np
 import pandas as pd
-import gpry.mpi as mpi
+from gpry import mpi
 
 
 class Progress:
@@ -13,23 +17,32 @@ class Progress:
 
     _colnames = {
         "n_total": "number of training points at the start of the iteration",
-        "n_finite": ("number of finite-posterior training points "
-                       "at the start of the iteration"),
+        "n_finite": (
+            "number of finite-posterior training points " "at the start of the iteration"
+        ),
         "time_acquire": "time needed to acquire candidates for truth evaluation",
-        "evals_acquire": ("number of evaluations of the GP needed to acquire candidates "
-                          "for truth evaluation"),
+        "evals_acquire": (
+            "number of evaluations of the GP needed to acquire candidates "
+            "for truth evaluation"
+        ),
         "time_truth": "time needed to evaluate the true model at the candidate points",
         "evals_truth": "number of evaluations of the true model",
         "time_fit": "time of refitting of the GP model after adding new training points",
-        "evals_fit": ("number of evaluations of the GP during refitting after adding new"
-                      "training points"),
+        "evals_fit": (
+            "number of evaluations of the GP during refitting after adding new"
+            "training points"
+        ),
         "time_convergence": "time needed to compute the convergence criterion",
-        "evals_convergence": ("number of evaluations of the GP needed to compute the "
-                              "convergence criterion"),
-        "convergence_crit_value": "value of the convergence criterion"}
-    _dtypes = {col: (int if col.split("_")[0].lower() in ["n", "evals"]
-                     else float)
-               for col in _colnames}
+        "evals_convergence": (
+            "number of evaluations of the GP needed to compute the "
+            "convergence criterion"
+        ),
+        "convergence_crit_value": "value of the convergence criterion",
+    }
+    _dtypes = {
+        col: (int if col.split("_")[0].lower() in ["n", "evals"] else float)
+        for col in _colnames
+    }
 
     def __init__(self):
         """Initialises Progress table."""
@@ -48,7 +61,9 @@ class Progress:
         """
         self.data = pd.concat(
             [self.data, pd.DataFrame({c: [np.nan] for c in self.data.columns})],
-            axis=0, ignore_index=True)
+            axis=0,
+            ignore_index=True,
+        )
 
     def add_current_n_truth(self, n_truth, n_truth_finite):
         """
@@ -58,30 +73,31 @@ class Progress:
         self.data.iloc[-1, self.data.columns.get_loc("n_total")] = n_truth
         self.data.iloc[-1, self.data.columns.get_loc("n_finite")] = n_truth_finite
 
-    def add_acquisition(self, time, evals):
+    def add_acquisition(self, timing, evals):
         """Adds timing and #evals during acquisitions."""
-        self.data.iloc[-1, self.data.columns.get_loc("time_acquire")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("time_acquire")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_acquire")] = evals
 
-    def add_truth(self, time, evals):
+    def add_truth(self, timing, evals):
         """Adds timing and #evals during truth evaluations."""
-        self.data.iloc[-1, self.data.columns.get_loc("time_truth")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("time_truth")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_truth")] = evals
 
-    def add_fit(self, time, evals):
+    def add_fit(self, timing, evals):
         """Adds timing and #evals during GP fitting."""
-        self.data.iloc[-1, self.data.columns.get_loc("time_fit")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("time_fit")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_fit")] = evals
 
-    def add_convergence(self, time, evals, crit_value):
+    def add_convergence(self, timing, evals, crit_value):
         """
         Adds timing and #evals during convergence computation, together with the new
         criterion value.
         """
-        self.data.iloc[-1, self.data.columns.get_loc("time_convergence")] = time
+        self.data.iloc[-1, self.data.columns.get_loc("time_convergence")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_convergence")] = evals
-        self.data.iloc[-1, \
-                       self.data.columns.get_loc("convergence_crit_value")] = crit_value
+        self.data.iloc[-1, self.data.columns.get_loc("convergence_crit_value")] = (
+            crit_value
+        )
 
     def mpi_sync(self):
         """
@@ -133,27 +149,30 @@ class Progress:
 
     def _bcast_operation(self, column, operation):
         f = {"root": None, "max": max, "sum": sum}[operation.lower()]
-        all_values = np.array(mpi.comm.gather(
-            self.data.iloc[-1, self.data.columns.get_loc(column)]))
+        all_values = np.array(
+            mpi.gather(self.data.iloc[-1, self.data.columns.get_loc(column)])
+        )
         if f is None:
-            self.data.iloc[-1, self.data.columns.get_loc(column)] = \
-                mpi.comm.bcast(all_values[0] if mpi.is_main_process else None)
+            self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.bcast(
+                all_values[0] if mpi.is_main_process else None
+            )
             return
         max_value = None
         if mpi.is_main_process:
             all_finite_values = all_values[np.isfinite(all_values)]
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
-        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.comm.bcast(max_value)
+        self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.bcast(max_value)
 
     def _x_ticks_for_bar_plot(self, fig, ax):
         fig.canvas.draw()
         xticks = ax.get_xticks()
         labels = ax.get_xticklabels()
         n_xticks = len(xticks)
-        xticks = xticks[::max(1, int(n_xticks/10.))]
-        labels = labels[::max(1, int(n_xticks/10.))]
+        xticks = xticks[:: max(1, int(n_xticks / 10.0))]
+        labels = labels[:: max(1, int(n_xticks / 10.0))]
         ax.set_xticks(xticks, labels=labels)
 
+    # pylint: disable=import-outside-toplevel,possibly-used-before-assignment
     def plot_timing(self, truth=True, show=False, save="progress_timing.png"):
         """
         Plots as stacked bars the timing of each part of each iteration.
@@ -163,8 +182,9 @@ class Progress:
         Pass ``truth=False`` (default: True) to exclude the computation time of the true
         posterior at training points, for e.g. overhead-only plots.
         """
-        import matplotlib.pyplot as plt
-        plt.set_loglevel('WARNING')  # avoids a useless message
+        if "plt" not in globals():
+            import matplotlib.pyplot as plt
+        plt.set_loglevel("WARNING")  # avoids a useless message
         fig, ax = plt.subplots()
         # cast x values into list, to prevent finer x ticks
         iters = [str(i) for i in self.data.index.to_numpy(int)]
@@ -173,20 +193,38 @@ class Progress:
             "time_acquire": "Acquisition",
             "time_truth": "Truth",
             "time_fit": "GP fit",
-            "time_convergence": "Convergence crit."}
+            "time_convergence": "Convergence crit.",
+        }
+        cols_colors = {
+            "time_acquire": "tab:blue",
+            "time_truth": "tab:orange",
+            "time_fit": "tab:green",
+            "time_convergence": "tab:red",
+        }
         if not truth:
             cols_labels.pop("time_truth")
         cols_data = {
-            col: self.data[col].to_numpy(dtype=self._dtypes[col]) for col in cols_labels
+            col: self.data[col].to_numpy(dtype=self._dtypes[col]).copy()
+            for col in cols_labels
         }
+        # Sometimes this plot is done before the convergence criterion has run
+        # (inside callback or when max evals exhausted). Prevent nan's
+        if np.isnan(cols_data["time_convergence"][-1]):
+            cols_data["time_convergence"][-1] = 0
         cols_totals = {col: sum(data) for col, data in cols_data.items()}
         total = sum(cols_totals.values())
         for col, label in cols_labels.items():
             legend_label = (
                 label + f" (${(cols_totals[col]):.2f}$ sec, "
-                f"${(100 * cols_totals[col] / total):.2f}\%$)"
+                f"${(100 * cols_totals[col] / total):.2f}\\%$)"
             )
-            ax.bar(iters, cols_data[col], label=legend_label, bottom=bottom)
+            ax.bar(
+                iters,
+                cols_data[col],
+                color=cols_colors[col],
+                label=legend_label,
+                bottom=bottom,
+            )
             bottom += cols_data[col]
         plt.xlabel("Iteration")
         plt.draw()
@@ -200,40 +238,8 @@ class Progress:
             plt.show(block=True)
         plt.close()
 
-    def plot_evals(self, show=False, save="progress_evals.png"):
-        """
-        Plots as stacked bars the number of evaluations of each part of each iteration.
 
-        In multiprocess runs, sum of the number of evaluations of all processes.
-
-        Pass ``truth=False`` (default: True) to exclude the number of evaluations of the
-        true posterior at training points, for e.g. overhead-only plots.
-        """
-        import matplotlib.pyplot as plt
-        plt.set_loglevel('WARNING')  # avoids a useless message
-        fig, ax = plt.subplots()
-        # cast x values into list, to prevent finer x ticks
-        iters = [str(i) for i in self.data.index.to_numpy(int)]
-        bottom = np.zeros(len(self.data.index))
-        for col, label in {
-                "evals_acquire": "Acquisition",
-                "evals_fit": "GP fit",
-                "evals_convergence": "Convergence crit."}.items():
-            dtype = self._dtypes[col]
-            ax.bar(iters, self.data[col].astype(dtype, errors='ignore'), label=label, bottom=bottom)
-            bottom += self.data[col].astype(float).to_numpy(dtype=dtype, na_value=np.nan)
-        ax.set_xlabel("Iteration")
-        self._x_ticks_for_bar_plot(fig, ax)
-        multiprocess_str = " (summed over processes)" if mpi.multiple_processes else ""
-        plt.ylabel("Number of evaluations" + multiprocess_str)
-        plt.legend(loc="upper left")
-        if save:
-            plt.savefig(save)
-        if show:
-            plt.show(block=True)
-        plt.close()
-
-
+# pylint: disable=attribute-defined-outside-init
 class Timer:
     """Class for timing code within ``with`` block."""
 
@@ -263,7 +269,8 @@ class TimerCounter(Timer):
         super().__enter__()
         self.init_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
         self.init_eval_loglike = np.array(
-            [gp.n_eval_loglike for gp in self.gps], dtype=int)
+            [gp.n_eval_loglike for gp in self.gps], dtype=int
+        )
         return self
 
     def __exit__(self, *args, **kwargs):
@@ -272,5 +279,6 @@ class TimerCounter(Timer):
         self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
         self.evals = sum(self.final_eval - self.init_eval)
         self.final_eval_loglike = np.array(
-            [gp.n_eval_loglike for gp in self.gps], dtype=int)
+            [gp.n_eval_loglike for gp in self.gps], dtype=int
+        )
         self.evals_loglike = sum(self.final_eval_loglike - self.init_eval_loglike)

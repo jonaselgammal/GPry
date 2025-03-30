@@ -39,6 +39,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
             import matplotlib.pyplot as plt
             from getdist.gaussian_mixtures import GaussianND
             gdsamples_gp = mc_sample.to_getdist()
+            gdsamples_gp.label = "MC samples from GP"
             to_plot = [gdsamples_gp, GaussianND(
                 mean, cov, names=mc_sample.sampled_params, label="Ground truth")]
             filled = [True, True]
@@ -46,9 +47,10 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
             from gpry.gp_acquisition import NORA
             if isinstance(runner.acquisition, NORA):
                 from getdist import MCSamples
+                X_mc, _, _, w_mc = runner.acquisition.last_MC_sample()
                 mcsamples_nora = MCSamples(
-                    samples=runner.acquisition.X_mc,
-                    weights=runner.acquisition.w_mc,
+                    samples=X_mc,
+                    weights=w_mc,
                     names=mc_sample.sampled_params,
                     label="NORA (last)",
                 )

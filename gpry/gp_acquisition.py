@@ -3,8 +3,8 @@ GPAcquisition classes, which take care of proposing new locations where to evalu
 true function.
 """
 
+import os
 import sys
-import shutil
 import warnings
 import inspect
 import tempfile
@@ -19,10 +19,10 @@ from sklearn.base import is_regressor
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber, generic_params_names
-
-
-# TODO: inconsistent use of random_state: passed at init, and also at acquisition time
+from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples, \
+    is_in_bounds
+import gpry.ns_interfaces as nsint
+from gpry.mc import samples_dict_to_getdist, _name_logp
 
 
 def builtin_names():
@@ -41,34 +41,18 @@ class GenericGPAcquisition():
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  ):
-        self.bounds = np.array(bounds)
+        self.bounds_ = np.array(bounds).copy()
         self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
         self.verbose = verbose
-        self.random_state = random_state
         if gpryacqfuncs.is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif isinstance(acq_func, (Mapping, str)):
             if isinstance(acq_func, str):
                 acq_func = {acq_func: {}}
-            # DEPRECATED ON 13-09-2023:
-            if zeta is not None or zeta_scaling is not None:
-                print(
-                    "*Warning*: 'zeta' and 'zeta_scaling' have been deprecated as kwargs "
-                    "and should be passed inside the 'acq_func' arg dict, e.g. "
-                    "'acq_func={\"LogExp\": {\"zeta_scaling\": 0.85}}'. The given values "
-                    "are being used, but this will fail in the future."
-                )
-                acq_func[list(acq_func)[0]].update(
-                    {"zeta": zeta, "zeta_scaling": zeta_scaling})
-            # END OF DEPRECATION BLOCK
             acq_func_name = list(acq_func)[0]
             acq_func_args = acq_func[acq_func_name] or {}
             acq_func_args["dimension"] = self.n_d
@@ -97,11 +81,42 @@ class GenericGPAcquisition():
         """Returns the value of the acquision function at ``X`` given a ``gpr``."""
         return self.acq_func(X, gpr, eval_gradient=eval_gradient)
 
-    def multi_add(self, gpr, n_points=1, random_state=None):
-        """
-        Method to query multiple points where the objective function
+    def multi_add(self, gpr, n_points=1, bounds=None, rng=None):
+        r"""Method to query multiple points where the objective function
         shall be evaluated.
+
+        The strategy differs depending on the acquisition class.
+
+        When run in parallel (MPI), it must return the same values for all processes.
+
+        Parameters
+        ----------
+        gpr : GaussianProcessRegressor
+            The GP Regressor which is used as surrogate model.
+
+        n_points : int, optional (default=1)
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
+
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
+
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
+
+        Returns
+        -------
+        X : numpy.ndarray, shape = (X_dim, n_points)
+            The X values of the found optima
+        y_lies : numpy.ndarray, shape = (n_points,)
+            The predicted values of the GP at the proposed sampling locations
+        fval : numpy.ndarray, shape = (n_points,)
+            The values of the acquisition function at X_opt
         """
+
 
 class BatchOptimizer(GenericGPAcquisition):
     """
@@ -128,9 +143,11 @@ class BatchOptimizer(GenericGPAcquisition):
         of points drawn from an "UniformProposer" and from a "CentroidsProposer")
         Proposes points from which the acquisition function should be optimized.
 
-    acq_func : GPry Acquisition Function, optional (default: "LogExp")
+    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
         Acquisition function to maximize/minimize. If none is given the
-        `LogExp` acquisition function will be used
+        `LogExp` acquisition function will be used. Can also be a dictionary with the name
+        of the acquisition function as the single key, and as value a dict of its
+        arguments.
 
     acq_optimizer : string or callable, optional (default: "auto")
         Can either be one of the internally supported optimizers for optimizing
@@ -176,18 +193,6 @@ class BatchOptimizer(GenericGPAcquisition):
         from the space of allowed X-values. Note that n_restarts_optimizer == 0
         implies that one run is performed.
 
-    random_state : int or numpy.RandomState, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
-
-    zeta_scaling : float, optional (default: 1.1)
-        The scaling of the acquisition function's zeta parameter with dimensionality
-        (Only if "LogExp" is passed as acquisition_function)
-
-    zeta: float, optional (default: None, uses zeta_scaling)
-        Specifies the value of the zeta parameter directly.
-
     verbose : 1, 2, 3, optional (default: 1)
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
@@ -203,12 +208,8 @@ class BatchOptimizer(GenericGPAcquisition):
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  # Class-specific:
                  proposer=None,
                  acq_optimizer="fmin_l_bfgs_b",
@@ -216,15 +217,16 @@ class BatchOptimizer(GenericGPAcquisition):
                  n_repeats_propose=10,
                  ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
+            bounds=bounds, preprocessing_X=preprocessing_X,
+            verbose=verbose, acq_func=acq_func,
+        )
         self.proposer = proposer
         self.obj_func = None
 
         # If nothing is provided for the proposal, we use a centroids proposer with
         # a fraction of uniform samples.
         if self.proposer is None:
-            self.proposer = PartialProposer(self.bounds, CentroidsProposer(self.bounds))
+            self.proposer = PartialProposer(self.bounds_, CentroidsProposer(self.bounds_))
         else:
             if not isinstance(proposer, Proposer):
                 raise TypeError(
@@ -232,6 +234,7 @@ class BatchOptimizer(GenericGPAcquisition):
                     f"Got {proposer} of type {type(proposer)}."
                 )
             self.proposer = proposer
+            self.proposer.update_bounds(self.bounds_)
 
         # Configure optimizer
         # decide optimizer based on gradient information
@@ -264,7 +267,7 @@ class BatchOptimizer(GenericGPAcquisition):
         self.mean_ = None
         self.cov = None
 
-    def optimize_acquisition_function(self, gpr, i, random_state=None):
+    def optimize_acquisition_function(self, gpr, i, bounds=None, rng=None):
         """Exposes the optimization method for the acquisition function. When
         called it proposes a single point where for where to evaluate the true
         model next. It is internally called in the :meth:`multi_add` method.
@@ -279,10 +282,8 @@ class BatchOptimizer(GenericGPAcquisition):
             to optimize from a single location and rerun the optimizer from
             multiple starting locations loop over this parameter.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : numpy.random.Generator, optional
+            The generator used for the optimization process.
 
         Returns
         -------
@@ -291,8 +292,10 @@ class BatchOptimizer(GenericGPAcquisition):
         func : float
             The value of the acquisition function at X_opt
         """
-        # Update proposer with new gpr
+        # Update proposer with new gpr and new bounds
         self.proposer.update(gpr)
+        use_bounds = self.bounds_ if bounds is None else bounds
+        self.proposer.update_bounds(use_bounds)
 
         # If we do a first-time run, use this
         if not self.obj_func:
@@ -332,25 +335,28 @@ class BatchOptimizer(GenericGPAcquisition):
 
         # Preprocessing
         if self.preprocessing_X is not None:
-            transformed_bounds = self.preprocessing_X.transform_bounds(
-                self.bounds)
+            transformed_bounds = self.preprocessing_X.transform_bounds(use_bounds)
         else:
-            transformed_bounds = self.bounds
+            transformed_bounds = use_bounds
 
         if i == 0:
-            # Perform first run from last training point
-            x0 = gpr.X_train[-1]
+            # Perform first run from last (in-bounds) training point.
+            # Cannot raise StopIteration if trust_region contains at least one point!
+            x0 = next(
+                X for X in gpr.X_train[::-1]
+                if np.all(is_in_bounds(X, bounds, check_shape=False))
+            )
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
-            return self._constrained_optimization(self.obj_func, x0,
-                                                  transformed_bounds)
+            return self._constrained_optimization(self.obj_func, x0, transformed_bounds)
         else:
-            n_tries = 10 * self.bounds.shape[0] * self.n_restarts_optimizer
-            x0s = np.empty((self.n_repeats_propose + 1, self.bounds.shape[0]))
+            d = self.bounds_.shape[0]
+            n_tries = 10 * d * self.n_restarts_optimizer
+            x0s = np.empty((self.n_repeats_propose + 1, d))
             values = np.empty(self.n_repeats_propose + 1)
             ifull = 0
             for n_try in range(n_tries):
-                x0 = self.proposer.get(random_state=random_state)
+                x0 = self.proposer.get(rng=rng)
                 value = self.acq_func(x0, gpr)
                 if not np.isfinite(value):
                     continue
@@ -361,16 +367,18 @@ class BatchOptimizer(GenericGPAcquisition):
                     x0 = x0s[np.argmax(values)]
                     if self.preprocessing_X is not None:
                         x0 = self.preprocessing_X.transform(x0)
-                    return self._constrained_optimization(self.obj_func, x0,
-                                                          transformed_bounds)
+                    return self._constrained_optimization(
+                        self.obj_func, x0, transformed_bounds
+                    )
             # if there's at least one finite value try optimizing from
             # there, otherwise take the last x0 and add that to the GP
             if ifull > 0:
                 x0 = x0s[np.argmax(values[:ifull])]
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
-                return self._constrained_optimization(self.obj_func, x0,
-                                                      transformed_bounds)
+                return self._constrained_optimization(
+                    self.obj_func, x0, transformed_bounds
+                )
             else:
                 if self.verbose > 1:
                     print(f"of {n_tries} initial samples for the "
@@ -380,7 +388,9 @@ class BatchOptimizer(GenericGPAcquisition):
                     x0 = self.preprocessing_X.transform(x0)
                 return x0, -1 * value
 
-    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
+    def multi_add(
+            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
+    ):
         r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
         points is by using the :math:`f(x)\sim \mu(x)` strategy and and not
@@ -388,7 +398,7 @@ class BatchOptimizer(GenericGPAcquisition):
 
         This is done to increase speed since then the blockwise matrix
         inversion lemma can be used to invert the K matrix. The optimization
-        for a single point is done using the :meth:`optimize_acq_func` method.
+        for a single point is done using the :meth:`optimize_acquisition_func` method.
 
         When run in parallel (MPI), returns the same values for all processes.
 
@@ -398,18 +408,17 @@ class BatchOptimizer(GenericGPAcquisition):
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
-            Number of points returned by the optimize method
-            If the value is 1, a single point to evaluate is returned.
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
 
-            Otherwise a list of points to evaluate is returned of size
-            n_points. This is useful if you can evaluate your objective
-            in parallel, and thus obtain more objective function evaluations
-            per unit of time.
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
 
         Returns
         -------
@@ -422,20 +431,20 @@ class BatchOptimizer(GenericGPAcquisition):
         """
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
-            raise ValueError(
-                "n_points should be int > 0, got " + str(n_points)
-            )
+            raise ValueError(f"n_points should be int > 0, got {n_points}")
+        # Create (parallel) generator(s) if int passed as rng
+        rng = mpi.get_random_generator(rng)
+        use_bounds = self.bounds_ if bounds is None else bounds
         if mpi.is_main_process:
             # Initialize arrays for storing the optimized points
-            X_opts = np.empty((n_points,
-                               gpr.d))
+            X_opts = np.empty((n_points, gpr.d))
             y_lies = np.empty(n_points)
             acq_vals = np.empty(n_points)
             # Copy the GP instance as it is modified during
             # the optimization. The GP will be reset after the
             # Acquisition is done.
             gpr_ = deepcopy(gpr)
-        gpr_ = mpi.comm.bcast(gpr_ if mpi.is_main_process else None)
+        gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
         n_acq_per_process = \
             mpi.split_number_for_parallel_processes(self.n_restarts_optimizer)
         n_acq_this_process = n_acq_per_process[mpi.RANK]
@@ -447,7 +456,8 @@ class BatchOptimizer(GenericGPAcquisition):
             # (done in parallel)
             for i in range(n_acq_this_process):
                 proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
-                    gpr_, i + i_acq_this_process, random_state=random_state)
+                    gpr_, i + i_acq_this_process, bounds=use_bounds, rng=rng
+                )
             proposal_X_main, acq_X_main = mpi.multi_gather_array(
                 [proposal_X, acq_X])
             # Reset the objective function, such that afterwards the correct one is used
@@ -460,7 +470,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
-                    X_opt = self.preprocessing_X.inverse_transform(X_opt, copy=True)
+                    X_opt = self.preprocessing_X.inverse_transform(X_opt)
                 # Get the value of the acquisition function at the optimum value
                 acq_val = -1 * acq_X_main[max_pos]
                 X_opt = np.array([X_opt])
@@ -470,24 +480,23 @@ class BatchOptimizer(GenericGPAcquisition):
                 # (no need to append if it's the last iteration)
                 if ipoint < n_points - 1:
                     # Take the mean of errors as supposed measurement error
-                    if np.iterable(gpr_.noise_level):
-                        lie_noise_level = np.array(
-                            [np.mean(gpr_.noise_level)])
-                        # Add lie to GP
-                        gpr_.append_to_data(
-                            X_opt, y_lie, noise_level=lie_noise_level,
-                            fit=False)
-                    else:
-                        # Add lie to GP
-                        gpr_.append_to_data(X_opt, y_lie, fit=False)
+                    lie_noise_level = (
+                        np.array([np.mean(gpr_.noise_level)])
+                        if np.iterable(gpr_.noise_level) else None
+                    )
+                    # Add lie to GP
+                    gpr_.append_to_data(
+                        X_opt, y_lie, noise_level=lie_noise_level,
+                        fit_gpr=False, fit_classifier=False,
+                    )
                 # Append the points found to the array
                 X_opts[ipoint] = X_opt[0]
                 y_lies[ipoint] = y_lie[0]
                 acq_vals[ipoint] = acq_val
             # Send this new gpr_ instance to all mpi
-            gpr_ = mpi.comm.bcast(gpr_ if mpi.is_main_process else None)
+            gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
         gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
-        return mpi.comm.bcast(
+        return mpi.bcast(
             (X_opts, y_lies, acq_vals) if mpi.is_main_process else (None, None, None))
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
@@ -513,17 +522,6 @@ class BatchOptimizer(GenericGPAcquisition):
         return theta_opt, func_min
 
 
-# DEPRECATED ON 13-09-2023:
-class GPAcquisition(BatchOptimizer):
-
-    def __init__(self, *args, **kwargs):
-        print(
-            "*Warning*: This class has been renamed to BatchOptimizer. "
-            "This will fail in the future."
-        )
-        super().__init__(*args, **kwargs)
-
-
 class NORA(GenericGPAcquisition):
     """
     Run Gaussian Process acquisition with NORA (Nested sampling Optimization for Ranked
@@ -538,39 +536,25 @@ class NORA(GenericGPAcquisition):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    acq_func : GPry Acquisition Function, optional (default: "LogExp")
+    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
         Acquisition function to maximize/minimize. If none is given the
-        `LogExp` acquisition function will be used
+        `LogExp` acquisition function will be used. Can also be a dictionary with the name
+        of the acquisition function as the single key, and as value a dict of its
+        arguments.
 
     mc_every : int
         If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
         otherwise, recomputing y and sigma with the new GPR.
 
-    random_state : int or numpy.RandomState, optional
-        The generator used to initialize the centers. If an integer is
-        given, it fixes the seed. Defaults to the global numpy random
-        number generator.
-
-    zeta_scaling : float, optional (default: 1.1)
-        The scaling of the acquisition function's zeta parameter with dimensionality
-        (Only if "LogExp" is passed as acquisition_function)
-
-    zeta: float, optional (default: None, uses zeta_scaling)
-        Specifies the value of the zeta parameter directly.
-
-    use_prior_sample: bool
-        Whether to use the initial prior sample from Nested Sampling for the ranking.
-        Can be a large number of them in high dimension. Default: False.
-
     nlive_per_training: int
         live points per sample in the current training set.
         Not recommended to decrease it.
 
-    nlive_per_dim_max: int
-        live points max cap (times dimension).
+    nlive_max: int
+        live points max cap
 
-    num_repeats_per_dim: int
-        length of slice-chains times dimension.
+    num_repeats: int
+        length of slice-chains
 
     precision_criterion_target: float
         Cap on precision criterion of Nested Sampling
@@ -600,96 +584,61 @@ class NORA(GenericGPAcquisition):
     def __init__(self,
                  bounds,
                  preprocessing_X=None,
-                 random_state=None,
                  verbose=1,
                  acq_func="LogExp",
-                 # DEPRECATED ON 13-09-2023:
-                 zeta=None,
-                 zeta_scaling=None,
                  # Class-specific:
-                 sampler="ultranest",
+                 sampler=None,
                  mc_every="1d",
-                 use_prior_sample=False,
                  nlive_per_training=3,
-                 nlive_per_dim_max=25,
-                 num_repeats_per_dim=5,
+                 nlive_max="25d",
+                 nlive_per_dim_max=None,  # deprecated
+                 num_repeats="5d",
+                 num_repeats_per_dim=None,  # deprecated
                  precision_criterion_target=0.01,
                  nprior_per_nlive=10,
                  max_ncalls=None,
                  tmpdir=None,
                  ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X, random_state=random_state,
-            verbose=verbose, acq_func=acq_func, zeta=zeta, zeta_scaling=zeta_scaling)
+            bounds=bounds, preprocessing_X=preprocessing_X,
+            verbose=verbose, acq_func=acq_func,
+        )
+        self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
-        self.use_prior_sample = use_prior_sample
         self.tmpdir = tmpdir
         self.i = 0
         self.acq_func_y_sigma = None
         # Configure nested sampler
         self.sampler = sampler
-        if self.sampler.lower() == "polychord":
-            try:
-                # pylint: disable=import-outside-toplevel
-                from pypolychord.settings import PolyChordSettings
-                from pypolychord.priors import UniformPrior
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install PolyChord or select an alternative nested sampler "
-                    "(e.g. UltraNest)."
-                ) from excpt
-            self.polychord_settings = PolyChordSettings(nDims=self.n_d, nDerived=0)
-            # More efficient for const-eval-speed GP's (not very significant)
-            self.polychord_settings.synchronous = False
-            # Don't write unnecessary files: take lots of space and waste time
-            self.polychord_settings.read_resume = False
-            self.polychord_settings.write_resume = False
-            self.polychord_settings.write_live = False
-            self.polychord_settings.write_dead = True
-            self.polychord_settings.write_prior = self.use_prior_sample
-            self.polychord_settings.feedback = verbose - 3
-            # 0: print header and result; not very useful: turn it to -1 if that's the case
-            if self.polychord_settings.feedback == 0:
-                self.polychord_settings.feedback = -1
-            self.prior = UniformPrior(*self.bounds.T)
-            self.last_polychord_output = None
-        elif self.sampler.lower() == "ultranest":
-            try:
-                # pylint: disable=import-outside-toplevel
-                import ultranest
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install UltraNest or select an alternative nested sampler "
-                    "(e.g. PolyChord)."
-                ) from excpt
-        elif self.sampler.lower() == "nessai":
-            try:
-                # pylint: disable=import-outside-toplevel
-                import nessai
-                import nessai.model
-                from nessai.flowsampler import FlowSampler
-            except ImportError as excpt:
-                raise ImportError(
-                    "Please install nessai or select an alternative nested sampler "
-                    "(e.g. PolyChord)."
-                ) from excpt
-        # TODO: fix this!
-        # # Using rng state as seed for PolyChord
-        # if self.random_state is not None:
-        #     self.polychord_settings.seed = \
-        #         random_state.bit_generator.state["state"]["state"] + mpi.RANK
-        # Prepare precision parameters
+        self._init_nested_sampler()
         self.nlive_per_training = nlive_per_training
-        self.nlive_per_dim_max = nlive_per_dim_max
-        self.num_repeats_per_dim = num_repeats_per_dim
+        if nlive_per_dim_max is not None:
+            self.log(
+                "*Warning: 'nlive_per_dim_max' is deprecated. Use e.g. 'nlive_max: 25d'. "
+                "This will fail in the future."
+            )
+            self.nlive_max = nlive_per_dim_max * self.n_d
+        else:
+            self.nlive_max = get_Xnumber(nlive_max, "d", self.n_d, int, "nlive_max")
+        if num_repeats_per_dim is not None:
+            self.log(
+                "*Warning: 'num_repeats_per_dim' is deprecated. Use e.g. "
+                "'num_repeats: 5d'. This will fail in the future."
+            )
+            self.num_repeats = num_repeats_per_dim * self.n_d
+        else:
+            self.num_repeats = get_Xnumber(num_repeats, "d", self.n_d, int, "num_repeats")
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
         # Pool for storing intermediate results during parallelised acquisition
+        self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = None, None, None, None
+        self._X_mc_reweight, self._y_mc_reweight = None, None
+        self._sigma_y_mc_reweight, self._w_mc_reweight = None, None
+        self.is_last_MC_reweighted = None
         self.pool = None
-        self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc = None, None, None, None
-        self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
+        self._acq_mc = None
 
     @property
     def pool_size(self):
@@ -698,22 +647,55 @@ class NORA(GenericGPAcquisition):
             return None
         return len(self.pool)
 
+    def _init_nested_sampler(self, sampler=None):
+        """
+        Initializes the nested sampler, managing defaults with a recursive call.
+
+        Raises
+        ------
+        ``gpry.ns_interfaces.NestedSamplerNotInstalledError`` if the requested or fallback
+        sampler cannot be loaded, or ``ValueError`` if the sampler is not recognised.
+        """
+        this_sampler = sampler or self.sampler
+        # Manage defaults
+        if this_sampler is None:
+            try:
+                self._init_nested_sampler("polychord")
+                return
+            except nsint.NestedSamplerNotInstalledError as excpt:
+                self.log(
+                    f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
+                    "Defaulting to UltraNest."
+                )
+                self._init_nested_sampler("ultranest")
+                return
+        # Load the requested sampler
+        try:
+            self.sampler_interface = \
+                nsint._ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
+        except (AttributeError, KeyError) as excpt:
+            if this_sampler.lower() != "uniform":
+                raise ValueError(
+                    "No interface found for the requested nested sampler "
+                    f"'{this_sampler}'. Use one of {list(nsint._ns_interfaces)}"
+                ) from excpt
+        self.sampler = this_sampler
+
     def update_NS_precision(self, gpr):
         """
         Updates NS precision parameters:
         - num_repeats: constant for now
         - nlive: `nlive_per_training` times the size of the training set, capped at
-            `nlive_per_dim_cap` (typically 25) times the dimension.
-        - precision_criterion: takes a line that passes through some
-            (log_max_preccrit, max_logKL) and some (log_min_preccrit, min_logKL)
-            and interpolates for the exponential running mean of the logKL's
+            `nlive_max` (typically 25 * dimension).
+        - precision_criterion: constant for now.
         """
-        nlive = min(self.nlive_per_training * gpr.n, self.nlive_per_dim_max * self.n_d)
-        return {"nlive": nlive,
-                "num_repeats": self.num_repeats_per_dim * self.n_d,
-                "precision_criterion": self.precision_criterion_target,
-                "nprior": int(self.nprior_per_nlive * nlive),
-                "max_ncalls": self.max_ncalls
+        nlive = min(self.nlive_per_training * gpr.n, self.nlive_max)
+        return {
+            "nlive": nlive,
+            "num_repeats": self.num_repeats,
+            "precision_criterion": self.precision_criterion_target,
+            "nprior": int(self.nprior_per_nlive * nlive),
+            "max_ncalls": self.max_ncalls
         }
 
     def log(self, msg, level=None):
@@ -724,7 +706,26 @@ class NORA(GenericGPAcquisition):
         if level is None or level <= self.verbose:
             print(self.log_header + msg)
 
-    def get_MC_sample(self, gpr, random_state=None, sampler=None):
+    def _get_output_folder(self):
+        """
+        Prepare a new output folder. Returns always with a ``/`` at the end.
+
+        If one was specified at init, it saves to a subfolder with an increasing index.
+        Otherwise, it creates a random one every time.
+        """
+        if not mpi.is_main_process:
+            return None
+        if self.tmpdir is None:
+            # pylint: disable=consider-using-with
+            tmpdir = tempfile.TemporaryDirectory().name
+        else:
+            tmpdir = os.path.abspath(os.path.join(self.tmpdir, str(self.i)))
+            self.i += 1
+        if not tmpdir.endswith("/"):
+            tmpdir += "/"
+        return tmpdir
+
+    def do_MC_sample(self, gpr, bounds, rng=None, sampler=None):
         """
 
         Returns
@@ -735,106 +736,28 @@ class NORA(GenericGPAcquisition):
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
-            return self._get_MC_sample_uniform(gpr, random_state)
+            return self._do_MC_sample_uniform(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "polychord":
-            return self._get_MC_sample_polychord(gpr, random_state)
+            return self._do_MC_sample_polychord(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "ultranest":
-            return self._get_MC_sample_ultranest(gpr, random_state)
+            return self._do_MC_sample_ultranest(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "nessai":
-            return self._get_MC_sample_nessai(gpr, random_state)
+            return self._do_MC_sample_nessai(gpr, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
-    def _get_MC_sample_uniform(self, gpr, random_state):
+    # For tests only.
+    # TODO: merge samples for >1 MPI processes.
+    def _do_MC_sample_uniform(self, gpr, bounds=None, rng=None):
         if not mpi.is_main_process:
-            return None, None, None
-        proposer = UniformProposer(self.bounds)
-        n_total = 8 * gpr.d
+            return None, None, None, None
+        proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
+        n_total = 1000 * gpr.d
         X = np.empty(shape=(n_total, gpr.d))
         for i in range(n_total):
-            X[i] = proposer.get(random_state=random_state)
+            X[i] = proposer.get(rng=rng)
         return X, None, None, None
-    
-    def _get_MC_sample_nessai(self, gpr, random_state):
-        # write a code to sample from nessai
-        import nessai
-        import nessai.model
-        from nessai.flowsampler import FlowSampler
-        class Nessai_model(nessai.model.Model):
-            """
-            Translates the GP to a nessai model
-            """
-            def __init__(self, gpr, bounds):
-                self.gpr = gpr
-                # Routine to generate tighter bounds which only capture the finite part of the GP.
-                X_train_finite = self.gpr.X_train
-                n_d = self.gpr.d
-                self.gpry_bounds = bounds
-                modified_bounds = np.empty((n_d, 2))
-                for d in range(n_d):
-                    modified_bounds[d, 0] = np.min(X_train_finite[:, d])
-                    modified_bounds[d, 1] = np.max(X_train_finite[:, d])
-                self.names = generic_params_names(n_d)
-                self.modified_bounds = modified_bounds # self.gpry_model.prior.bounds(confidence_for_unbounded=0.99995)
-                
-                self.log_prior_volume = np.sum(np.log(self.gpry_bounds[:,1] - self.gpry_bounds[:,0]))
-                
-                self.bounds = {}
-                for i in range(len(self.names)):
-                    self.bounds[self.names[i]] = self.modified_bounds[i]
-            
-            def gpry_log_likelihood(self, point):
-                return self.gpr.predict(point) + self.log_prior_volume
 
-            def log_likelihood(self, livepoint):
-                if livepoint.ndim == 0:
-                    point = np.array([livepoint[p] for p in self.names])
-                    point = np.atleast_2d(point)
-                    ll = self.gpry_log_likelihood(point)
-                else:
-                    points = np.array([[livepoint[i][p] for p in self.names] for i in range(livepoint.size)])
-                    ll = self.gpry_log_likelihood(points)
-                        
-                return ll
-
-            def log_prior(self, livepoint):
-                if not self.in_bounds(livepoint).any():
-                    return -np.inf
-                lp = np.single(0.)
-                return lp
-        nessai_model = Nessai_model(gpr, self.bounds)
-        updated_settings = self.update_NS_precision(gpr)
-
-        if self.tmpdir is None:
-            # TODO: add to checkpoint folder?
-            tmpdir = tempfile.TemporaryDirectory().name
-        else:
-            tmpdir = f"{self.tmpdir}/{self.i}"
-            self.i += 1
-        # TODO: add more options for nessai
-        sampler = FlowSampler(nessai_model, output=tmpdir,
-                              nlive=updated_settings['nlive'],
-                              plot=False, resume=False)
-        sampler.run(plot=False, save=False)
-        result = sampler.ns.get_result_dictionary()
-        X = result['nested_samples']
-        x = sampler.posterior_samples
-
-        # Copy the data from the structured array to the float array
-        dtype_new = np.dtype({'names': x.dtype.names, 'formats': tuple([np.float64]*len(x.dtype.names))})
-        x = x.astype(dtype_new)
-        posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
-
-        X = posterior_samples[:, :-3]
-        y = posterior_samples[:, -2]
-
-        return X, y, None, None
-        
-        
-
-
-
-    def _get_MC_sample_polychord(self, gpr, random_state):
-
+    def _do_MC_sample_polychord(self, gpr, bounds=None, rng=None):
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
             """
@@ -842,110 +765,219 @@ class NORA(GenericGPAcquisition):
             """
             return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
 
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
-        new_prec = self.update_NS_precision(gpr)
-        for k, v in new_prec.items():
-            setattr(self.polychord_settings, k, v)
-        from pypolychord import run_polychord  # pylint: disable=import-outside-toplevel
-        if mpi.is_main_process:
-            if self.tmpdir is None:
-                # TODO: add to checkpoint folder?
-                tmpdir = tempfile.TemporaryDirectory().name
-            else:
-                tmpdir = f"{self.tmpdir}/{self.i}"
-                self.i += 1
-            # ALT: persistent folder:
-            # tmpdir = tempfile.mkdtemp()
-            self.polychord_settings.base_dir = tmpdir
-            self.polychord_settings.file_root = "test"
-        mpi.share_attr(self, "polychord_settings")
-        with NumpyErrorHandling(all="ignore") as _:
-            self.last_polychord_output = run_polychord(
-                logp,
-                nDims=self.n_d, nDerived=0,
-                settings=self.polychord_settings,
-                prior=self.prior)
-        if mpi.is_main_process:
-            dummy_paramnames = [tuple(2 * [f"x_{i + 1}"]) for i in range(gpr.d)]
-            self.last_polychord_output.make_paramnames_files(dummy_paramnames)
-            samples_T = np.loadtxt(self.last_polychord_output.root + ".txt").T
-            X = samples_T[2:].T
-            y = -0.5 * samples_T[1]  # this one stores chi2
-            w = samples_T[0]
-            if self.use_prior_sample:
-                raise ValueError("For now use_prior_sample is disabled.")
-                # Old code, for reference.
-                # They do not have weights, so should be stored in a different list
-                # TODO: check if this improves multimodality tests!
-                # prior_T = np.loadtxt(self.last_polychord_output.root + "_prior.txt").T
-                # X_prior = prior_T[2:].T
-                # y_prior = - prior_T[1] / 2  # this one is stored as chi2
-                # X = np.concatenate([X_prior, X])
-                # y = np.concatenate([y_prior, y])
-            # Delete products from tmp folder
-            shutil.rmtree(self.polychord_settings.base_dir)
-            return X, y, None, w
-        return None, None, None, None
+        self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
+        # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
+        seed = rng.integers(2**31 - 1) if rng is not None else None
+        # Output (PolyChord needs a "/" at the end).
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp,
+            out_dir=self._get_output_folder(),
+            keep_all=False,
+            seed=seed,
+        )
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
+        return X_MC, y_MC, None, w_MC
 
-    def _get_MC_sample_ultranest(self, gpr, random_state):
-        # Ultranest cannot deal with -np.inf
-        old_minus_inf_value = gpr.minus_inf_value
-        gpr.minus_inf_value = -1e300
-        widths = self.bounds[:, 1] - self.bounds[:, 0]
-        lowers = self.bounds[:, 0]
+    def _do_MC_sample_ultranest(self, gpr, bounds=None, rng=None):
 
         # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
             """
-            return gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
+            # Ultranest cannot deal with -np.inf
+            prev_miv = gpr.minus_inf_value
+            gpr.minus_inf_value = -1e-300
+            logp = gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
+            gpr.minus_inf_value = prev_miv
+            return logp
 
-        def uniform_prior_transform(quantiles):
-            return quantiles * widths + lowers
-
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
-        updated_settings = self.update_NS_precision(gpr)
-        tmpdir = None
-        if mpi.is_main_process:
-            if self.tmpdir is None:
-                # TODO: add to checkpoint folder?
-                tmpdir = tempfile.TemporaryDirectory().name
-            else:
-                tmpdir = f"{self.tmpdir}/{self.i}"
-                self.i += 1
-            # ALT: persistent folder:
-            # tmpdir = tempfile.mkdtemp()
-        tmpdir = mpi.comm.bcast(tmpdir)
-        updated_settings["log_dir"] = tmpdir
-        from ultranest import ReactiveNestedSampler
-        sampler = ReactiveNestedSampler(
-            [f"x_{i + 1}" for i in range(gpr.d)],
-            logp,
-            uniform_prior_transform, log_dir=updated_settings["log_dir"],
-            resume="overwrite",
-            vectorized=True,
+        prec_settings = {
+            k: v for k, v in self.update_NS_precision(gpr).items()
+            if k in ["nlive", "precision_criterion", "max_ncalls"]
+        }
+        self.sampler_interface.set_precision(**prec_settings)
+        # Seeding -- for now UltraNest does not accept an rng or a seed, only setting the
+        # np.random seed globally, which is dangerous!
+        # TODO: Create a PR for taking a custom RNG in UltraNest.
+        if rng is not None:
+            if mpi.is_main_process:
+                warnings.warn("Seeded runs are not supported for UltraNest.")
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp, out_dir=self._get_output_folder(), keep_all=False
         )
-        with NumpyErrorHandling(all="ignore") as _:
-            result = sampler.run(
-                min_num_live_points=updated_settings["nlive"],
-                max_ncalls=updated_settings["max_ncalls"],
-                frac_remain=updated_settings["precision_criterion"],
-                viz_callback=False, show_status=False,
-            )
-        gpr.minus_inf_value = old_minus_inf_value
-        if mpi.is_main_process:
-            w = result['weighted_samples']['weights']
-            X = result["weighted_samples"]["points"]
-            y = result["weighted_samples"]["logl"]
-            if self.use_prior_sample:
-                raise NotImplementedError("use_prior not implemented yet for UltraNest.")
-            # Delete products from tmp folder
-            shutil.rmtree(updated_settings["log_dir"])
-            return X, y, None, w
-        return None, None, None, None
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
+        return X_MC, y_MC, None, w_MC
 
-    def multi_add(self, gpr, n_points=1, random_state=None, force_resample=False):
+    # pylint: disable=import-outside-toplevel
+    def _do_MC_sample_nessai(self, gpr, bounds=None, rng=None):
+        if not mpi.is_main_process:
+            return None, None, None, None
+        if mpi.multiple_processes:
+            warnings.warn(
+                "Support for Nessai is experimental at the moment, and not MPI-compatible"
+                " (running in rank-0 process only)."
+            )
+        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
+        def logp(X):
+            """
+            Returns the predicted value at a given point (-inf if prior=0).
+            """
+            return gpr.predict(X, return_std=False, validate=False)
+
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
+        # Update precision settings
+        prec_settings = {
+            k: v for k, v in self.update_NS_precision(gpr).items()
+            if k in ["nlive", "precision_criterion"]
+        }
+        self.sampler_interface.set_precision(**prec_settings)
+        # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
+        seed = rng.integers(2**31 - 1) if rng is not None else None
+        # Run and get products
+        X_MC, y_MC, w_MC = self.sampler_interface.run(
+            logp,
+            out_dir=self._get_output_folder(),
+            keep_all=False,
+            seed=seed,
+        )
+        self.sampler_interface.delete_output()
+        # We will recompute y values, because quantities in PolyChord have to go through
+        # text i/o, and some precision may be lost -- so we do not return them.
+        y_MC = None
+        return X_MC, y_MC, None, w_MC
+
+    def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, gpr=None):
+        """
+        Stores the MC sample as attributes.
+
+        If either `y` and/or `sigma_y` are passed as `None`, you can ensure their
+        calculation (in parallel) with `ensure_y_sigma=True`. In that case, a `gpr` is
+        needed.
+
+        Use ``last_MC_sample[_getdist]`` to retrieve it.
+        """
+        self.is_last_MC_reweighted = False
+        self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = X, y, sigma_y, w
+        if ensure_y_sigma_y:
+            self._y_mc, self._sigma_y_mc = mpi.compute_y_parallel(
+                gpr, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
+            )
+
+    def _reweight_last_MC_sample(self, gpr, bounds=None, ensure_sigma_y=False):
+        """Stores the MC sample as attributes. Use ``last_MC_sample`` to retrieve it."""
+        self.is_last_MC_reweighted = True
+        X_excpt, y_excpt = None, None
+        if mpi.is_main_process and self._X_mc is None:
+            X_excpt = ValueError("No samples yet!")
+        X_excpt = mpi.bcast(X_excpt)
+        if X_excpt is not None:
+            raise X_excpt
+        if mpi.is_main_process and self._y_mc is None:
+            y_excpt = ValueError("Original logp was not stored. Cannot reweight!")
+        y_excpt = mpi.bcast(y_excpt)
+        if y_excpt is not None:
+            raise y_excpt
+        # Ensure y and sigma_y (optional) are computed
+        self._X_mc_reweight = None
+        if mpi.is_main_process:
+            self._X_mc_reweight = np.copy(self._X_mc)
+            if bounds is not None:
+                # Keep points within new bounds (maybe none!)
+                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_shape=False)
+                self._X_mc_reweight = self._X_mc_reweight[i_within]
+                # TODO: not handled: there could be 0 points within new bounds
+        self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
+            gpr, self._X_mc_reweight, None, None, ensure_sigma_y=ensure_sigma_y
+        )
+        if mpi.is_main_process:
+            # Reweight, and drop 0 weights
+            with NumpyErrorHandling(all="ignore") as _:
+                y_mc = self._y_mc
+                w_mc = self._w_mc
+                if bounds is not None:
+                    y_mc = y_mc[i_within]
+                    w_mc = w_mc[i_within] if w_mc is not None else None
+                reweight_factor = np.exp(self._y_mc_reweight - y_mc)
+                w_mc_reweight = (
+                    w_mc if w_mc is not None
+                    else np.ones(shape=self._X_mc_reweight.shape[0])
+                ) * reweight_factor
+                w_mc_reweight /= max(w_mc_reweight)
+            self._w_mc_reweight, self._X_mc_reweight, self._y_mc_reweight, \
+                self._sigma_y_mc_reweight = remove_0_weight_samples(
+                    w_mc_reweight, self._X_mc_reweight,
+                    self._y_mc_reweight, self._sigma_y_mc_reweight
+                )
+
+    def last_MC_sample(self, copy=False, warn_reweight=True):
+        """
+        Returns the last MC sample as ``(X, y, sigma_y, weights)``. ``y, sigma_y``
+        may be None if not computed while sampling. They can be generated with the gpr.
+        If ``weights`` is None, all samples should be assumed to have equal weights.
+
+        Prints a warning if it is a reweighted sample.
+        """
+        if self.is_last_MC_reweighted:
+            if warn_reweight:
+                warnings.warn(
+                    "This is a reweighted sample! (disable with `warn_reweight=False`)"
+                )
+            return_values = (
+                self._X_mc_reweight, self._y_mc_reweight,
+                self._sigma_y_mc_reweight, self._w_mc_reweight
+            )
+        else:
+            return_values = (self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc)
+        if copy:
+            return_values = tuple(
+                (np.copy(val) if val is not None else None) for val in return_values
+            )
+        return return_values
+
+    @property
+    def mean(self):
+        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        return np.average(Xs.T, weights=ws, axis=-1)
+
+    @property
+    def cov(self):
+        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        return np.cov(Xs.T, aweights=ws, ddof=0)
+
+    def last_MC_sample_getdist(self, params, warn_reweight=True):
+        """
+        Returns the last MC sample as a ``getdist.MCSamples`` instance.
+
+        Prints a warning if it is a reweighted sample.
+        """
+        X, y, _, w = self.last_MC_sample(warn_reweight=warn_reweight)
+        samples_dict = {"w": w, "X": X, _name_logp: y}
+        return samples_dict_to_getdist(
+            samples_dict,
+            params=params,
+            bounds=self.bounds_,
+            sampler_type="nested",
+        )
+
+    def multi_add(
+            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
+    ):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
 
@@ -966,18 +998,17 @@ class NORA(GenericGPAcquisition):
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
-            Number of points returned by the optimize method
-            If the value is 1, a single point to evaluate is returned.
+            Number of points to be returned. A value large than 1 is useful if you can
+            evaluate your objective in parallel, and thus obtain more objective function
+            evaluations per unit of time.
 
-            Otherwise a list of points to evaluate is returned of size
-            n_points. This is useful if you can evaluate your objective
-            in parallel, and thus obtain more objective function evaluations
-            per unit of time.
+        bounds : np.array, optional
+            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
+            If not defined, the prior bounds are used.
 
-        random_state : int or numpy.RandomState, optional
-            The generator used to initialize the centers. If an integer is
-            given, it fixes the seed. Defaults to the global numpy random
-            number generator.
+        rng : int or numpy.random.Generator, optional
+            The generator used to perform the acquisition process. If an integer is given,
+            it is used as a seed for the default global numpy random number generator.
 
         Returns
         -------
@@ -991,38 +1022,43 @@ class NORA(GenericGPAcquisition):
         # Check if n_points is positive and an integer
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(f"n_points should be int > 0, got {n_points}")
-        # Gather an MC sample
+        # Create (parallel) generator(s) if int passed as rng
+        rng = mpi.get_random_generator(rng)
+        # Gather an MC sample, only not-None for rank 0; bcasted by _split_and_compute_acq
         if mpi.is_main_process:
             start_sample = time()
         mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
         if mc_sample_this_time:
-            self.X_mc, self.y_mc, self.sigma_y_mc, self.w_mc = self.get_MC_sample(
-                gpr, random_state
+            self._set_MC_sample(
+                *self.do_MC_sample(gpr, bounds=bounds, rng=rng),
+                ensure_y_sigma_y=True, gpr=gpr
             )
-            # Save the necessary values for reweighting
-            self.y_mc_last_sampled = np.copy(self.y_mc)
-            if self.w_mc is not None:
-                self.w_mc_last_sampled = np.copy(self.w_mc)
-            else:
-                self.w_mc_last_sampled = None
-        else:  # reuse
-            self.X_mc, self.y_mc, self.sigma_y_mc = self.X_mc, None, None
+            self._X_already_proposed = np.empty(shape=(0, gpr.d))
+        else:
+            self._reweight_last_MC_sample(gpr, bounds=bounds, ensure_sigma_y=True)
         self.mc_every_i += 1
+        X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
+        # Find indices of already used elements to exclude them.
+        # Needs to be here because _reweight_last_MC_sample changes the indices.
+        # Both the X's of the MC sample and the pool are assumed unique.
+        if mpi.is_main_process and self._X_already_proposed.size > 0:
+            i_already_proposed = []
+            for X_i in self._X_already_proposed:
+                i_this_one = np.flatnonzero(
+                    np.all(np.isin(X_mc, X_i, assume_unique=True), axis=1)
+                )
+                if i_this_one.size > 0:
+                    i_already_proposed.append(i_this_one[0])
+            X_mc = np.delete(X_mc, i_already_proposed, axis=0)
+            y_mc = np.delete(y_mc, i_already_proposed, axis=0)
+            sigma_y_mc = np.delete(sigma_y_mc, i_already_proposed, axis=0)
         # Compute acq functions and missing quantities.
         self.acq_func_y_sigma = partial(
             self.acq_func.f, baseline=gpr.y_max,
             noise_level=gpr.noise_level, zeta=self.acq_func.zeta)
+        # *Split* among MPI processes and compute acq func value (in parallel)
         this_X, this_y, this_sigma_y, this_acq = \
-            self._compute_acq_and_missing_y_sigma(gpr=gpr)
-        # Reweight the last acquired samples to the new gp
-        if mpi.is_main_process:
-            if not mc_sample_this_time:
-                reweight_factor = np.exp(self.y_mc - self.y_mc_last_sampled)
-                self.w_mc = (
-                    self.w_mc_last_sampled if self.w_mc_last_sampled is not None else 1
-                ) * reweight_factor
-                self.w_mc /= max(self.w_mc)
-        mpi.sync_processes()
+            self._split_and_compute_acq(X_mc, y_mc, sigma_y_mc)
         if mpi.is_main_process:
             what_we_did = ("Obtained new MC sample" if mc_sample_this_time
                            else "Re-evaluated previous MC sample")
@@ -1032,97 +1068,74 @@ class NORA(GenericGPAcquisition):
         mpi.sync_processes()
         if mpi.is_main_process:
             start_rank = time()
-        # TODO: still testing in realistic scenarios whether it is faster to rank in
-        #       parallel (doesn't matter a lot, since it's way faster than NS anyway)
-        # merged_pool = self._rank(n_points, gpr)
-        merged_pool = self._parallel_rank_and_merge(
-            this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method="auto")
+        args = (this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
+        # TODO: facility to test speed of ranking methods
+        # CHECK: if no MPI, all methods starting with the same one should yield the same
+        # IMPLEMENT: non-parallel even if MPI
+        # TODO: update "auto" method default values
+        # if not hasattr(self, "totals"):
+        #     self.totals = {}
+        for method, merge_method in [
+                # ("bulk", "bulk"),
+                # ("bulk", "single sort acq"),
+                ("single sort acq", "bulk"), # seems to be the fastest
+                # ("bulk", "single sort y"),
+                # ("single sort acq", "single sort acq"),
+                # ("single sort y", "bulk"),
+                # ("single sort y", "single sort y"),
+                # ("single", "single"),
+        ]:
+            # start = time()
+            merged_pool = self._parallel_rank_and_merge(
+                *args, method=method, merge_method=merge_method)
+            # delta = time() - start
+            # if (method, merge_method) not in self.totals:
+            #     self.totals[(method, merge_method)] = 0
+            # self.totals[(method, merge_method)] += delta
+            # if mpi.is_main_process:
+            #     print(
+            #         f"TOOK: {delta:.2g} ; "
+            #         f"TOTAL: {self.totals[(method, merge_method)]:.2g}; "
+            #         f"methods: {(method, merge_method)}"
+            #    )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
+        X_pool, y_pool = merged_pool.X[:n_points], merged_pool.y[:n_points]
         with np.errstate(divide='ignore'):
-            merged_pool_acq = self.acq_func_y_sigma(
-                merged_pool.y[:n_points], merged_pool.sigma[:n_points])
+            acq_pool = self.acq_func_y_sigma(y_pool, merged_pool.sigma[:n_points])
+        # Track the used ones, to ignore them until new MC sample drawn.
+        self._X_already_proposed = np.concatenate([self._X_already_proposed, X_pool])
         mpi.sync_processes()
         self.pool.reset_cache()  # reduces size of pickled object
         if mpi.is_main_process:
             self.log(
                 f"({(time()-start_rank):.2g} sec) Ranked pool of candidates.")
-        return (
-            merged_pool.X[:n_points], merged_pool.y[:n_points], merged_pool_acq[:n_points]
-        )
+        return X_pool, y_pool, acq_pool
 
-    def _compute_acq_and_missing_y_sigma(self, gpr):
+    def _split_and_compute_acq(self, X, y, sigma_y):
         """
-        Ensures a full set of `X, y, sigma_y, acq_value`, attributes starting from current
-        attribute values, which are assumed equal-valued for all ranks.
-
-        Returns scattered arrays for these values for all processes.
-
-        Parallelises the computation if possible (returns split arrays per process).
+        Scatters `(X, y, sigma_y)` between processes, and returns them together with the
+        acquisition function values, computed in parallel.
         """
-        X = mpi.comm.bcast(self.X_mc)
         # We don't use mpi.split_number_for_parallel_processes because for the ranking
         # it is good to have similar y scaling in all MPI processes. But if we use that
         # function, some processes get the top of the dist, and others the bottom, and
         # the bottom one's scaling does not perform well with the add_one method, even
         # after sorting, and the slowest MPI process sets the global speed
-        this_X = X[mpi.RANK::mpi.SIZE]
-        y = mpi.comm.bcast(self.y_mc)
-        sigma_y = mpi.comm.bcast(self.sigma_y_mc)
-        if y is None:  # assume sigma_y is also None
-            if len(this_X) > 0:
-                this_y, this_sigma_y = gpr.predict(
-                    this_X, return_std=True, validate=False)
-            else:
-                this_y = np.array([], dtype=float)
-                this_sigma_y = np.array([], dtype=float)
-            self._undo_step_splitting(this_y, "y_mc")
-            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
-        elif sigma_y is None:
-            this_y = y[mpi.RANK::mpi.SIZE]
-            if len(this_y) > 0:
-                this_sigma_y = gpr.predict_std(this_X, validate=False)
-            else:
-                this_sigma_y = np.array([], dtype=float)
-            self._undo_step_splitting(this_sigma_y, "sigma_y_mc")
-        else:  # both y and sigma_y are known
-            this_y = y[mpi.RANK::mpi.SIZE]
-            this_sigma_y = sigma_y[mpi.RANK::mpi.SIZE]
+        this_X = mpi.step_split(X)
+        this_y = mpi.step_split(y)
+        this_sigma_y = mpi.step_split(sigma_y)
         with np.errstate(divide='ignore'):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
-        self._undo_step_splitting(this_acq, "acq_mc")
         return this_X, this_y, this_sigma_y, this_acq
-
-    def _undo_step_splitting(self, values, attr_name):
-        """
-        Gather and undoes the ::mpi.SIZE process splitting and sets the corresponding
-        attribute at the rank=0 process.
-        """
-        values_step = mpi.comm.gather(values)
-        if mpi.is_main_process:
-            attr_value = np.zeros(len(self.X_mc))
-            for i, v in enumerate(values_step):
-                attr_value[i::mpi.SIZE] = v
-            setattr(self, attr_name, attr_value)
-
-    # Non-parallel version of the ranking of the MC points
-    def _rank(self, n_points, gpr):
-        if mpi.is_main_process:
-            self.pool = RankedPool(
-                n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
-                verbose=self.verbose - 3)
-            with np.errstate(divide='ignore'):
-                self.pool.add(
-                    self.X_mc, self.y_mc, self.sigma_y_mc, self.acq_mc,
-                    method="single sort acq")
-        mpi.share_attr(self, "pool")
-        return self.pool
 
     # Parallel version of the ranking of the MC points
     def _parallel_rank_and_merge(
-            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None):
+            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None,
+            merge_method=None):
+        if method is None:
+            method = "auto"
         # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
-        merge_method = None
         if method.lower() == "auto":
             method = "bulk" if gpr.d <= 4 else "single sort acq"
             merge_method = "bulk"
@@ -1144,13 +1157,13 @@ class NORA(GenericGPAcquisition):
         rank-0 process returns [X, y, sigma, acq], where the last two are the
         unconditioned input ones.
         """
-        pool_X = mpi.comm.gather(self.pool.X[:len(self.pool)])
-        pool_y = mpi.comm.gather(self.pool.y[:len(self.pool)])
-        pool_sigma = mpi.comm.gather(self.pool.sigma[:len(self.pool)])
-        pool_acq = mpi.comm.gather(self.pool.acq[:len(self.pool)])
+        pool_X = mpi.gather(self.pool.X[:len(self.pool)])
+        pool_y = mpi.gather(self.pool.y[:len(self.pool)])
+        pool_sigma = mpi.gather(self.pool.sigma[:len(self.pool)])
+        pool_acq = mpi.gather(self.pool.acq[:len(self.pool)])
         # Using the conditional acq value just to discard empty slots (acq=-inf)
         # Later discarded (not returned), since they need to be recomputed anyway.
-        pool_acq_cond = mpi.comm.gather(self.pool.acq_cond[:len(self.pool)])
+        pool_acq_cond = mpi.gather(self.pool.acq_cond[:len(self.pool)])
         if mpi.is_main_process:
             # Discard unfilled positions
             pool_acq_cond = np.concatenate(pool_acq_cond)
@@ -1179,7 +1192,7 @@ class NORA(GenericGPAcquisition):
                 n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
                 verbose=self.pool.verbose)
             merged_pool.add(pool_X, pool_y, pool_sigma, pool_acq, method=method)
-        merged_pool = mpi.comm.bcast(merged_pool)
+        merged_pool = mpi.bcast(merged_pool)
         return merged_pool
 
 
@@ -1298,16 +1311,14 @@ class RankedPool():
             Acquisition function values (unconditioned). Will be computed if not passed.
 
         method: {"single", "single sort acq", "single sort y", "bulk"}
-            Uses the one-by-one algorithm ("single", with pre-sorting accorting to X if
+            Uses the one-by-one algorithm ("single", with pre-sorting according to X if
             "single sort X"), or the bulk algorithm.
         """
-        if len(X.shape) < 2:
-            self.add(X, y, sigma, method=method)
-            return
-        if X.shape[1] == 1:
-            self.add(
-                X[0], y[0] if y else None, sigma[0] if sigma else None, method=method)
-            return
+        X = np.atleast_2d(X)
+        if y is not None:
+            y = np.atleast_1d(y)
+        if sigma is not None:
+            sigma = np.atleast_1d(sigma)
         if y is None:
             y, sigma = self._gpr.predict(X, return_std=True, validate=False)
         elif sigma is None:
@@ -1326,7 +1337,7 @@ class RankedPool():
             for i in (i_sort if i_sort is not None else range(len(X))):
                 self.add_one(X[i], y[i], sigma[i], acq[i])
         else:
-            ValueError(f"Algorithm '{method}' not known.")
+            raise ValueError(f"Algorithm '{method}' not known.")
 
     def add_bulk(self, X, y, sigma, acq, i_start=0):
         """
@@ -1418,7 +1429,7 @@ class RankedPool():
 
         Raises
         ------
-        ValueError: if invalid acquisition function value, unless ``acq_nan_is_null=True``.
+        ValueError: if invalid acq. function value, unless ``acq_nan_is_null=True``.
         """
         # Discard the point as early as possible!
         # NB: The equals sign below takes care of the case in which we are trying to add a
@@ -1511,7 +1522,7 @@ class RankedPool():
         self.log_pool(level=4, include_last=True, prefix="[pool.add] ",
                       suffix_last="[unused]")
         # Make sure that the last slot (buffer) is marked as empty
-        self.acq_cond[-1] == -np.inf
+        self.acq_cond[-1] = -np.inf
 
     def cache_model(self, i):
         """
@@ -1542,7 +1553,9 @@ class RankedPool():
             return self._gpr
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
         self.gpr_cond[i] = deepcopy(self._gpr)
-        self.gpr_cond[i].append_to_data(self.X[:i + 1], self.y[:i + 1], fit=False)
+        self.gpr_cond[i].append_to_data(
+            self.X[:i + 1], self.y[:i + 1], fit_gpr=False, fit_classifier=False
+        )
         self.cache_counter += 1
         return self.gpr_cond[i]
 
@@ -1604,7 +1617,7 @@ class RankedPool():
         if i_start >= len(self):
             self.log(
                 level=4,
-                msg=f"[pool.sort] Nothing to do (sorting beyond last position).")
+                msg="[pool.sort] Nothing to do (sorting beyond last position).")
             return
         self.log(
             level=4,
@@ -1613,7 +1626,7 @@ class RankedPool():
         upper_gpr_cond = self.cache_model(i_start - 1)
         # If list not full (first sublist element's acq_cond=-inf), do nothing
         if self.acq_cond[i_start] == -np.inf:
-            self.log(level=4, msg=f"[pool.sort] Nothing to do (list is not full yet).")
+            self.log(level=4, msg="[pool.sort] Nothing to do (list is not full yet).")
             return
         # Compute acq_cond for non-empty points (acq != -inf) only. Assume always sorted.
         try:
@@ -1637,7 +1650,7 @@ class RankedPool():
         if acq_cond_max == -np.inf:
             self.log(
                 level=4,
-                msg=f"[pool.sort] Nothing to do (all sublist elements have -inf acq)."
+                msg="[pool.sort] Nothing to do (all sublist elements have -inf acq)."
             )
             self.acq_cond[i_start:i_1st_inf] = -np.inf
             return

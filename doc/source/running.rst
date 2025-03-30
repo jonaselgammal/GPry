@@ -14,3 +14,10 @@ triangle plot of the final MC sample. For more information on how to use the run
 look into the examples.
 
 For more information on the exact usage have a look at the documentation of :mod:`run`
+
+
+The ``Runner`` object
+---------------------
+
+.. autoclass:: run.Runner
+   :members:

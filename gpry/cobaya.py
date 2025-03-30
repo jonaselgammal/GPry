@@ -11,22 +11,31 @@ For input arguments and options, see ``CobayaSampler.yaml`` in this folder, or r
 import os
 import re
 import logging
+from copy import deepcopy
 from tempfile import gettempdir
 from inspect import cleandoc
+from typing import Union
 
 from cobaya.sampler import Sampler
 from cobaya.component import get_component_class
 from cobaya.log import LoggedError
-from cobaya.output import get_output, OutputReadOnly
+from cobaya.output import get_output, split_prefix, OutputReadOnly
 from cobaya.tools import get_external_function
+from cobaya.collection import SampleCollection
+
 from gpry import mpi
 from gpry.run import Runner
+
+# TODO: resuming may not work in cases where internal gp_acq or gpr options aren't changed
 
 
 # pylint: disable=no-member,access-member-before-definition
 # pylint: disable=attribute-defined-outside-init
-class CobayaSampler(Sampler):
+class CobayaWrapper(Sampler):
     """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
+
+    # Resume:
+    _at_resume_prefer_new = ["plots", "callback", "callback_is_MPI_aware", "verbose"]
 
     # Other options
     _gpry_output_dir = "gpry_output"
@@ -52,16 +61,37 @@ class CobayaSampler(Sampler):
         self.mc_sampler_upd_info = None
         self.mc_sampler_instance = None
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
+        # Default to Runner & Acq defaults: (recusively) remove keys with None value:
+        if self.gpr is None:
+            self.gpr = {}
+        for k, v in list(self.gpr.items()):
+            if v is None:
+                self.gpr.pop(k)
+        if self.gp_acquisition is None:
+            self.gp_acquisition = {}
+        for k, v in list(self.gp_acquisition.items()):
+            if v is None:
+                self.gp_acquisition.pop(k)
+        gp_acq_input = deepcopy(self.gp_acquisition)
+        gp_acq_engine = gp_acq_input.pop("engine", "BatchOptimizer")
+        # Grab the relevant acq options, merge them, and kick out the unused ones
+        gp_acq_engine_options = None
+        for k in list(gp_acq_input):
+            if k.startswith("options_"):
+                gp_acq_engine_options = gp_acq_input.pop(k)
+                if k.lower().endswith(gp_acq_engine.lower()):
+                    gp_acq_input.update(gp_acq_engine_options or {})
+        gp_acq_input = {gp_acq_engine: gp_acq_input}
         # Initialize the runner
         try:
             self.gpry_runner = Runner(
                 model=self.model,
                 gpr=self.gpr,
-                gp_acquisition=self.gp_acquisition,
+                gp_acquisition=gp_acq_input,
                 initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
                 options=self.options,
-                callback=get_external_function(self.callback),
+                callback=get_external_function(self.callback) if self.callback else None,
                 callback_is_MPI_aware=self.callback_is_MPI_aware,
                 checkpoint=self.path_checkpoint,
                 load_checkpoint=self.output_strategy,
@@ -84,13 +114,19 @@ class CobayaSampler(Sampler):
         try:
             self.gpry_runner.run()
         except Exception as excpt:
-            raise LoggedError(self.log, "GPry failed during learning: %s", str(excpt))
+            raise LoggedError(
+                self.log,
+                "GPry failed during learning: %s",
+                str(excpt)
+            ) from excpt
         if mpi.is_main_process:
-            self.log.info("Learning stage finished successfully!")
+            if self.gpry_runner.has_converged:
+                self.log.info("Learning stage finished successfully!")
+            else:
+                self.log.info("Learning stage failed to converge! Will MC sample anyway.")
             self.log.info("Starting MC-sampling stage...")
         try:
-            self.mc_sampler_upd_info, self.mc_sampler_instance = \
-                self.do_surrogate_sample(resume=self.output.is_resuming())
+            self.do_surrogate_sample(resume=self.output.is_resuming())
         except Exception as excpt:
             raise LoggedError(
                 self.log,
@@ -98,12 +134,22 @@ class CobayaSampler(Sampler):
                 str(excpt)
             ) from excpt
         if mpi.is_main_process:
-            self.log.info("MC-sampling finished successfully!")
+            if self.gpry_runner.has_converged:
+                self.log.info("MC-sampling finished successfully!")
+            else:
+                self.log.info("MC-sampling finished, but model *DID NOT CONVERGE*!")
             if self.plots:
                 self.log.info("Doing some plots...")
                 self.do_plots()
+        return self.mc_sampler_upd_info, self.mc_sampler_instance
 
-    def do_surrogate_sample(self, resume=False, prefix=None):
+    def do_surrogate_sample(
+            self,
+            sampler=None,
+            add_options=None,
+            resume=False,
+            prefix=None,
+    ):
         """
         Perform an MC sample of the surrogate model.
 
@@ -112,6 +158,10 @@ class CobayaSampler(Sampler):
 
         Parameters
         ----------
+        sampler: str
+            An anternative sampler, if different from the one specified at initialisation
+        add_options: dict
+            Configuration to be passed to the sampler.
         resume: bool (default: False)
             Whether to try to resume a previous run
         prefix: str, optional
@@ -132,25 +182,45 @@ class CobayaSampler(Sampler):
         if prefix is None:
             prefix = self.surrogate_prefix
         self.gpry_runner.generate_mc_sample(
-            sampler=self.mc_sampler, output=prefix, resume=resume
+            sampler=self.mc_sampler if sampler is None else sampler,
+            add_options=add_options,
+            output=prefix,
+            resume=resume,
         )
-        return self.gpry_runner.last_mc_surr_info, self.gpry_runner.last_mc_sampler
+        self.mc_sampler_upd_info = self.gpry_runner.last_mc_surr_info
+        self.mc_sampler_instance = self.gpry_runner.last_mc_sampler
 
     @property
     def is_mc_sampled(self):
         """
         Returns True if the MC sampling of the surrogate process has run and converged.
         """
-        return self.mc_sampler_instance is not None
+        return bool(getattr(self.gpry_runner, "_last_mc_samples", False))
 
-    def do_plots(self):
+    def do_plots(self, ext="png"):
         """
         Produces some results and diagnosis plots.
         """
-        self.gpry_runner.plot_progress()
-        self.gpry_runner.plot_distance_distribution()
+        self.gpry_runner.plot_distance_distribution(format=format)
+        self.gpry_runner.plot_progress(ext=ext)
         if self.is_mc_sampled:
-            self.gpry_runner.plot_mc()
+            self.gpry_runner.plot_mc(ext=ext)
+
+    def samples(
+            self,
+            combined: bool = False,
+            skip_samples: float = 0,
+            to_getdist: bool = False,
+    ) -> Union[SampleCollection, "MCSamples"]:
+        """
+        Returns the last sample from the surrogate model.
+        """
+        return self.mc_sampler_instance.samples(
+            combined=combined,
+            skip_samples=skip_samples,
+            to_getdist=to_getdist,
+        )
+
     def products(
         self,
         combined: bool = False,
@@ -161,14 +231,13 @@ class CobayaSampler(Sampler):
         Returns the products of the run: an MC sample of the surrogate posterior under
         ``sample``, and the GPRy ``Runner`` object under ``runner``.
         """
-        return {
-            "sample": self.mc_sampler_instance.products(
-                combined=combined,
-                skip_samples=skip_samples,
-                to_getdist=to_getdist,
-            ),
-            "runner": self.gpry_runner,
-        }
+        products = {"runner": self.gpry_runner}
+        products.update(
+            self.mc_sampler_instance.products(
+                combined=combined, skip_samples=skip_samples, to_getdist=to_getdist
+            )
+        )
+        return products
 
     @classmethod
     def get_checkpoint_dir_and_surr_prefix(cls, output=None):
@@ -209,9 +278,7 @@ class CobayaSampler(Sampler):
         if output:
             return (output.add_suffix(cls._gpry_output_dir, separator="_"),
                     output.add_suffix(cls._surrogate_suffix, separator="_"))
-        tmpdir = gettempdir()
-        return (os.path.join(tmpdir, cls._gpry_output_dir),
-                os.path.join(tmpdir, cls._surrogate_suffix))
+        return None, None
 
     @classmethod
     def output_files_regexps(cls, output, info=None, minimal=False):
@@ -229,12 +296,11 @@ class CobayaSampler(Sampler):
         regexps_tuples = [
             (re.compile(re.escape(name + ".pkl")), path_checkpoint)
             for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
-        ]
+        ] + [(None, os.path.join(path_checkpoint, "images"))]
         # MC sample from surrogate -- more precise if we know the sampler
-        # Using OutputReadOnly and not Output here bc it's sometimes called just from rank 0,
+        # Using OutputReadOnly and not Output here bc it can be  called just from rank 0,
         # and it's never used except as an aux object to get correct surrogate MC prefixes
         surr_mc_output = OutputReadOnly(prefix=surrogate_prefix)
-        from cobaya.output import split_prefix
         surr_mc_folder, _ = split_prefix(surrogate_prefix)
         surr_mc_sampler = (info or {}).get("mc_sampler")
         if surr_mc_sampler:
@@ -252,18 +318,26 @@ class CobayaSampler(Sampler):
     @staticmethod
     def is_nora(info):
         """Returns True if NORA is being used."""
-        acq_method = list(((info or {}).get("gp_acquisition", {}) or {}).keys())
-        print("a", (acq_method and isinstance(acq_method[0], str) and
-                    acq_method[0].lower() == "nora"), acq_method)
-        return (len(acq_method) > 0 and isinstance(acq_method[0], str) and
-                acq_method[0].lower() == "nora")
+        acq_method = list((info or {}).get("gp_acquisition", {}) or {})
+        return (
+            len(acq_method) > 0 and isinstance(acq_method[0], str) and
+            acq_method[0].lower() == "nora"
+        )
 
     @classmethod
     def get_desc(cls, info=None):
-        return ("GPry: a package for Bayesian inference of expensive likelihoods "
-                r"with Gaussian Processes \cite{Gammal:2022eob}" +
-                (", using the NORA acquisition approach \cite{Torrado:2023cbj}."
-                 if cls.is_nora(info) else "."))
+        nora_string = (
+            r"using the NORA parallelised acquisition approach \cite{Torrado:2023cbj}"
+        )
+        if info is None:
+            # Unknown case (no info passed)
+            nora_string = f" [(if gp_acquisition: NORA) {nora_string}]"
+        else:
+            nora_string = " " + nora_string if cls.is_nora(info) else ""
+        return (
+            "GPry: a package for Bayesian inference of expensive likelihoods "
+            r"with Gaussian Processes \cite{Gammal:2022eob}" + nora_string + "."
+        )
 
     @classmethod
     def get_bibtex(cls):
@@ -276,6 +350,8 @@ class CobayaSampler(Sampler):
                 primaryClass = "astro-ph.CO",
                 month = "11",
                 year = "2022"
+
+            # Cite only if using NORA as gp_acquisition (see desc.)
             @article{Torrado:2023cbj,
                 author = {Torrado, Jes\'us and Sch\"oneberg, Nils and Gammal, Jonas El},
                 title = "{Parallelized Acquisition for Active Learning using Monte Carlo Sampling}",
