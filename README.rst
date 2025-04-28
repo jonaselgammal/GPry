@@ -68,6 +68,7 @@ What may not work so well:
 - Highly multimodal posteriors, especially if the separation between modes is large.
 
 - Highly non-Gaussian posteriors, that would not be well modelled by orthogonal constant correlation lengths.
+
 **GPry is under active developing, in order to mitigate some of those issues, so look out for new versions!**
 
 
@@ -86,3 +87,8 @@ If you use GPry, please cite the following papers:
 
 - `arXiv:2211.02045 <https://arxiv.org/abs/2211.02045>`_ for the core algorithm.
 - `arXiv:2305.19267 <https://arxiv.org/abs/2305.19267>`_ for the NORA Nested-Sampling acquisition engine.
+
+Papers applying GPry
+^^^^^^^^^^^^^^^^^^^^
+
+- `arXiv:2503.21871 <https://arxiv.org/abs/2503.21871>`_: astrophysical resolvable gravitational wave sources with the LISA survey (inference forecasts).

@@ -40,7 +40,7 @@ In order to install MPI in a Debian-like system, do:
 
    $ sudo apt install openmpi-bin libopenmpi-dev
 
-To get the MPI bindings, install the ``mpi4py`` package with ``pip``.
+To get the MPI Python bindings, install the ``mpi4py`` package with ``pip``.
 
 If successful, you should be able to run the following command and get ``MPI is working`` as an output:
 
@@ -52,12 +52,12 @@ If successful, you should be able to run the following command and get ``MPI is 
 Installing Nested Samplers
 --------------------------
 
-In order to use the highly parallelizable and more exploratory NORA acquisition engine [TODO: add reference], you will need to install one of the following nested samplers:
+In order to use the highly parallelizable and more exploratory :ref:`NORA acquisition engine <acq_nora>`, you will need to install one of the following nested samplers:
 
 - `PolyChord <https://github.com/PolyChord/PolyChordLite>`_: it is the preferred option, since in combination with MPI it is very fast. To install it, follow the instructions at `https://github.com/PolyChord/PolyChordLite <https://github.com/PolyChord/PolyChordLite>`_. Try the MPI example mentioned there to make sure it works.
 
-- `UltraNest <https://ultranest.readthedocs.io>`_: it is the default of PolyChord is not present. It is slower but easier to install: simply ``pip install ultranest``. It does take advantage of MPI parallelization.
+- `UltraNest <https://ultranest.readthedocs.io>`_: it is the fallback nested sampler if PolyChord is not present. It is slower but easier to install: simply ``$ pip install ultranest``. It does take advantage of MPI parallelization.
 
-- `nessai <https://nessai.readthedocs.io>`_: [EXPERIMENTAL SUPPORT] this sampler uses ML to increase efficiency in posteriors with non-linear degeneracies, but cannot take advantage of MPI parallelisation. To install it, follow the instructions at `https://nessai.readthedocs.io/en/latest/installation.html <https://nessai.readthedocs.io/en/latest/installation.html>`_.
+- `nessai <https://nessai.readthedocs.io>`_: [EXPERIMENTAL SUPPORT] this sampler uses ML to increase efficiency in posteriors with non-linear degeneracies, but cannot take advantage of MPI parallelisation. To install it, follow `these instructions <https://nessai.readthedocs.io/en/latest/installation.html>`_.
 
-To check that any of the three have been correctly installed, check that the following command does not throw an error: ``$ python -c "import SAMPLER"``, replacing ``SAMPLER`` with ``pypolychord``, ``ultranest``, ``nessai``.
+To check that any of the three have been correctly installed, check that the following command does not throw an error: ``$ python -c "import SAMPLER"``, replacing ``SAMPLER`` with ``pypolychord``, ``ultranest`` or ``nessai``.

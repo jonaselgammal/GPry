@@ -25,6 +25,7 @@ Contents:
    running
    initialisation
    gpr
+   gp_acquisition
    convergence
    running_cobaya
    callback
