@@ -21,6 +21,10 @@ from gpry.tools import (
 )
 
 
+# Helper for PolyChord, that needs a scalar-returning likelihood
+ensure_scalar = lambda x: x[0] if hasattr(x, "__len__") else x
+
+
 class NestedSamplerNotInstalledError(Exception):
     """
     Exception to be raised at initialization of any of the interfaces if the NS failed to
@@ -187,7 +191,7 @@ class InterfacePolyChord(NSInterface):
         sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
             self.last_polychord_result = self.globals["run_polychord"](
-                logp_func_wrapped,
+                lambda X: (ensure_scalar(logp_func_wrapped(X)), []),
                 nDims=self.dim,
                 nDerived=0,
                 settings=self.polychord_settings,
@@ -356,7 +360,7 @@ class InterfaceNessai(NSInterface):
                     points = np.array(
                         [[x[i][p] for p in self.names] for i in range(x.size)]
                     )
-                return self.log_prior_volume + logp_func(points)
+                return logp_func(points)
 
         # pylint: disable=consider-using-with
         self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name

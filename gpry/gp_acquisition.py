@@ -758,13 +758,6 @@ class NORA(GenericGPAcquisition):
         return X, None, None, None
 
     def _do_MC_sample_polychord(self, gpr, bounds=None, rng=None):
-        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
-        def logp(X):
-            """
-            Returns the predicted value at a given point (-inf if prior=0).
-            """
-            return gpr.predict(np.array([X]), return_std=False, validate=False)[0], []
-
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
@@ -774,7 +767,7 @@ class NORA(GenericGPAcquisition):
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
-            logp,
+            lambda X: gpr.predict(np.atleast_2d(X), return_std=False, validate=False)[0],
             out_dir=self._get_output_folder(),
             keep_all=False,
             seed=seed,
@@ -1060,8 +1053,10 @@ class NORA(GenericGPAcquisition):
         this_X, this_y, this_sigma_y, this_acq = \
             self._split_and_compute_acq(X_mc, y_mc, sigma_y_mc)
         if mpi.is_main_process:
-            what_we_did = ("Obtained new MC sample" if mc_sample_this_time
-                           else "Re-evaluated previous MC sample")
+            what_we_did = (
+                f"Obtained new MC sample with {self.sampler}" if mc_sample_this_time
+                else "Re-evaluated previous MC sample"
+            )
             self.log(
                 f"({(time()-start_sample):.2g} sec) {what_we_did}")
         # Rank to get best points:
@@ -1078,7 +1073,7 @@ class NORA(GenericGPAcquisition):
         for method, merge_method in [
                 # ("bulk", "bulk"),
                 # ("bulk", "single sort acq"),
-                ("single sort acq", "bulk"), # seems to be the fastest
+                ("single sort acq", "bulk"),  # seems to be the fastest
                 # ("bulk", "single sort y"),
                 # ("single sort acq", "single sort acq"),
                 # ("single sort y", "bulk"),

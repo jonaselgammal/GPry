@@ -941,7 +941,7 @@ class Runner():
                         self.log(
                             f"[CONVERGENCE] - {cc.__class__.__name__} "
                             f"[{cc.convergence_policy}]: {cc.last_value:.2g} "
-                            "(limit {cc.limit:.2g})",
+                            f"(limit {cc.limit:.2g})",
                             level=2
                         )
             mpi.sync_processes()
