@@ -49,6 +49,8 @@ If successful, you should be able to run the following command and get ``MPI is 
    $ mpirun -n 2 python -c "exec('from mpi4py import MPI\nif MPI.COMM_WORLD.Get_rank() == 1: print(\"MPI is working\")')"
 
 
+.. _installing_nested_samplers:
+
 Installing Nested Samplers
 --------------------------
 

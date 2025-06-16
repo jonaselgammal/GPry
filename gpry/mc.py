@@ -5,6 +5,7 @@ Functions to interface Cobaya and GetDist for generation and processing of MC sa
 import os
 import warnings
 import logging
+import tempfile
 from copy import deepcopy
 
 import numpy as np
@@ -14,7 +15,7 @@ from getdist.gaussian_mixtures import GaussianND
 from gpry import mpi, check_cobaya_installed
 from gpry.gpr import GaussianProcessRegressor
 from gpry.tools import generic_params_names, is_valid_covmat
-from gpry.io import ensure_gpr
+from gpry.io import ensure_gpr, create_path
 import gpry.ns_interfaces as nsint
 
 # Keys and plot labels for the MC samples dict
@@ -188,11 +189,11 @@ def mc_sample_from_gp_cobaya(
 
     Parameters
     ----------
-    gpr : GaussianProcessRegressor, which has been fit to data and returned from
-        the ``run`` function.
-        Alternatively a string containing a path with the
-        location of a saved GP run (checkpoint) can be provided (the same path
-        that was used to save the checkpoint in the ``run`` function).
+    gpr : GaussianProcessRegressor, which has been fit to data and returned from the
+        ``run`` function.
+        Alternatively a string containing a path with the location of a saved GP run
+        (checkpoint) can be provided (the same path that was used to save the checkpoint
+        in the ``run`` function).
 
     bounds : List of boundaries (lower,upper), optional
         By default it reads them from the GP regressor.
@@ -211,29 +212,27 @@ def mc_sample_from_gp_cobaya(
         Dictionary of options to be passed to the sampler (see Cobaya documentation for
         the interface of that sampler).
 
+    covmat: array, optional
+        Approximate covariance matrix of the posterior to be used e.g. for the proposal
+        distribution of an MCMC run.
+
+    covmat_params: list of str, optional
+        List of parameter names for the rows and columns of the passed ``covmat``, if
+        different from ``params``, or in different order.
+
     output: path, optional
         The path where the resulting Monte Carlo sample shall be stored.
 
     run: bool, default: True
         Whether to run the sampler. If ``False``, returns just an initialised sampler.
 
-    resume: bool, optional (default=False)
-        Whether to resume from existing output files (True) or force overwrite (False)
-
-    acquisition: GPAcquisition, optional
-        The acquisition engine instance that has been used to fit the GP. This is
-        used to extract the covariance matrix if it is available from the
-        GPAcquisition class.
-
-    convergence: Convergence_criterion, optional
-        The convergence criterion that has been used to fit the GP. This is
-        used to extract the covariance matrix if it is available from the
-        ConvergenceCriterion class.
-
     verbose: int (default 3)
         Verbosity level, similarly valued to that of the Runner, e.g. 3 indicates cobaya's
         'info' level, 4 the 'debug' level, and lower-than-three values print only warnings
         and errors.
+
+    resume: bool, optional (default=False)
+        Whether to resume from existing output files (True) or force overwrite (False)
 
     Returns
     -------
@@ -329,7 +328,7 @@ def mc_sample_from_gp_ns(
     gpr,
     bounds=None,
     params=None,
-    sampler="mcmc",
+    sampler=None,
     sampler_options=None,
     output=None,
     run=True,
@@ -340,14 +339,17 @@ def mc_sample_from_gp_ns(
 
     Parameters
     ----------
-    gpr : GaussianProcessRegressor, which has been fit to data and returned from
-        the ``run`` function.
-        Alternatively a string containing a path with the
-        location of a saved GP run (checkpoint) can be provided (the same path
-        that was used to save the checkpoint in the ``run`` function).
+    gpr : GaussianProcessRegressor, which has been fit to data and returned from the
+        ``run`` function.
+        Alternatively a string containing a path with the location of a saved GP run
+        (checkpoint) can be provided (the same path that was used to save the checkpoint
+        in the ``run`` function).
 
     bounds : List of boundaries (lower,upper), optional
         By default it reads them from the GP regressor.
+
+    params : List of parameter strings, optional
+        By default it uses some dummy strings.
 
     sampler : string, optional
         Nested sampler to be used. If undefined, uses PolyChord if available, otherwise
@@ -369,7 +371,8 @@ def mc_sample_from_gp_ns(
 
     Returns
     -------
-    (X_MC, y_MC, w_MC)
+    (X_MC, y_MC, w_MC) : arrays of samples parameters, surrogate posteriors and weights
+                         (None if equal weights).
     """
     # Prepare GPR
     _, gpr, _, _, _, _ = ensure_gpr(gpr)
@@ -421,11 +424,34 @@ def mc_sample_from_gp_ns(
     if not run:
         return sampler
     # Run sampler
-    X_MC, y_MC, w_MC = sampler.run(
-        logp,
-        param_names=params,
-        out_dir=output,
-    )
+    out_dir_raw = tempfile.TemporaryDirectory().name + "/"  # make sure it's read as a dir
+    X_MC, y_MC, w_MC = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
+    # Delete the "raw" output and write the unified-format one
+    sampler.delete_output()
+    if output is not None and mpi.is_main_process:
+        # Prepare file
+        base_dir, file_name = os.path.split(output)
+        if not base_dir:
+            base_dir = os.path.curdir
+        base_dir = os.path.abspath(base_dir)
+        create_path(base_dir, verbose=False)
+        if file_name == "":
+            file_name = "mc_samples.txt"
+        file_root, file_ext = os.path.splitext(file_name)
+        if not file_ext:
+            file_ext = ".txt"
+        output = os.path.abspath(os.path.join(base_dir, file_root + file_ext))
+        # Write file
+        if params is None:
+            params = generic_params_names(X_mc.shape[1])
+        w_MC_write = w_MC if w_MC is not None else np.ones(shape=(1, len(y_MC)))
+        np.savetxt(
+            output,
+            np.concatenate(
+                [np.atleast_2d(w_MC_write), np.atleast_2d(-y_MC), X_MC.T]
+            ).T,
+            header="w minuslogp " + " ".join(params),
+        )
     return X_MC, y_MC, w_MC
 
 

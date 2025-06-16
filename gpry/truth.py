@@ -4,11 +4,17 @@ Module containing the class holding the true log-posterior and associated parame
 
 from warnings import warn
 from typing import Sequence, Mapping
+from copy import deepcopy
 
 import numpy as np
 
 from gpry import check_cobaya_installed
-from gpry.tools import check_and_return_bounds, generic_params_names, is_in_bounds, wrap_likelihood
+from gpry.tools import (
+    check_and_return_bounds,
+    generic_params_names,
+    is_in_bounds,
+    wrap_likelihood,
+)
 
 
 def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
@@ -40,6 +46,7 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
             "`loglike` seems not to be a callable function. If attempting to pass"
             " a Cobaya model, install Cobaya first: python -m pip install cobaya"
         )
+
 
 class Truth:
     """
@@ -130,7 +137,7 @@ class Truth:
         """
         if not is_in_bounds(X, self.prior_bounds, check_shape=False):
             return -np.inf
-        return -1. * self.log_prior_volume
+        return -1.0 * self.log_prior_volume
 
     def loglike(self, X):
         """
@@ -170,6 +177,7 @@ class Truth:
                 else dict(zip(self.params, self.labels))
             ),
         }
+
 
 class TruthCobaya(Truth):
     """

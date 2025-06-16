@@ -9,6 +9,7 @@ from copy import deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 from gpry import mpi
@@ -277,6 +278,11 @@ class Runner():
         self.old_gpr, self.new_X, self.new_y, self.y_pred = None, None, None, None
         self.mean, self.cov = None, None
         # Placeholders for the final MC sample
+        self._last_mc_bounds = None
+        self._last_mc_sampler_type = None
+        self._last_mc_samples = None
+        self._last_mc_cobaya_info = None
+        self._last_mc_cobaya_sampler = None
         # Placeholders for fiducial quantities
         self.fiducial_X = None
         self.fiducial_logpost = None
@@ -591,7 +597,7 @@ class Runner():
         Always returns an array.
         """
         return self.gpr.predict(np.atleast_2d(X))
-    
+
     def logL(self, X):
         """
         Wrapper for the surrogate likelihood. Call with a point or a list of them.
@@ -611,6 +617,14 @@ class Runner():
         Always returns a scalar.
         """
         return self.truth.logp(X)
+
+    def logL_truth(self, X):
+        """
+        Wrapper for the true log-likelihood. Call with a single point.
+
+        Always returns a scalar.
+        """
+        return self.truth.loglike(X)
 
     def logpost_eval_and_report(self, X, level=None):
         """
@@ -1553,12 +1567,13 @@ class Runner():
         plt.close("all")
 
     def generate_mc_sample(
-            self, sampler="nested", output=None, add_options=None, resume=False
+            self, sampler="nested", add_options=None, output=None, resume=False
     ):
         """
-        Runs an MC process using `Cobaya <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
+        Runs an MC process using a nested sampler, or
+        `Cobaya <https://cobaya.readthedocs.io/en/latest/sampler.html>`_.
 
-        The result can be retrieved using the ``last_mc_samples`` method.
+        The result can be retrieved using the :meth:`run.Runner.last_mc_samples` method.
 
         Parameters
         ----------
@@ -1609,12 +1624,17 @@ class Runner():
         if self.gpr.trust_bounds is not None:
             self._last_mc_bounds = self.gpr.trust_bounds
         if sampler_name.lower() == "nested":
+            if resume:
+                warnings.warn(
+                    "Resuming not possible for nested sampler. Starting from scratch."
+                )
             if "nlive" not in sampler_options:
                 sampler_options["nlive"] = 50 * self.d
             self._last_mc_sampler_type = "nested"
             X_MC, y_MC, w_MC = mc.mc_sample_from_gp_ns(
                 self.gpr,
                 bounds=self._last_mc_bounds,
+                params=self.params,
                 sampler=None,
                 sampler_options=sampler_options,
                 output=output,
@@ -1664,14 +1684,26 @@ class Runner():
         self.update_mean_cov(use_mc_sample=self.last_mc_samples(copy=False))
         return self._last_mc_samples
 
-    def last_mc_samples(self, copy=True, as_getdist=False):
+    def last_mc_samples(self, copy=True, as_pandas=False, as_getdist=False):
         """
         Returns the last MC sample from the surrogate model as a dict with keys ``w``
         (weights), ``X``, ``logpost``, ``logprior`` and ``loglike``.
 
         If ``None`` is stored as weights, all samples should be assumed to have equal
         weight.
+
+        The MC samples can optionally be returned as a Pandas DataFrame or a GetDist
+        MCSamples.
         """
+        if as_pandas and as_getdist:
+            raise ValueError("Set only one of 'as_pandas' or 'as_getdist' to True.")
+        if as_pandas:
+            mc_dict = self.last_mc_samples(copy=copy)
+            if mc_dict["w"] is None:
+                mc_dict["w"] = np.ones(len(mc_dict[mc._name_logp]))
+            X = mc_dict.pop("X")
+            mc_dict.update(dict(zip(self.truth.params, X.T)))
+            return pd.DataFrame.from_dict(mc_dict)
         if as_getdist:
             return mc.samples_dict_to_getdist(
                 self.last_mc_samples(copy=False, as_getdist=False),

@@ -4,6 +4,7 @@ Introductory example to using GPry
 
 ## Step 1: Setting up a likelihood function
 
+import os
 import numpy as np
 from scipy.stats import multivariate_normal
 
@@ -25,17 +26,30 @@ runner = Runner(logLkl, bounds, checkpoint=checkpoint, load_checkpoint="overwrit
 ## Step 3: Running the active learning loop
 runner.run()
 
-## Step 4: Running a Monte Carlo sampler on the surrogate model
-runner.generate_mc_sample()
+## Step 4: Monte Carlo samples from the surrogate model
 
-## Bonus: Plotting the results with GetDist
+# Retrieve samples generated for convergence check:
+
+mc_samples_dict = runner.last_mc_samples(as_pandas=True)
+print(mc_samples_dict)
+
+# To generate new ones:
+
+runner.generate_mc_sample(
+    # Example args for denser samples
+    # sampler={"nested": {"nlive": "25d", "num_repeats": "10d"}}
+)
+
+# To plot the last MC samples:
+
 runner.plot_mc()
 
 ### Bonus: Getting some extra insights
+
 runner.plot_progress()
 
 ## Bonus Bonus: Validation
-from getdist import MCSamples
-samples_truth = MCSamples(samples=rv.rvs(size=10000), names=["x_1", "x_2"])
 
-runner.plot_mc(add_samples={"Fiducial": samples_truth})
+truth_samples = rv.rvs(size=10000)
+runner.set_fiducial_MC(truth_samples)
+runner.plot_mc(output=os.path.join(runner.plots_path, "comparison_triangle.png"))

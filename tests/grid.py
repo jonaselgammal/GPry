@@ -100,7 +100,7 @@ def callback(runner):
     true_cov = likelihood_generator.cov
     paramnames = list(runner.model.parameterization.sampled_params())
     mc_sample = runner.generate_mc_sample(
-        sampler="mcmc", add_options={"covmat": true_cov, "covmat_params": paramnames},
+        sampler={"mcmc": {"covmat": true_cov, "covmat_params": paramnames}},
         output=False)
     mc_mean = mc_sample.mean()
     mc_cov = mc_sample.cov()

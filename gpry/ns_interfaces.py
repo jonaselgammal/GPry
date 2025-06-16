@@ -18,6 +18,7 @@ from gpry.tools import (
     generic_params_names,
     remove_0_weight_samples,
     check_and_return_bounds,
+    get_Xnumber,
 )
 
 
@@ -64,10 +65,38 @@ class NSInterface(ABC):
         """
 
     @abstractmethod
-    def delete_output(self):
+    def delete_output(self, out_dir=None):
         """
-        Deletes the sampler output.
+        Deletes the last sampler output.
+
+        If ``out_dir`` specified, deletes the one stored there instead.
         """
+
+    @staticmethod
+    def process_out_dir(out_dir, default_prefix="ns_samples", random_if_undefined=True):
+        """
+        Given an output root ``out_dir`` as ``folder/`` or ``folder/prefix``,
+        returns separately the folder path and the file name prefix.
+
+        If ``random_if_undefined`` is True (default), it returns a random temp folder.
+        Otherwise it raises ``ValueError``.
+        """
+        if out_dir is None:
+            if random_if_undefined:
+                # pylint: disable=consider-using-with
+                return tempfile.TemporaryDirectory().name, default_prefix
+            raise ValueError(
+                "No output root passed. Use ``random_if_undefined=True`` to generate a "
+                "random one."
+            )
+        base_dir, file_root = os.path.split(out_dir)
+        # If no slash in there, interpret as folder (since kwarg is 'out_dir')
+        if not base_dir:
+            base_dir, file_root = file_root, ""
+        base_dir = os.path.abspath(base_dir)
+        if file_root == "":
+            file_root = default_prefix
+        return base_dir, file_root
 
 
 class InterfacePolyChord(NSInterface):
@@ -133,6 +162,8 @@ class InterfacePolyChord(NSInterface):
         known = ["nlive", "num_repeats", "precision_criterion", "nprior", "max_ncalls"]
         for p in known:
             val = kwargs.pop(p, None)
+            if val is not None and p in ["nlive", "num_repeats", "nprior", "max_ncalls"]:
+                val = get_Xnumber(val, "d", self.dim, int, p)
             if val is not None:
                 setattr(self.polychord_settings, p, val)
         if kwargs:
@@ -149,7 +180,6 @@ class InterfacePolyChord(NSInterface):
         # only for NORA, not at init!!! (true like)
         #        # More efficient for const-eval-speed GP's (not very significant)
         #        self.polychord_settings.synchronous = False
-
         self.X_all, self.y_all = None, None
         self.X_MC, self.y_MC, self.w_MC = None, None, None
         if keep_all:
@@ -167,18 +197,7 @@ class InterfacePolyChord(NSInterface):
             logp_func_wrapped = logp_func
         # Configure folders and settings
         if mpi.is_main_process:
-            if out_dir is None:
-                # pylint: disable=consider-using-with
-                base_dir = tempfile.TemporaryDirectory().name
-                file_root = ""
-            else:
-                base_dir, file_root = os.path.split(out_dir)
-                # If no slash in there, interpret as folder (since kwarg is 'out_dir')
-                if not base_dir:
-                    base_dir, file_root = file_root, ""
-                base_dir = os.path.abspath(base_dir)
-            if file_root == "":
-                file_root = "ns_samples"
+            base_dir, file_root = self.process_out_dir(out_dir, random_if_undefined=True)
             self.polychord_settings.base_dir = base_dir
             self.polychord_settings.file_root = file_root
         # Set seed (only that of rank 0 is used, and incremented internally by PolyChord)
@@ -209,11 +228,8 @@ class InterfacePolyChord(NSInterface):
         if mpi.is_main_process:
             if param_names is None:
                 param_names = list(zip(*(2 * [generic_params_names(self.dim)])))
-                # returns [('x_1', 'x_1'), ('x_2', 'x_2'), ...]
-            else:
-                no_labels = len(param_names[0]) == 1
-                if no_labels:
-                    param_names = [(p, p) for p in param_names]
+            elif isinstance(param_names[0], str):  # no labels specified
+                param_names = [(p, p) for p in param_names]
             self.last_polychord_result.make_paramnames_files(param_names)
             samples_T = np.loadtxt(self.last_polychord_result.root + ".txt").T
             self.X_MC = samples_T[2:].T
@@ -222,35 +238,33 @@ class InterfacePolyChord(NSInterface):
             self.w_MC = samples_T[0]
         return self.X_MC, self.y_MC, self.w_MC
 
-    def delete_output(self):
+    def delete_output(self, out_dir=None):
         """
-        Deletes the PolyChord output.
+        Deletes the last PolyChord output.
+
+        If ``out_dir`` specified, deletes the one stored there instead.
         """
         if not mpi.is_main_process:
             return
-        if not self.polychord_settings.file_root:
+        if out_dir is None:
+            base_dir = self.polychord_settings.base_dir
+            file_root = self.polychord_settings.file_root
+        else:
+            base_dir, file_root = self.process_out_dir(out_dir, random_if_undefined=False)
+        if not file_root:
             # Delete whole folder
-            shutil.rmtree(self.polychord_settings.base_dir)
+            shutil.rmtree(base_dir)
             return
-        files = glob.glob(
-            os.path.join(
-                self.polychord_settings.base_dir, self.polychord_settings.file_root + ".*"
-            )
-        )
-        files += glob.glob(
-            os.path.join(
-                self.polychord_settings.base_dir,
-                "clusters",
-                self.polychord_settings.file_root + "_*",
-            )
-        )
+        files = glob.glob(os.path.join(base_dir, file_root + ".*"))
+        files += glob.glob(os.path.join(base_dir, file_root + "_*"))
+        files += glob.glob(os.path.join(base_dir, "clusters", file_root + "_*"))
         for f in files:
             if os.path.isfile(f):
                 os.remove(f)
         # Delete empty folders that may have been created by PolyChord
         try:
-            os.rmdir(os.path.join(self.polychord_settings.base_dir, "clusters"))
-            os.rmdir(self.polychord_settings.base_dir)
+            os.rmdir(os.path.join(base_dir, "clusters"))
+            os.rmdir(base_dir)
         except OSError:
             pass
 
@@ -310,7 +324,9 @@ class InterfaceNessai(NSInterface):
     def set_precision(self, nlive=None, precision_criterion=None, **kwargs):
         """Sets precision parameters for the nested sampler."""
         if nlive is not None:
-            self.precision_settings["nlive"] = nlive
+            self.precision_settings["nlive"] = get_Xnumber(
+                nlive, "d", self.dim, int, "nlive"
+            )
         if precision_criterion is not None:
             self.precision_settings["stopping"] = precision_criterion
         if kwargs:
@@ -362,8 +378,7 @@ class InterfaceNessai(NSInterface):
                     )
                 return logp_func(points)
 
-        # pylint: disable=consider-using-with
-        self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name
+        self.output, _ = self.process_out_dir(out_dir, random_if_undefined=True)
         with NumpyErrorHandling(all="ignore") as _:
             sampler = FlowSampler(
                 MyNessaiModel(self.bounds, param_names=param_names),
@@ -389,12 +404,19 @@ class InterfaceNessai(NSInterface):
         self.y_MC = posterior_samples[:, -2]
         return self.X_MC, self.y_MC, None
 
-    # WARNING: just deletes the last used folder!
-    def delete_output(self):
-        """Deletes the nessai output."""
+    def delete_output(self, out_dir=None):
+        """
+        Deletes last the nessai output.
+
+        If ``out_dir`` specified, deletes the one stored there instead.
+        """
         if not mpi.is_main_process:
             return
-        shutil.rmtree(self.output)
+        if out_dir is None:
+            output = self.output
+        else:
+            output, _ = self.process_out_dir(out_dir, random_if_undefined=False)
+        shutil.rmtree(output)
 
 
 class InterfaceUltraNest(NSInterface):
@@ -438,6 +460,7 @@ class InterfaceUltraNest(NSInterface):
 
     def set_verbosity(self, verbose):
         """Sets the verbosity of the sampler at run time."""
+        # TODO
         pass
 
     def set_prior(self, bounds):
@@ -452,11 +475,15 @@ class InterfaceUltraNest(NSInterface):
     ):
         """Sets precision parameters for the nested sampler."""
         if nlive is not None:
-            self.precision_settings["min_num_live_points"] = nlive
+            self.precision_settings["min_num_live_points"] = get_Xnumber(
+                nlive, "d", self.dim, int, "nlive"
+            )
         if precision_criterion is not None:
             self.precision_settings["frac_remain"] = precision_criterion
         if max_ncalls is not None:
-            self.precision_settings["max_ncalls"] = max_ncalls
+            self.precision_settings["max_ncalls"] = get_Xnumber(
+                max_ncalls, "d", self.dim, int, "max_ncalls"
+            )
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
@@ -472,7 +499,7 @@ class InterfaceUltraNest(NSInterface):
             raise NotImplementedError("keep_all=True not yet possible for ultranest.")
         # pylint: disable=consider-using-with
         if mpi.is_main_process:
-            self.output = os.path.abspath(out_dir) or tempfile.TemporaryDirectory().name
+            self.output, _ = self.process_out_dir(out_dir, random_if_undefined=True)
         sampler = self.globals["ReactiveNestedSampler"](
             param_names or generic_params_names(self.dim),
             logp_func,
@@ -493,11 +520,18 @@ class InterfaceUltraNest(NSInterface):
             self.w_MC, self.X_MC, self.y_MC = remove_0_weight_samples(w, X, y)
         return self.X_MC, self.y_MC, self.w_MC
 
-    # WARNING: just deletes the last used folder!
-    def delete_output(self):
-        """Deletes the nessai output."""
+    def delete_output(self, out_dir=None):
+        """
+        Deletes the last ultranest output.
+
+        If ``out_dir`` specified, deletes the one stored there instead.
+        """
         if not mpi.is_main_process:
             return
+        if out_dir is None:
+            output = self.output
+        else:
+            output, _ = self.process_out_dir(out_dir, random_if_undefined=False)
         shutil.rmtree(self.output)
 
 
