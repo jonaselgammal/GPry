@@ -9,7 +9,6 @@ Contents:
 
    installation
    intro_example
-   adv_example
 
 .. toctree::
    :caption: Digging deeper
