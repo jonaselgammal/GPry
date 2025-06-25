@@ -1,15 +1,15 @@
 How does GPry work
 ==================
 
-GPry creates an interpolating model of the log-posterior density function. It does so using the least amount of evaluations possible. The locations in parameter space of these evaluations are chosen sequentially, so that they maximise the amount of information that can be obtained by evaluating the posterior there.
+GPry creates an interpolating Gaussian Process (GP) model of the log-posterior density function. It does so using the least amount of evaluations possible. The locations in parameter space of these evaluations are chosen sequentially, so that they maximise the amount of information that can be obtained by evaluating the posterior there. This careful selection, together with the prior on the functional shape of the posterior that the GP imposes, helps GPry converge towards the true distribution using usually a factor :math:`\mathcal{O}(10^{-2})` of the evaluations needed by a traditional Monte Carlo sampler (such as MCMC or Nested Sampling).
 
-Here we explain some of the key aspects of the GPry algorithm. Most of what follows is not exclusive to GPry, but typical in active learning approaches.
+Here we explain some of the key aspects of the GPry algorithm. Unless otherwise stated, what follows is not exclusive to or pioneered by GPry, but typical in active learning approaches.
 
 
 Active learning of a Gaussian Process
 -------------------------------------
 
-GPry does not need any pre-training: it trains its surrogate model at run time by selecting optimal evaluation locations. The process of selecting these optimal locations based on current information is commonly known as **active learning**. It involves finding the maximum of an **acquisition function** measuring the amount of information about the true model expected to be gained by evaluating it at a given point. Acquisition functions must manage a good balance between **exploration** (getting an overall-good model of the true function) versus **exploitation** (prioritising a better modelling of the true function where its value is the highest). The default acquisition function used by GPry is described in [TODO: reference]
+GPry does not need any pre-training: it trains its surrogate model at run time by selecting optimal evaluation locations. The process of selecting these optimal locations based on current information is commonly known as **active learning**. It involves finding the maximum of an **acquisition function** measuring the amount of information about the true model expected to be gained by evaluating it at a given point. Acquisition functions must manage a good balance between **exploration** (getting an overall-good model of the true function) versus **exploitation** (prioritising a better modelling of the true function where its value is the highest). The default acquisition function used by GPry is described in section :doc:`acquisition_functions`. The automatic scaling with dimensionality of the balance between exploration and exploitation of this acquisition function is one of the novel aspects of GPry.
 
 You can see the way active learning works in the following figure: the top plots show the current GP model, and the bottom ones the value of the acquisition function (for this simple example, the GP standard deviation times the exponential of the double of the GP mean); every column is an iteration of the algorithm. Notice how at every step an evaluation of the true function at the previous maximum of the acquisition function has been added:
 
@@ -33,66 +33,59 @@ But there is one way to give up some effectiveness (total information gained) of
 
 Obviously, this procedure only makes sense up to a certain amount of iterations, or we risk assuming completely false information about the model. In GPry, we recommend at most a number of KB steps equals to the dimensionality of the problem (times some factor smaller or equal the number of expected posterior modes, if more than one).
 
-In the following figure, to be compared with the one above, we only evaluate the posterior every two steps, the red stars in being the temporary kriging-believer evaluations that will be assigned their true values in the next iteration.
+In the following figure, to be compared with the one above, we only evaluate the posterior every two steps, the red stars in being the temporary kriging-believer evaluations that will be assigned their true values in the next iteration. It performs slightly worse, but has the advantage that the true posterior can be evaluated in parallel in batches of two points.
 
 .. image:: images/active_learning_kb.png
    :width: 950
    :align: center
 
 
-Acquisition mechanism
----------------------
+The acquisition engine
+----------------------
 
-NORA vs BatchOpt
+It is implied above that the acquisition step of active learning involves a direct optimization of the acquisition function. GPry provides an acquisition engine that does precisely that, with some parallelization involved (see :ref:`batchoptimizer`).
+
+GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquistion). In it, the optimization of the acquisition function is swapped by a Nested Sampling exploration of the mean of the GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list. For more detail, see :ref:`nora`.
+
+This approach has a number of advantages:
+
+- NS is extremely efficiently parallelizable, and the raking of the NS sample too (but less efficiently). This greatly helps with the increase in dimensionality.
+- This approach provides a better exploration of the parameter space, since NS probes the tails of the (surrogate) posterior, whereas in a direct optimization approach the problem of proposing good starting points for optimization is not trivial, and diverges worse with dimensionality than NS does.
+- Since a sample from the mean GP is produced together with the candidates, better diagnosis and convergence tools are available at every iteration.
+
+This approach to parallelising the acquisition process itself is another of GPry's novel aspects.
 
 
-Hyperparameter fit
-------------------
+
+Fitting the surrogate model
+---------------------------
+
+Updating the surrogate model with the new evaluations entails two distinct operations:
+
+- Conditioning the Gaussian Process Regressor on the new, enlarged set of training samples.
+
+- Choosing the optimal hyperparameters for the kernel given the new information.
+
+The first one entails [TODO] and scales as :math:`N^2`, where :math:`N` is the number of training samples. The second one entails [TODO] and thus scales as :math:`N^3`. Because of this large scaling, and also because we do not expect the addition of new training samples to dramatically change the value of the optimal kernel hyperparameters, we do not perform the second operation (full hyperparameter fit) at every iteration (or we may decide doing a mild version of it, such as only optimizing once from the optimum of the last iteration, instead of re-running the optimizer from different points in hyperparameter space).
+
+.. note::
+
+   At this step of the algorithm we also re-fit the pre-processors for the input and output data, as well as, if used, the SVM aimed at classifying regions of the parameter space as either interesting (if the posterior value is expected to be significantly high) or not (if the posterior value is expected to be very or infinitely low), see section :ref:`svm`.
 
 
 Convergence check
 -----------------
 
+Since we do not have access in general to the target distribution, assuming GPry is converging towards the right target, we base our criteria on stability of the current surrogate model. By default, we use two criteria:
 
-MCMC from GP
-------------
+- That we do not get any more *surprises* when evaluating the true posterior at the proposal optimal locations, by comparing the obtained value with the mean GP prediction. See :class:`convergence.CorrectCounter`.
+
+- That the current surrogate model does not diverge significantly from that of the previous iteration. For this last one, we need a Monte Carlo sample of the surrogate posterior, which, if we are using NORA, we already have at hand at every iteration. See :class:`convergence.GaussianKL`.
+
+On top of these criteria, we check that the region where the GP is value highest corresponds to the location of the highest training samples, in case the GP is has temporarily high expectation value for a region with no training support, which is being explored at the moment. See :class:`convergence.TrainAlignment`. We use this as a necessary but not sufficient condition.
+
 
 The algorithm, putting everything together
 ------------------------------------------
 
-- Flow-chart
 
-
-From old README
-===============
-
-Unlike algorithms like MCMC which sample a posterior distribution GPry is designed to interpolate it using Gaussian Process regression and active sampling. This converges to the posterior shape requiring much fewer posterior samples than sampling algorithms because it sets a prior on the functional shape of the posterior.
-This doesn't mean that your posterior has to have a certain shape but rather that we assume that the posterior is a continuous, differentiable function which has a single characteristic length scale along each dimension (don't take this too literally though. It will still work with many likelihoods which do not have a single characteristic length-scale at all!)
-Furthermore GPry implements a number of tricks to mitigate some of the pitfalls associated with interpolating functions with GPs. The most important ones are:
-- A novel **acquisition function** for efficient sampling of the parameter space. This procedure is inspired by Bayesian optimization.
-- A batch acquisition algorithm which enables evaluating the likelihood/posterior in parallel using multiple cores. This is based on the **Kriging-believer** algorithm. A nice bonus is that it also decreases the time for fitting the GP's hyperparameters.
-- In order to prevent sampling regions which fall well outside the 2- &sigma; contours and account for the fact that many theory codes just return 0 far away from the fiducial values instead of computing the actual likelihood (which leads to - &infin; in the log-posterior) we shrink the prior using an **SVM classifier** to divide the parameter space into a "finite" region of interest and an "infinite" (uninteresting) region.
-- Instead of simply optimizing the acquisition function we created the **N**ested sampling **O**ptimization for **R**anked **A**cquisition algorithm for parallelizing the acquisition procedure and gaining robustness with regards to the highly multimodal nature of the acquisition function.
-
-
-What kinds of likelihoods/posteriors work with GPry?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The requirements that your likelihood/posterior has to fulfil in order for this algorithm to be efficient and give correct results are as follows:
-
-- The likelihood/posterior should be *smooth* (continuous) and you should know how smooth (how many times differentiable).
-(there can be a little noise, but it must be deterministic!!!!)
-
-- The likelihood/posterior evaluation should be *slow*. What slow means depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if your MCMC takes longer to converge than you're willing to wait you should give it a shot.
-- The likelihood should be *low-dimensional* (d<20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
-
-Where's the catch?
-^^^^^^^^^^^^^^^^^^
-
-Like every other sampler GPry isn't perfect and has some limitations:
-- GPs don't scale well with the number of training samples as training the GP involves inverting a kernel matrix. Unfortunately the computational complexity of this inversion scales with the number of training samples cubed. This means that as the number of training samples required grows, the overhead of the algorithm increases considerably.
-- While we tested GPry on mildly multimodal posterior distributions it is not a supported feature and should be used with caution. The algorithm is fairly greedy and can easily miss a mode, especially if the separation between modes is large.
-- The algorithm is generally robust towards "weirdly" shaped posterior distributions, however the structure of the kernel still assumes a single characteristic correlation length. This means that in very pathological cases (for instance a very wide distribution with a tiny spike in it) GPry will struggle to capture the mode correctly.
-- This code is novel and hasn't profited from years of user feedback and maintenance. Bugs can (and probably will) occur. If you find any please report them to us!
-
-**We are actively working on mitigating some of those issues and we will keep on developing this code so look out for new versions!**

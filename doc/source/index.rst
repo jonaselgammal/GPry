@@ -25,6 +25,7 @@ Contents:
    initialisation
    gpr
    gp_acquisition
+   acquisition_functions
    convergence
    mc_samples
    running_cobaya

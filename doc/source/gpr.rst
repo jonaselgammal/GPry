@@ -4,6 +4,8 @@ Gaussian Process Regressor
 The GPR model
 -------------
 
+.. _svm:
+
 The infinities classifier
 -------------------------
 

@@ -3,6 +3,11 @@ Gaussian Process Acquisition
 
 This module implements tools for active sampling with Gaussian Process surrogate models.
 
+.. _batchoptimizer:
+
+BatchOptimizer acquisition engine
+---------------------------------
+
 .. _nora:
 
 NORA acquisition engine
