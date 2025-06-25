@@ -55,6 +55,11 @@ This approach has a number of advantages:
 
 This approach to parallelising the acquisition process itself is another of GPry's novel aspects.
 
+.. image:: images/acquisition_procedure_nora.svg
+   :width: 850
+   :align: center
+
+This figure demonstrates the NORA acquisition approach with 4 kriging-believer steps. The top row shows from left to right: The true function to be emulated, the current GP mean prediction (not very close to the truth, since this is an early iteration), its standard deviation, and, rightmost, the nested samples (dead points) from PolyChord. The bottom row shows the acquisition function for the unconditioned GP on the left, and for the conditioned GPs in the three right panels (each conditioned to all samples added to its left). Blue circles are current training samples, pink circles are samples that have been accepted into the ranked pool (top), and red circles are each respective optimal sample for the conditioned GP (bottom) selected from among the nested samples. It is visible that even with very coarse sampling the locations of the nested samples still cover the regions of high acquisition function well, and the maxima found are close enough to the true maxima (green) at every step.
 
 
 Fitting the surrogate model
@@ -66,7 +71,7 @@ Updating the surrogate model with the new evaluations entails two distinct opera
 
 - Choosing the optimal hyperparameters for the kernel given the new information.
 
-The first one entails [TODO] and scales as :math:`N^2`, where :math:`N` is the number of training samples. The second one entails [TODO] and thus scales as :math:`N^3`. Because of this large scaling, and also because we do not expect the addition of new training samples to dramatically change the value of the optimal kernel hyperparameters, we do not perform the second operation (full hyperparameter fit) at every iteration (or we may decide doing a mild version of it, such as only optimizing once from the optimum of the last iteration, instead of re-running the optimizer from different points in hyperparameter space).
+Both operations entail a matrix inversion that scales as :math:`N^3`, where :math:`N` is the number of training samples. But in the first case, where hyperparameters stay constant, the inversion can be performed in a block-wise way, reducing the scaling down to :math:`N^2`. Because of the large scaling in the case in which kernel hyperparameters are optimised, and also because we do not expect the addition of new training samples to dramatically change the value of the optimal hyperparameters, we do not perform this operation at every iteration (or we may decide doing a mild version of it, such as only optimizing once from the optimum of the last iteration, instead of re-running the optimizer from different points in hyperparameter space).
 
 .. note::
 
@@ -85,7 +90,11 @@ Since we do not have access in general to the target distribution, assuming GPry
 On top of these criteria, we check that the region where the GP is value highest corresponds to the location of the highest training samples, in case the GP is has temporarily high expectation value for a region with no training support, which is being explored at the moment. See :class:`convergence.TrainAlignment`. We use this as a necessary but not sufficient condition.
 
 
-The algorithm, putting everything together
-------------------------------------------
+The full GPry algorithm
+-----------------------
 
+Here you can find a flow chart illustrating the full algorithm. More details about every step can be found in the following sections of the documentation.
 
+.. image:: images/gpry_flow.svg
+   :width: 350
+   :align: center
