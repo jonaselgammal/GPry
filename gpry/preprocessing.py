@@ -21,13 +21,12 @@ from numbers import Number
 from itertools import product
 
 import numpy as np
-from scipy.linalg import eigh, LinAlgError
+from scipy.linalg import eigh, LinAlgError  # type: ignore
 
 from gpry.tools import delta_logp_of_1d_nstd
 
 
 class DummyPreprocessor:
-
     is_linear = True
 
     @classmethod
@@ -278,7 +277,9 @@ class Whitening:
         warn_msg_end = "Keeping previous transfrom."
         try:
             self.mean, self.cov = self.compute_mean_cov(X, y)
-            self.transf_matrix, self.inv_transf_matrix = self.prepare_transform(self.cov)
+            self.transf_matrix, self.inv_transf_matrix = self.prepare_transform(
+                self.cov
+            )
         except ValueError as excpt:
             warnings.warn(warn_msg + str(excpt) + warn_msg_end)
         return self
@@ -353,7 +354,7 @@ class Normalize_bounds:
         self.bounds_max = bounds[:, 1]
         if np.any(self.bounds_min > self.bounds_max):
             raise ValueError(
-                "The bounds must be in dimension-wise order " "min->max, got \n" + bounds
+                "The bounds must be in dimension-wise order min->max, got \n" + bounds
             )
 
     def transform_bounds(self, bounds):

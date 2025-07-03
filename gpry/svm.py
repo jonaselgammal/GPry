@@ -13,7 +13,7 @@ log-posterior distribution are finite.
 
 import warnings
 import numpy as np
-from sklearn.svm import SVC
+from sklearn.svm import SVC  # type: ignore
 from gpry.tools import check_random_state
 
 

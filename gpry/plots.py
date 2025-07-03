@@ -12,9 +12,9 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore
 
-from gpry.gpr import GaussianProcessRegressor
+from gpry.surrogate import SurrogateModel
 from gpry.mc import process_gdsamples
 from gpry.tools import (
     credibility_of_nstd,
@@ -152,7 +152,7 @@ def prepare_slices_func(func, X_fiducial, bounds, indices=None, n=50):
                     "`X_fiducial` contained keys that are not argument names of the "
                     f"function? Err msg: {excpt}"
                 ) from excpt
-            except Exception as excpt:  # pylint: disable=broad-exception-caught
+            except Exception as excpt:
                 warnings.warn(
                     f"The function failed when called with arguments {x_arg}. Using NaN."
                     f"Err masg: {excpt}"
@@ -163,7 +163,13 @@ def prepare_slices_func(func, X_fiducial, bounds, indices=None, n=50):
 
 # NB: use this one in the future to reformulate the other ones: more generic
 def plot_slices_func(
-        func, X_fiducial, bounds, indices=None, n=50, fig_kwargs=None, labels=None,
+    func,
+    X_fiducial,
+    bounds,
+    indices=None,
+    n=50,
+    fig_kwargs=None,
+    labels=None,
 ):
     """
     Plot slices of the given function,
@@ -243,11 +249,11 @@ def plot_slices_func(
     return fig, axes
 
 
-def plot_slices(truth, gpr, acquisition, X=None, reference=None):
+def plot_slices(truth, surrogate, acquisition, X=None, reference=None):
     """
-    Plots slices along parameter coordinates for a series `X` of given points (the GPR
-    training set if not specified). For each coordinate, there is a slice per point,
-    leaving all coordinates of that point fixed except for the one being sliced.
+    Plots slices along parameter coordinates for a series `X` of given points (the
+    surrogate's training set if not specified). For each coordinate, there is a slice per
+    point, leaving all coordinates of that point fixed except for the one being sliced.
 
     Lines are coloured according to the value of the mean GP at points X.
 
@@ -264,10 +270,10 @@ def plot_slices(truth, gpr, acquisition, X=None, reference=None):
     )
     # Define X to plot
     if X is None:
-        X = gpr.X_train.copy()
-        y = gpr.y_train.copy()
+        X = surrogate.X_regress
+        y = surrogate.y_regress
     else:
-        y = gpr.predict(X)
+        y = surrogate.predict(X)
     min_y, max_y = min(y), max(y)
     norm_y = lambda y: (y - min_y) / (max_y - min_y)
     prior_bounds = truth.prior_bounds
@@ -283,10 +289,12 @@ def plot_slices(truth, gpr, acquisition, X=None, reference=None):
             cmap_norm = cmap(norm_y(y[j]))
             alpha = 1
             # TODO: could cut by half # of GP evals by reusing for acq func
-            axes[0, i].plot(Xs_j[:, i], gpr.predict(Xs_j), c=cmap_norm, alpha=alpha)
+            axes[0, i].plot(
+                Xs_j[:, i], surrogate.predict(Xs_j), c=cmap_norm, alpha=alpha
+            )
             axes[0, i].scatter(X[j][i], y[j], color=cmap_norm, alpha=alpha)
             axes[0, i].set_ylabel(r"$\log(p)$")
-            acq_values = acquisition(Xs_j, gpr)
+            acq_values = acquisition(Xs_j, surrogate)
             axes[1, i].plot(Xs_j[:, i], acq_values, c=cmap_norm, alpha=alpha)
             axes[1, i].set_ylabel(r"$\alpha(\mu,\sigma)$")
             label = truth.labels[i] if truth.labels is not None else p
@@ -298,19 +306,27 @@ def plot_slices(truth, gpr, acquisition, X=None, reference=None):
             for ax in axes[:, i]:
                 if len(bounds) == 5:
                     ax.axvspan(
-                        bounds[0], bounds[4], facecolor="tab:blue", alpha=0.2, zorder=-99
+                        bounds[0],
+                        bounds[4],
+                        facecolor="tab:blue",
+                        alpha=0.2,
+                        zorder=-99,
                     )
                     ax.axvspan(
-                        bounds[1], bounds[3], facecolor="tab:blue", alpha=0.2, zorder=-99
+                        bounds[1],
+                        bounds[3],
+                        facecolor="tab:blue",
+                        alpha=0.2,
+                        zorder=-99,
                     )
                 ax.axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
-def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
+def plot_slices_reference(truth, surrogate, X, plot_truth=True, reference=None):
     """
-    Plots slices of the gpr model and true log-posterior (if ``plot_truth=True``) along
-    parameter coordinates for a given point ``X``, leaving all coordinates of that point
-    fixed except for the one being sliced.
+    Plots slices of the surrogate model and true log-posterior (if ``plot_truth=True``)
+    along parameter coordinates for a given point ``X``, leaving all coordinates of that
+    point fixed except for the one being sliced.
     """
     params = truth.params
     fig, axes = plt.subplots(
@@ -327,36 +343,41 @@ def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
             raise ValueError("Needs at least a reference point or a reference sample.")
         # TODO: if reference given as a sample, take best point from it.
     X_array = np.array([X[p] for p in params])
-    # y_gpr_centre = gpr.predict(np.atleast_2d(X_array))[0]
+    # y_surrogate_centre = surrogate.predict(np.atleast_2d(X_array))[0]
     if plot_truth:
         y_truth_centre = truth.logp(X_array)
-    Xs_for_plots, ys_gpr_for_plot, sigmas_gpr_for_plot, ys_truth_for_plot = {}, {}, {}, {}
+    (
+        Xs_for_plots,
+        ys_surrogate_for_plot,
+        sigmas_surrogate_for_plot,
+        ys_truth_for_plot,
+    ) = ({}, {}, {}, {})
     for i, p in enumerate(params):
-        Xs_for_plots[p] = param_samples_for_slices([X_array], i, prior_bounds[i], n=200)[
-            0
-        ]
-        ys_gpr_for_plot[p], sigmas_gpr_for_plot[p] = gpr.predict(
+        Xs_for_plots[p] = param_samples_for_slices(
+            [X_array], i, prior_bounds[i], n=200
+        )[0]
+        ys_surrogate_for_plot[p], sigmas_surrogate_for_plot[p] = surrogate.predict(
             Xs_for_plots[p], return_std=True
         )
         if plot_truth:
             ys_truth_for_plot[p] = np.array([truth.logp(x) for x in Xs_for_plots[p]])
     # Training set referenced to X and div by X, for distance-based transparency
-    X_train_diff = (gpr.X_train - X_array) / X_array
+    X_train_diff = (surrogate.X_regress - X_array) / X_array
     if reference is not None:
         reference = _prepare_reference(reference, truth)
     for i, p in enumerate(params):
         axes[i].fill_between(
             Xs_for_plots[p][:, i],
-            ys_gpr_for_plot[p] - 2 * sigmas_gpr_for_plot[p],
-            ys_gpr_for_plot[p] + 2 * sigmas_gpr_for_plot[p],
+            ys_surrogate_for_plot[p] - 2 * sigmas_surrogate_for_plot[p],
+            ys_surrogate_for_plot[p] + 2 * sigmas_surrogate_for_plot[p],
             color="0.5",
             alpha=0.25,
             edgecolor="none",
         )
         axes[i].fill_between(
             Xs_for_plots[p][:, i],
-            ys_gpr_for_plot[p] - 1 * sigmas_gpr_for_plot[p],
-            ys_gpr_for_plot[p] + 1 * sigmas_gpr_for_plot[p],
+            ys_surrogate_for_plot[p] - 1 * sigmas_surrogate_for_plot[p],
+            ys_surrogate_for_plot[p] + 1 * sigmas_surrogate_for_plot[p],
             color="0.5",
             alpha=0.25,
             edgecolor="none",
@@ -370,10 +391,10 @@ def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
             label = "$" + label + "$"
         axes[i].set_xlabel(label)
         # If there is an infinities classifier, use if for the lower bound on y:
-        diff_min_logp = getattr(gpr, "diff_threshold", None)
+        diff_min_logp = getattr(surrogate, "diff_threshold", None)
         if diff_min_logp is not None:
             try:
-                max_y = max(ys_gpr_for_plot[p])
+                max_y = max(ys_surrogate_for_plot[p])
                 upper_y = max_y
                 if plot_truth:
                     upper_y = max(max_y, *ys_truth_for_plot[p])
@@ -383,16 +404,19 @@ def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
             except ValueError as e:
                 print(
                     f"ERROR when setting y-lims for '{p}': max(y) was "
-                    f"{max(ys_gpr_for_plot[p])}, diff_threshold was {diff_min_logp}, "
-                    f"lower_bound was {max(ys_gpr_for_plot[p]) - 1.05 * diff_min_logp}, "
+                    f"{max(ys_surrogate_for_plot[p])}, "
+                    f"diff_threshold was {diff_min_logp}, lower_bound was "
+                    f"{max(ys_surrogate_for_plot[p]) - 1.05 * diff_min_logp}, "
                     f"upper bound was {upper_y}, MSG was {e}"
                 )
         # Add training set
-        dists = np.sqrt(np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1))
+        dists = np.sqrt(
+            np.sum(np.power(np.delete(X_train_diff, i, axis=-1), 2), axis=-1)
+        )
         dists_relative = dists / max(dists)
         axes[i].scatter(
-            gpr.X_train[:, i],
-            gpr.y_train,
+            surrogate.X_regress[:, i],
+            surrogate.y_regress,
             marker=".",
             alpha=1 - dists_relative,
             zorder=-9,
@@ -410,16 +434,16 @@ def plot_slices_reference(truth, gpr, X, plot_truth=True, reference=None):
 
 
 def plot_corner_getdist(
-        mc_samples,
-        params=None,
-        bounds=None,
-        filled=None,
-        training=None,
-        training_highlight_last=False,
-        markers=None,
-        output=None,
-        output_dpi=200,
-        subplot_size=2,
+    mc_samples,
+    params=None,
+    bounds=None,
+    filled=None,
+    training=None,
+    training_highlight_last=False,
+    markers=None,
+    output=None,
+    output_dpi=200,
+    subplot_size=2,
 ):
     """
     Creates a corner plot the given MC samples, and optionally shows evaluation locations.
@@ -458,14 +482,15 @@ def plot_corner_getdist(
         Contours are filled by default when unspecified (including key missing for a
         passed sample). If it is a list, the same order as in ``mc_samples`` is assumed.
 
-    training : GaussianProcessRegressor, dict(str or tuple, GaussianProcessRegressor), optional
-        If a GPR is passed, it plots the training samples (including the discarded ones)
-        on top of the contours. Samples outside the axes ranges are not plotted.
-        The parameters of the GPR need to be assumed, since the GPR does not save names:
-        if a GPR is passed, the sampled parameters of the first MC sample will be used; if
-        a single-key dict is passed with a str as a key, it will used the parameter names
-        from the MC sample with that label; if the key is a tuple of strings, they will be
-        used as parameters
+    training : SurrogateModel, dict(str or tuple, SurrogateModel), optional
+        If a surrogate model is passed, it plots the training samples (including the
+        discarded ones) on top of the contours. Samples outside the axes ranges are not
+        plotted.
+        The parameters of the surrogate model need to be assumed, since the surrogate
+        model does not save names: if a surrogate is passed, the sampled parameters of the
+        first MC sample will be used; if a single-key dict is passed with a str as a key,
+        it will used the parameter names from the MC sample with that label; if the key is
+        a tuple of strings, they will be used as parameters
 
     subplot_size : float, default = 2
         Size of each subplot in the corner plot.
@@ -501,23 +526,27 @@ def plot_corner_getdist(
                     raise ValueError(
                         "`training` passed as dict, but key not found in mc_samples."
                     )
-                training_params = \
+                training_params = (
                     gdsamples_dict[training_key].getParamNames().getRunningNames()
-        elif isinstance(training, GaussianProcessRegressor):
+                )
+        elif isinstance(training, SurrogateModel):
             # Use first MC passed
-            training_params = \
+            training_params = (
                 list(gdsamples_dict.values())[0].getParamNames().getRunningNames()
+            )
         else:
-            raise TypeError("'training' is not a GaussianProcessRegressor instance.")
-    import getdist.plots as gdplt  # pylint: disable=import-outside-toplevel
+            raise TypeError("'training' is not a SurrogateModel instance.")
+    import getdist.plots as gdplt  # type: ignore
+
     gdplot = gdplt.get_subplot_plotter(subplot_size=subplot_size, auto_close=True)
-    gdplot.settings.line_styles = 'tab10'
-    gdplot.settings.solid_colors = 'tab10'
+    gdplot.settings.line_styles = "tab10"
+    gdplot.settings.solid_colors = "tab10"
     triang_args = [list(gdsamples_dict.values())]
     if params is not None:
         # GetDist failsafe: can only plot the params of the last sample in the input
-        at_most_params = \
+        at_most_params = (
             list(gdsamples_dict.values())[-1].getParamNames().getRunningNames()
+        )
         params = [p for p in params if p in at_most_params]
         triang_args.append(params)
     if isinstance(bounds, Mapping):
@@ -556,7 +585,7 @@ def plot_corner_getdist(
 def getdist_add_training(
     getdist_plot,
     params,
-    gpr,
+    surrogate,
     colormap="viridis",
     marker=".",
     marker_inf="x",
@@ -572,10 +601,10 @@ def getdist_add_training(
         Contains the marginalized contours and potentially other things.
 
     params : list(str)
-        The assumed parameter names for the GPR samples. Need to be a subset of the ones
-        plotted by the GetDistPlotter.
+        The assumed parameter names for the surrogate samples. Need to be a subset of the
+        ones plotted by the GetDistPlotter.
 
-    gpr : GaussianProcessRegressor
+    surrogate : SurrogateModel
         The trained GP Regressor containing the samples.
 
     colormap : matplotlib colormap, optional (default="viridis")
@@ -609,9 +638,9 @@ def getdist_add_training(
             bounds[j] = ax.get_ylim()
     # Now reduce the set of points to the ones within ranges
     # (needed to get good limits for the colorbar of the log-posterior)
-    Xs_finite = np.copy(gpr.X_train)
-    ys_finite = np.copy(gpr.y_train)
-    Xs_infinite = np.copy(gpr.X_train_infinite)
+    Xs_finite = surrogate.X_regress
+    ys_finite = surrogate.y_regress
+    Xs_infinite = surrogate.X_infinite
     for i, (mini, maxi) in enumerate(bounds):
         i_within_finite = np.argwhere(
             np.logical_or(mini < Xs_finite[:, i], Xs_finite[:, i] < maxi)
@@ -623,12 +652,14 @@ def getdist_add_training(
         )
         Xs_infinite = np.atleast_2d(np.squeeze(Xs_infinite[i_within_infinite]))
         if highlight_last:
-            Xs_last = gpr.last_appended[0]
+            Xs_last = surrogate.last_appended[0]
             i_within_last = np.argwhere(
                 np.logical_or(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
             )
             Xs_last = np.atleast_2d(np.squeeze(Xs_last[i_within_last]))
-    if len(Xs_finite) == 0 and len(Xs_infinite) == 0:  # no points within plotting ranges
+    if (
+        len(Xs_finite) == 0 and len(Xs_infinite) == 0
+    ):  # no points within plotting ranges
         return getdist_plot
     # Create colormap with appropriate limits
     cmap = matplotlib.colormaps[colormap]
@@ -643,7 +674,12 @@ def getdist_add_training(
         if len(Xs_infinite) > 0:
             points_infinite = Xs_infinite[:, [i, j]]
             ax.scatter(
-                *points_infinite.T, marker=marker_inf, s=20, c="k", alpha=0.3, zorder=-99
+                *points_infinite.T,
+                marker=marker_inf,
+                s=20,
+                c="k",
+                alpha=0.3,
+                zorder=-99,
             )
         if len(Xs_finite) > 0:
             points_finite = Xs_finite[:, [i, j]]
@@ -758,7 +794,7 @@ def _prepare_reference(
     """
     # Ensure it is a dict
     try:
-        from getdist import MCSamples  # pylint: disable=import-outside-toplevel
+        from getdist import MCSamples
 
         if isinstance(reference, MCSamples):
             means = reference.getMeans()
@@ -814,7 +850,7 @@ def _prepare_reference(
 
 def plot_trace(
     truth,
-    gpr,
+    surrogate,
     convergence_criterion,
     progress,
     colormap="viridis",
@@ -828,10 +864,10 @@ def plot_trace(
     Can take a reference sample or reference bounds (dict with parameters as keys and 5
     sorted bounds as values, or alternatively just a central value).
     """
-    X = gpr.X_train_all
-    y = gpr.y_train_all
-    if gpr.infinities_classifier is not None:
-        y_finite = gpr.infinities_classifier.y_finite
+    X = surrogate.X
+    y = surrogate.y
+    if surrogate.infinities_classifier is not None:
+        y_finite = surrogate.infinities_classifier.y_finite
     else:
         y_finite = np.full(shape=len(y), fill_value=True)
     if reference is not None:
@@ -886,7 +922,7 @@ def plot_trace(
     axes[1].grid(axis="y")
     axes[1].legend(loc="lower left", prop={"size": _plot_dist_fontsize})
     # Kernel scales
-    output_scale, length_scales = gpr.scales
+    output_scale, length_scales = surrogate.scales
     scales_kwargs = {
         "verticalalignment": "center",
         "horizontalalignment": "right",
@@ -907,7 +943,7 @@ def plot_trace(
     for i, p in enumerate(truth.params):
         label = truth.labels[i] if truth.labels else p
         ax = axes[i + 2]
-        if gpr.infinities_classifier is not None and sum(y_finite) < len(X):
+        if surrogate.infinities_classifier is not None and sum(y_finite) < len(X):
             ax.scatter(
                 i_eval,
                 X[:, i],
@@ -965,7 +1001,7 @@ def plot_distance_distribution(
 
     Parameters
     ----------
-    points: array-like, with shape ``(N_points, N_dimensions)``, or GPR instance
+    points: array-like, with shape ``(N_points, N_dimensions)``, or surrogate instance
         Points to be used for the histogram.
     mean: array-like, ``(N_dimensions)``.
         Mean of the distribution.
@@ -984,8 +1020,8 @@ def plot_distance_distribution(
     -------
     Tuple of current figure and axes ``(fig, ax)``.
     """
-    if isinstance(points, GaussianProcessRegressor):
-        points = points.X_train
+    if isinstance(points, SurrogateModel):
+        points = points.X_regress
     dim = np.atleast_2d(points).shape[1]
     radial_distances = gaussian_distance(points, mean, covmat)
     bins = list(range(0, int(np.ceil(np.max(radial_distances))) + 1))
@@ -1036,25 +1072,25 @@ def plot_distance_distribution(
     return (fig, ax)
 
 
-def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
+def _plot_2d_model_acquisition(surrogate, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
 
     If ``last_points`` passed, they are highlighted.
     """
-    if gpr.d != 2:
+    if surrogate.d != 2:
         warnings.warn("This plots are only possible in 2d.")
         return
     # TODO: option to restrict bounds to the min square containing traning samples,
     #       with some padding
-    bounds = gpr.bounds
+    bounds = surrogate.bounds
     x = np.linspace(bounds[0][0], bounds[0][1], res)
     y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y)
     xx = np.ascontiguousarray(np.vstack([X.reshape(X.size), Y.reshape(Y.size)]).T)
-    model_mean = gpr.predict(xx)
+    model_mean = surrogate.predict(xx)
     # TODO: maybe change this one below if __call__ method added to GP_acquisition
-    acq_value = acquisition(xx, gpr, eval_gradient=False)
+    acq_value = acquisition(xx, surrogate, eval_gradient=False)
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
@@ -1071,7 +1107,7 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+            *surrogate.X_regress.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
         )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
@@ -1095,25 +1131,27 @@ def _plot_2d_model_acquisition(gpr, acquisition, last_points=None, res=200):
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
 
 
-def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=200):
+def _plot_2d_model_acquisition_finite(
+    surrogate, acquisition, last_points=None, res=200
+):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
 
     If ``last_points`` passed, they are highlighted.
     """
-    if gpr.d != 2:
+    if surrogate.d != 2:
         warnings.warn("This plots are only possible in 2d.")
         return
     # TODO: option to restrict bounds to the min square containing traning samples,
     #       with some padding
-    bounds = gpr.bounds
+    bounds = surrogate.bounds
     x = np.linspace(bounds[0][0], bounds[0][1], res)
     y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y)
     xx = np.ascontiguousarray(np.vstack([X.reshape(X.size), Y.reshape(Y.size)]).T)
-    model_mean = gpr.predict(xx)
+    model_mean = surrogate.predict(xx)
     # TODO: maybe change this one below if __call__ method added to GP_acquisition
-    acq_value = acquisition(xx, gpr, eval_gradient=False)
+    acq_value = acquisition(xx, surrogate, eval_gradient=False)
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
@@ -1140,7 +1178,7 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+            *surrogate.X_regress.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
         )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
@@ -1164,30 +1202,34 @@ def _plot_2d_model_acquisition_finite(gpr, acquisition, last_points=None, res=20
     plt.subplots_adjust(left=0.1, right=0.9, bottom=0.15)
 
 
-def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
+def _plot_2d_model_acquisition_std(surrogate, acquisition, last_points=None, res=200):
     """
     Contour plots for model prediction and acquisition function value of a 2d model.
 
     If ``last_points`` passed, they are highlighted.
     """
-    if gpr.d != 2:
+    if surrogate.d != 2:
         warnings.warn("This plots are only possible in 2d.")
         return
     # TODO: option to restrict bounds to the min square containing traning samples,
     #       with some padding
-    bounds = gpr.bounds
+    bounds = surrogate.bounds
     x = np.linspace(bounds[0][0], bounds[0][1], res)
     y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y)
     xx = np.ascontiguousarray(np.vstack([X.reshape(X.size), Y.reshape(Y.size)]).T)
-    model_mean, model_std = gpr.predict(xx, return_std=True)
+    model_mean, model_std = surrogate.predict(xx, return_std=True)
     # TODO: maybe change this one below if __call__ method added to GP_acquisition
-    acq_value = acquisition(xx, gpr, eval_gradient=False)
+    acq_value = acquisition(xx, surrogate, eval_gradient=False)
     # maybe show the next max of acquisition
     acq_max = xx[np.argmax(acq_value)]
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
     cmap = [plt.get_cmap("magma"), plt.get_cmap("viridis"), plt.get_cmap("magma")]
-    label = ["Model mean (log-posterior)", "Acquisition function value", "Model std dev."]
+    label = [
+        "Model mean (log-posterior)",
+        "Acquisition function value",
+        "Model std dev.",
+    ]
     for i, Z in enumerate([model_mean, acq_value]):
         ax[i].set_title(label[i])
         # Boost the upper limit to avoid truncation errors.
@@ -1209,7 +1251,7 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
         # plt.gca().set_facecolor(cmap[i].colors[0])
         ax[i].contourf(X, Y, Z, levels, cmap=cm.get_cmap(cmap[i], 256), norm=norm)
         points = ax[i].scatter(
-            *gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+            *surrogate.X_regress.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
         )
         # Plot position of next best sample
         point_max = ax[i].scatter(*acq_max, marker="x", color="k")
@@ -1235,7 +1277,9 @@ def _plot_2d_model_acquisition_std(gpr, acquisition, last_points=None, res=200):
     norm = cm.colors.Normalize(vmax=max(levels), vmin=min(levels))
     ax[2].set_facecolor("grey")
     ax[2].contourf(X, Y, Z, levels, cmap=plt.get_cmap(cmap[2], 256), norm=norm)
-    points = ax[2].scatter(*gpr.X_train.T, edgecolors="deepskyblue", marker=r"$\bigcirc$")
+    points = ax[2].scatter(
+        *surrogate.X_regress.T, edgecolors="deepskyblue", marker=r"$\bigcirc$"
+    )
     # Plot position of next best sample
     point_max = ax[2].scatter(*acq_max, marker="x", color="k")
     if last_points is not None:

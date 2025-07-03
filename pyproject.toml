@@ -63,3 +63,10 @@ per-file-ignores = [
 ]
 max-line-length = 88
 count = true
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+
+[tool.ruff.lint]
+ignore = ['E731']

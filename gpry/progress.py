@@ -3,8 +3,10 @@ Classes for timing and progress tracking.
 """
 
 import time
+
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore
+
 from gpry import mpi
 
 
@@ -18,23 +20,25 @@ class Progress:
     _colnames = {
         "n_total": "number of training points at the start of the iteration",
         "n_finite": (
-            "number of finite-posterior training points " "at the start of the iteration"
+            "number of finite-posterior training points at the start of the iteration"
         ),
         "time_acquire": "time needed to acquire candidates for truth evaluation",
         "evals_acquire": (
-            "number of evaluations of the GP needed to acquire candidates "
+            "number of evaluations of the surrogate model needed to acquire candidates "
             "for truth evaluation"
         ),
         "time_truth": "time needed to evaluate the true model at the candidate points",
         "evals_truth": "number of evaluations of the true model",
-        "time_fit": "time of refitting of the GP model after adding new training points",
+        "time_fit": (
+            "time of refitting of the surrogate model after adding new training points"
+        ),
         "evals_fit": (
-            "number of evaluations of the GP during refitting after adding new"
-            "training points"
+            "number of evaluations of the surrogate model during refitting after adding "
+            "new training points"
         ),
         "time_convergence": "time needed to compute the convergence criterion",
         "evals_convergence": (
-            "number of evaluations of the GP needed to compute the "
+            "number of evaluations of the surrogate model needed to compute the "
             "convergence criterion"
         ),
         "convergence_crit_value": "value of the convergence criterion",
@@ -84,7 +88,7 @@ class Progress:
         self.data.iloc[-1, self.data.columns.get_loc("evals_truth")] = evals
 
     def add_fit(self, timing, evals):
-        """Adds timing and #evals during GP fitting."""
+        """Adds timing and #evals during surrogate model fitting."""
         self.data.iloc[-1, self.data.columns.get_loc("time_fit")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_fit")] = evals
 
@@ -102,8 +106,8 @@ class Progress:
     def mpi_sync(self):
         """
         When running in parallel, synchronises all individual instances by taking the
-        maximum times and numbers of GP evaluations where each process run an independent
-        step.
+        maximum times and numbers of surrogate model evaluations where each process run an
+        independent step.
 
         The number of truth evaluations in the present iteration is the individual process
         one, instead of the total number of new evaluations, in order to be consistent
@@ -172,7 +176,6 @@ class Progress:
         labels = labels[:: max(1, int(n_xticks / 10.0))]
         ax.set_xticks(xticks, labels=labels)
 
-    # pylint: disable=import-outside-toplevel,possibly-used-before-assignment
     def plot_timing(self, truth=True, show=False, save="progress_timing.png"):
         """
         Plots as stacked bars the timing of each part of each iteration.
@@ -192,7 +195,7 @@ class Progress:
         cols_labels = {
             "time_acquire": "Acquisition",
             "time_truth": "Truth",
-            "time_fit": "GP fit",
+            "time_fit": "Surrogate fit",
             "time_convergence": "Convergence crit.",
         }
         cols_colors = {
@@ -239,7 +242,6 @@ class Progress:
         plt.close()
 
 
-# pylint: disable=attribute-defined-outside-init
 class Timer:
     """Class for timing code within ``with`` block."""
 
@@ -257,28 +259,28 @@ class Timer:
 class TimerCounter(Timer):
     """
     Class for timing code within ``with`` block, and count number of evaluations of a
-    given GP model.
+    given surrogate model.
     """
 
-    def __init__(self, *gps):
-        """Takes the GP's whose evaluations will be counted."""
-        self.gps = gps  # save references for use at exit
+    def __init__(self, *surrs):
+        """Takes the surrogate models whose evaluations will be counted."""
+        self.surrs = surrs  # save references for use at exit
 
     def __enter__(self):
         """Saves initial wallclock time and number of evaluations."""
         super().__enter__()
-        self.init_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
+        self.init_eval = np.array([surr.n_eval for surr in self.surrs], dtype=int)
         self.init_eval_loglike = np.array(
-            [gp.n_eval_loglike for gp in self.gps], dtype=int
+            [surr.gpr.n_eval_loglike for surr in self.surrs], dtype=int
         )
         return self
 
     def __exit__(self, *args, **kwargs):
         """Saves final wallclock time and number of evaluations, and their differences."""
         super().__exit__()
-        self.final_eval = np.array([gp.n_eval for gp in self.gps], dtype=int)
+        self.final_eval = np.array([surr.n_eval for surr in self.surrs], dtype=int)
         self.evals = sum(self.final_eval - self.init_eval)
         self.final_eval_loglike = np.array(
-            [gp.n_eval_loglike for gp in self.gps], dtype=int
+            [surr.gpr.n_eval_loglike for surr in self.surrs], dtype=int
         )
         self.evals_loglike = sum(self.final_eval_loglike - self.init_eval_loglike)

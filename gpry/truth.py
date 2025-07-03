@@ -24,9 +24,8 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
     if callable(loglike):
         return Truth(loglike, bounds=bounds, ref_bounds=ref_bounds, params=params)
     elif check_cobaya_installed():
-        # pylint: disable=import-outside-toplevel
-        from cobaya.log import LoggedError
-        from cobaya.model import Model, get_model
+        from cobaya.log import LoggedError  # type: ignore
+        from cobaya.model import Model, get_model  # type: ignore
 
         if isinstance(loglike, Mapping):
             try:
@@ -37,7 +36,9 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
                     "initialise a Cobaya model."
                 ) from excpt
         if not isinstance(loglike, Model):
-            raise TypeError("'loglike' needs to be either a callable or a Cobaya model.")
+            raise TypeError(
+                "'loglike' needs to be either a callable or a Cobaya model."
+            )
         if bounds is not None or ref_bounds is not None or params is not None:
             warn("A Cobaya model was passed. Ignoring bounds and parameter names.")
         return TruthCobaya(loglike)
@@ -184,7 +185,6 @@ class TruthCobaya(Truth):
     Truth class wrapping a Cobaya model.
     """
 
-    # pylint: disable=super-init-not-called
     def __init__(self, model):
         self._cobaya_model = model
         self._prior_bounds = self._cobaya_model.prior.bounds(
