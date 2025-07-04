@@ -259,17 +259,19 @@ def check_candidates(surrogate, new_X, tol=1e-8):
     return in_training_set, duplicates
 
 
-def is_in_bounds(points, bounds, check_shape=False):
+def is_in_bounds(points, bounds, validate=False):
     """
     Checks if a point or set of points is within the given bounds.
 
     Parameters
     ----------
     points: numpy.ndarray
-        An (N, d) array of points to check
+        An (N, d) array of points to check. If validate=`True` it accepts a single point
+        too, either as a 1-d array (of d>=1) or a scalar (d=1), at the cost of some
+        overhead.
     bounds: numpy.ndarray
         An (d, 2) array of parameter bounds
-    check_shape : bool (default: False)
+    validate : bool (default: False)
         Whether to check for consistency of array shapes.
 
     Returns
@@ -277,8 +279,11 @@ def is_in_bounds(points, bounds, check_shape=False):
     numpy.ndarray:
         A boolean array of length N indicating whether each point is within the bounds.
     """
-    points = np.atleast_2d(points)
-    if check_shape:
+    if validate:
+        if not hasattr(points, "shape"):
+            points = np.array([[points]])
+        elif len(points.shape) == 1:
+            points = np.array([points])
         bounds = check_and_return_bounds(bounds)
         if bounds.shape[0] != points.shape[1]:
             raise ValueError(

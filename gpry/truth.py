@@ -134,21 +134,21 @@ class Truth:
 
     def logprior(self, X):
         """
-        Evaluates and returns the log-prior.
+        Evaluates and returns the log-prior for a single point X.
         """
-        if not is_in_bounds(X, self.prior_bounds, check_shape=False):
+        if not is_in_bounds([X], self.prior_bounds, validate=False):
             return -np.inf
         return -1.0 * self.log_prior_volume
 
     def loglike(self, X):
         """
-        Evaluates and returns the log-likelihood.
+        Evaluates and returns the log-likelihood for a single point X.
         """
         return self._loglike(X)
 
     def logp(self, X):
         """
-        Evaluates and returns the log-posterior.
+        Evaluates and returns the log-posterior for a single point X.
         """
         logpost = self.logprior(X)
         if logpost != -np.inf:

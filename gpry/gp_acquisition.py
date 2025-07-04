@@ -86,9 +86,9 @@ class GenericGPAcquisition:
                 f"specification. Got {acq_func}"
             )
 
-    def __call__(self, X, surrogate, eval_gradient=False):
+    def __call__(self, X, surrogate, eval_gradient=False, validate=True):
         """Returns the value of the acquision function at ``X`` given a ``surrogate``."""
-        return self.acq_func(X, surrogate, eval_gradient=eval_gradient)
+        return self.acq_func(X, surrogate, eval_gradient=eval_gradient, validate=validate)
 
     def multi_add(self, surrogate, n_points=1, bounds=None, rng=None):
         r"""Method to query multiple points where the objective function
@@ -339,10 +339,14 @@ class BatchOptimizer(GenericGPAcquisition):
                     X = self.preprocessing_X.inverse_transform(X)
 
                 if eval_gradient:
-                    acq, grad = self.acq_func(X, surrogate, eval_gradient=True)
+                    acq, grad = self.acq_func(
+                        X, surrogate, eval_gradient=True, validate=False
+                    )
                     return -1 * acq, -1 * grad
                 else:
-                    return -1 * self.acq_func(X, surrogate, eval_gradient=False)
+                    return -1 * self.acq_func(
+                        X, surrogate, eval_gradient=False, validate=False
+                    )
 
             self.obj_func = obj_func
 
@@ -358,7 +362,7 @@ class BatchOptimizer(GenericGPAcquisition):
             x0 = next(
                 X
                 for X in surrogate.X_regress[::-1]
-                if np.all(is_in_bounds(X, bounds, check_shape=False))
+                if np.all(is_in_bounds([X], bounds, validate=False))
             )
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
@@ -371,7 +375,7 @@ class BatchOptimizer(GenericGPAcquisition):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(rng=rng)
-                value = self.acq_func(x0, surrogate)
+                value = self.acq_func(x0, surrogate, validate=False)
                 if not np.isfinite(value):
                     continue
                 x0s[ifull] = x0
@@ -494,7 +498,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 acq_val = -1 * acq_X_main[max_pos]
                 X_opt = np.array([X_opt])
                 # Get the "lie" (prediction of the GP at X)
-                y_lie = surrogate_.predict(X_opt)
+                y_lie = surrogate_.predict(X_opt, validate=False)
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
                 if ipoint < n_points - 1:
@@ -928,7 +932,7 @@ class NORA(GenericGPAcquisition):
             self._X_mc_reweight = np.copy(self._X_mc)
             if bounds is not None:
                 # Keep points within new bounds (maybe none!)
-                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_shape=False)
+                i_within = is_in_bounds(self._X_mc_reweight, bounds, validate=False)
                 self._X_mc_reweight = self._X_mc_reweight[i_within]
                 # TODO: not handled: there could be 0 points within new bounds
         self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(

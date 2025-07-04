@@ -28,8 +28,8 @@ def check_in_bounds(get_method):
 
     def wrapper(self, *args, **kwargs):
         i = 0
-        x = np.nan
-        while not is_in_bounds(x, self.bounds, check_shape=False)[0]:
+        x = [np.nan]
+        while not is_in_bounds([x], self.bounds, validate=False)[0]:
             i += 1
             if not i % 1000:
                 warn(

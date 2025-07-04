@@ -286,9 +286,7 @@ class SurrogateModel:
         )
         self.noise_level = float(noise_level)  # at this point is a single number
         self.noise_level_ = None
-        if clip_factor < 1:
-            raise ValueError("'clip_factor' must be >= 1, or None for no clippling.")
-        self.clip_factor = clip_factor
+        self.clipper = Clipper(clip_factor)
         self.n_eval = 0
         self.verbose = verbose
         self.inf_value = np.inf
@@ -511,7 +509,7 @@ class SurrogateModel:
         Returns -inf (regularized if applicable) if not points have been added.
         """
         try:
-            return np.max(self._y)
+            return self._y.max()
         except ValueError:
             return self.minus_inf_value
 
@@ -918,7 +916,7 @@ class SurrogateModel:
             )
         # Apply the trust region to the *finite* points only (does nothing if not defined)
         self._i_regress[self._i_regress] &= self.trust_region.predict(
-            self._X[self._i_regress]
+            self._X[self._i_regress], validate=False
         )
         if fit_preprocessors:
             self.preprocessing_X.fit(self._X[self._i_regress], self._y[self._i_regress])
@@ -952,7 +950,7 @@ class SurrogateModel:
                 self.trust_region.fit(
                     self._X[self._i_regress], self._y[self._i_regress]
                 )
-                is_finite_predict &= self.trust_region.predict(self._X)
+                is_finite_predict &= self.trust_region.predict(self._X, validate=False)
                 assert np.array_equal(self._i_regress, is_finite_predict), (
                     "Infinities classifier miss-classified at least 1 point."
                 )
@@ -1096,11 +1094,13 @@ class SurrogateModel:
                 return_dict["std_grad"][finite]
             )
         # Upper clipping to avoid overshoots
-        if self.clip_factor is not None:
-            upper = self.clip_factor * max(self._y[self._i_regress]) - (
-                self.clip_factor - 1
-            ) * min(self._y[self._i_regress])
-            return_dict["mean"] = np.clip(return_dict["mean"], None, upper)
+        # The 'trivial' check avoids wasting computation in finding the y extremes
+        if not self.clipper.trivial:
+            return_dict["mean"] = self.clipper(
+                return_dict["mean"],
+                self._y[self._i_regress].min(),
+                self._y[self._i_regress].max(),
+            )
         if len(return_dict) == 1:
             return return_dict["mean"]
         return list(return_dict.values())
@@ -1186,6 +1186,27 @@ class SurrogateModel:
         std_ = self.gpr.predict_std(X_[finite], validate=validate)
         std[finite] = self.preprocessing_y.inverse_transform(std_)
         return std
+
+
+class Clipper:
+    """
+    Handles the upper clipping of the y-output of the regressor, as a factor of the
+    difference in its range.
+    """
+    def __init__(self, clip_factor):
+        if clip_factor is not None and clip_factor < 1:
+            raise ValueError("'clip_factor' must be >= 1, or None for no clippling.")
+        self.clip_factor = clip_factor
+
+    @property
+    def trivial(self):
+        return self.clip_factor is None
+
+    def __call__(self, y, y_min, y_max=None):
+        if self.trivial:
+            return y
+        upper = self.clip_factor * y_max - (self.clip_factor - 1) * y_min
+        return np.clip(y, None, upper)
 
 
 class TrustRegion:
@@ -1276,7 +1297,7 @@ class TrustRegion:
             use_X = np.empty(shape=(0, self.d))
             while len(use_X) < min(self.d, self.n_finite):
                 delta_y = delta_logp_of_1d_nstd(self.nstd, self.d)
-                use_X = X[np.where(max(y) - y < delta_y)]
+                use_X = X[np.where(y.max() - y < delta_y)]
                 nstd_ = nstd_ + 0.1
         self._trust_bounds = shrink_bounds(self._init_bounds, use_X, factor=self.factor)
 
@@ -1284,4 +1305,4 @@ class TrustRegion:
         """
         Returns ``True`` for locations inside the trust region, and ``False`` otherwise.
         """
-        return is_in_bounds(X, self._trust_bounds, check_shape=validate)
+        return is_in_bounds(X, self._trust_bounds, validate=validate)

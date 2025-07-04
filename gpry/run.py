@@ -273,6 +273,13 @@ class Runner:
             self.read_checkpoint(truth=self.truth)
             self._construct_options(self.options)  # needs to set additional attrs
         else:
+            # DEPRECATION BLOCK 04/07/25
+            if gpr is not None:
+                warnings.warn(
+                    "Argument 'gpr' will be deprecated soon in favor of 'surrogate'."
+                )
+                surrogate = gpr
+            # END OF DEPRECATION BLOCK
             self._construct_surrogate(surrogate)
             self._construct_gp_acquisition(gp_acquisition)
             self._construct_initial_proposer(initial_proposer)
@@ -1209,7 +1216,7 @@ class Runner:
                     while not X_in_bounds:
                         X = self.initial_proposer.get(rng=self.rng)
                         X_in_bounds = is_in_bounds(
-                            X, self.prior_bounds, check_shape=False
+                            [X], self.prior_bounds, validate=False
                         )[0]
                         proposer_tries += 1
                         if proposer_tries > 0 and proposer_tries > warn_multiple:
