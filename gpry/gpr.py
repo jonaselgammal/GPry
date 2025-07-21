@@ -21,180 +21,127 @@ GPR_CHOLESKY_LOWER = True
 
 class GaussianProcessRegressor(sk_GPR):
     r"""
-        Modified version of the GaussianProcessRegressor of sklearn.
+    Modified version of the GaussianProcessRegressor of sklearn.
 
-        The implementation is based on Algorithm 2.1 of Gaussian Processes
-        for Machine Learning (GPML) by Rasmussen and Williams.
+    The implementation is based on Algorithm 2.1 of Gaussian Processes
+    for Machine Learning (GPML) by Rasmussen and Williams.
 
-        This modified interface provides, in addition to the sklearn-GPR:
+    This modified interface provides, in addition to the sklearn-GPR:
 
-           * provides the method :meth:`append` which allows to append
-             additional data points to an already existing GPR. This is done either
-             by refitting the hyperparameters (theta) or alternatively by using the
-             Matrix inversion Lemma to keep the hyperparameters fixed.
-           * overwrites the (hidden) native deepcopy function. This enables copying
-             the GPR as well as the sampled points it contains.
+       * Re-implements the ``fit`` method to allow for more control in the noise (alpha)
+         update and the hyperparameter optimization.
+       * Implements derivative return values in the ``predict`` method, as well as a
+         ``predict_std`` method to return the standard deviation of the target only
+         (useful for acquisition).
+       * In the relevant methods, exposes flags to disable input data validation, for
+         an additional speed boost.
 
-        Parameters
-        ----------
-        kernel : kernel object, string, dict, optional (default: "RBF")
-            The kernel specifying the covariance function of the GP. If
-            "RBF"/"Matern" is passed, the asymmetric kernel::
+    Parameters
+    ----------
+    kernel : kernel object, string, dict, optional (default: "RBF")
+        The kernel specifying the covariance function of the GP. If
+        "RBF"/"Matern" is passed, the asymmetric kernel::
 
-                ConstantKernel() * RBF/Matern()
+            ConstantKernel() * RBF/Matern()
 
-            is used as default where ``n_dim`` is the number of dimensions of the
-            training space. In this case you will have to provide the prior bounds
-            as the ``bounds`` parameter to the GP. For the Matern kernel
-            :math:`\nu=3/2`. To pass different arguments to the kernel, e.g. ``nu=5/2``
-            for Matern, pass a single-key dict as ``{"Matern": {"nu": 2.5}}"``. Note
-            that the kernel's hyperparameters are optimized during fitting.
+        is used as default, where the length correlation kernel is assumed anisotropic
+        if a list of bounds is passed using the ``length_scale_prior`` argument.
+        To pass different arguments to the kernel, e.g. ``nu=5/2`` for Matern, pass a
+        single-key dict as ``{"Matern": {"nu": 2.5}}"``. Note that the kernel's
+        hyperparameters are optimized during fitting.
 
-        output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
-            Prior for the (non-squared) scale parameter, in normalised logp units.
+    output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
+        Prior for the (non-squared) scale parameter, in normalised logp units.
 
-        length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
-            Prior for the length parameters, as a fraction of the parameter priors sizes.
+    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
+        Prior for the length parameters, as a fraction of the parameter priors sizes.
 
-        noise_level : float or array-like, optional (default: 1e-2)
-            Square-root of the value added to the diagonal of the kernel matrix
-            during fitting. Larger values correspond to increased noise level in the
-            observations and reduce potential numerical issue during fitting.
-            If an array is passed, it must have the same number of entries as the
-            data used for fitting and is used as datapoint-dependent noise level.
-            Note that this is equivalent to adding a WhiteKernel with c=noise_level.
+    noise_level : float or array-like, optional (default: 1e-2)
+        Square-root of the value added to the diagonal of the kernel matrix
+        during fitting. Larger values correspond to increased noise level in the
+        observations and reduce potential numerical issue during fitting.
+        If an array is passed, it must have the same number of entries as the
+        data used for fitting and is used as datapoint-dependent noise level.
+        Note that this is equivalent to adding a WhiteKernel with c=noise_level.
 
-        optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
-            Can either be one of the internally supported optimizers for optimizing
-            the kernel's parameters, specified by a string, or an externally
-            defined optimizer passed as a callable. If a callable is passed, it
-            must have the signature::
+    optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
+        Can either be one of the internally supported optimizers for optimizing
+        the kernel's parameters, specified by a string, or an externally
+        defined optimizer passed as a callable. If a callable is passed, it
+        must have the signature::
 
-                def optimizer(obj_func, initial_theta, bounds):
-                    # * 'obj_func' is the objective function to be maximized, which
-                    #   takes the hyperparameters theta as parameter and an
-                    #   optional flag eval_gradient, which determines if the
-                    #   gradient is returned additionally to the function value
-                    # * 'initial_theta': the initial value for theta, which can be
-                    #   used by local optimizers
-                    # * 'bounds': the bounds on the values of theta
-                    ....
-                    # Returned are the best found hyperparameters theta and
-                    # the corresponding value of the target function.
-                    return theta_opt, func_min
+            def optimizer(obj_func, initial_theta, bounds):
+                # * 'obj_func' is the objective function to be maximized, which
+                #   takes the hyperparameters theta as parameter and an
+                #   optional flag eval_gradient, which determines if the
+                #   gradient is returned additionally to the function value
+                # * 'initial_theta': the initial value for theta, which can be
+                #   used by local optimizers
+                # * 'bounds': the bounds on the values of theta
+                ....
+                # Returned are the best found hyperparameters theta and
+                # the corresponding value of the target function.
+                return theta_opt, func_min
 
-            Per default, the 'fmin_l_bfgs_b' algorithm from scipy.optimize
-            is used. If None is passed, the kernel's parameters are kept fixed.
-            Available internal optimizers are::
+        Per default, the 'fmin_l_bfgs_b' algorithm from scipy.optimize
+        is used. If None is passed, the kernel's parameters are kept fixed.
+        Available internal optimizers are::
 
-                'fmin_l_bfgs_b'
+            'fmin_l_bfgs_b'
 
-        n_restarts_optimizer : int, optional (default: 0)
-            The number of restarts of the optimizer for finding the kernel's
-            parameters which maximize the log-marginal likelihood. The first run
-            of the optimizer is performed from the kernel's initial parameters,
-            the remaining ones (if any) from thetas sampled log-uniform randomly
-            from the space of allowed theta-values. If greater than 0, all bounds
-            must be finite. Note that n_restarts_optimizer == 0 implies that one
-            run is performed.
+    n_restarts_optimizer : int, optional (default: 0)
+        The number of restarts of the optimizer for finding the kernel's
+        parameters which maximize the log-marginal likelihood. The first run
+        of the optimizer is performed from the kernel's initial parameters,
+        the remaining ones (if any) from thetas sampled log-uniform randomly
+        from the space of allowed theta-values. If greater than 0, all bounds
+        must be finite. Note that n_restarts_optimizer == 0 implies that one
+        run is performed.
 
-        random_state : int or numpy.random.Generator, optional
-            The generator used to perform random operations of the GPR. If an integer is
-            given, it is used as a seed for the default global numpy random number generator.
+    random_state : int or numpy.random.Generator, optional
+        The generator used to perform random operations of the GPR. If an integer is
+        given, it is used as a seed for the default global numpy random number generator.
 
-        Attributes
-        ----------
-        n : int
-            Number of points/features in the training set of the GPR.
+    Attributes
+    ----------
+    X_train_ : array-like, shape = (n_samples, n_features)
+        (Possibly transformed) feature values in training data of the GPR (also required
+        for prediction). Mostly intended for internal use.
 
-        d : int
-            Dimensionality of the training data.
+    y_train_ : array-like, shape = (n_samples, [n_output_dims])
+        (Possibly transformed) target values in training data of the GPR (also required
+        for prediction). Mostly intended for internal use.
 
-        bounds : array
-            The bounds with which the GPR was defined.
+    alpha : array-like, shape = (n_samples, [n_output_dims]) or scalar
+        The value which is added to the diagonal of the kernel. This is the
+        square of `noise_level`.
 
-        trust_bounds : array or None
-            The bounds of the trust region if ``trust_region_factor`` was defined, or ``None``
-            otherwise.
+    kernel_ : :mod:`kernels` object
+        The kernel used for prediction. The structure of the kernel is the
+        same as the one passed as parameter but with optimized hyperparameters.
 
-        X_train : array-like, shape = (n_samples, n_features)
-            Original (untransformed) feature values in training data of the GPR. Intended to
-            be used when one wants to access the training data for any purpose.
+    alpha_ : array-like, shape = (n_samples, n_samples)
+        **Not to be confused with alpha!** The inverse Kernel matrix of the
+        training points multiplied with ``y_train_`` (Dual coefficients of
+        training data points in kernel space). Needed at prediction.
 
-        y_train : array-like, shape = (n_samples, [n_output_dims])
-            Original (untransformed) target values in training data of the GPR. Intended to be
-            used when one wants to access the training data for any purpose.
+    V_ : array-like, shape = (n_samples, n_samples)
+        Lower-triangular Cholesky decomposition of the inverse kernel in ``X_train_``
 
-        X_train_ : array-like, shape = (n_samples, n_features)
-            (Possibly transformed) feature values in training data of the GPR (also required
-            for prediction). Mostly intended for internal use.
+    log_marginal_likelihood_value_ : float
+        The log-marginal-likelihood of ``self.kernel_.theta``
 
-        y_train_ : array-like, shape = (n_samples, [n_output_dims])
-            (Possibly transformed) target values in training data of the GPR (also required
-            for prediction). Mostly intended for internal use.
+    scales : tuple
+        Kernel scales as ``(output_scale, (length_scale_1, ...))``
 
-        n_total : int
-            Number of points/features in the training set of the model, including points with
-            target values classified as infinite.
+    **Methods:**
 
-        X_train_all : array-like, shape = (n_samples, n_features)
-            Original (untransformed) feature values in training data of the model, including
-            points with target values classified as infinite, and thus not part of the
-            training set of the GPR.
+    .. autosummary::
+        :toctree: stubs
 
-        y_train_all : array-like, shape = (n_samples, [n_output_dims])
-            Original (untransformed) target values in training data of the model, including
-            values classified as infinite, and thus not part of the training set of the GPR.
-
-        X_train_all_ : array-like, shape = (n_samples, n_features)
-            (Possibly transformed) feature values in training data of the model, including
-            points with target values classified as infinite.
-
-        y_train_all_ : array-like, shape = (n_samples, [n_output_dims])
-            (Possibly transformed) target values in training data of the GPR model, including
-            points with target values classified as infinite.
-
-        noise_level : array-like, shape = (n_samples, [n_output_dims]) or scalar
-            The noise level (square-root of the variance) of the uncorrelated
-            training data. This is un-transformed.
-
-        noise_level_ : array-like, shape = (n_samples, [n_output_dims]) or scalar
-            The transformed noise level (if y is preprocessed)
-
-        alpha : array-like, shape = (n_samples, [n_output_dims]) or scalar
-            The value which is added to the diagonal of the kernel. This is the
-            square of `noise_level`.
-
-        kernel_ : :mod:`kernels` object
-            The kernel used for prediction. The structure of the kernel is the
-            same as the one passed as parameter but with optimized hyperparameters.
-
-        alpha_ : array-like, shape = (n_samples, n_samples)
-            **Not to be confused with alpha!** The inverse Kernel matrix of the
-            training points multiplied with ``y_train_`` (Dual coefficients of
-            training data points in kernel space). Needed at prediction.
-
-        V_ : array-like, shape = (n_samples, n_samples)
-            Lower-triangular Cholesky decomposition of the inverse kernel in ``X_train_``
-
-            .. warning::
-
-                ``L_`` is not recomputed when using the append method
-                without refitting the hyperparameters. As only ``K_inv_`` and
-                ``alpha_`` are used at prediction this is not neccessary.
-
-        log_marginal_likelihood_value_ : float
-            The log-marginal-likelihood of ``self.kernel_.theta``
-
-        **Methods:**
-
-        .. autosummary::
-            :toctree: stubs
-
-            append
-            fit
-            _update_model
-            predict
+        fit
+        predict
+        predict_std
     """
 
     def __init__(
@@ -230,7 +177,9 @@ class GaussianProcessRegressor(sk_GPR):
             # Build kernel
             output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
             # Guaranteed to be n-dimensional, if initialised from SurrogateModel
-            length_scale_init = np.sqrt(length_scale_prior[:,0] * length_scale_prior[:,1])
+            length_scale_init = np.sqrt(
+                length_scale_prior[:, 0] * length_scale_prior[:, 1]
+            )
             kernel = C(
                 output_scale_init**2,
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
@@ -250,10 +199,20 @@ class GaussianProcessRegressor(sk_GPR):
             random_state=random_state,
         )
 
+    @property
+    def scales(self):
+        """
+        Kernel scales as ``(output_scale, (length_scale_1, ...)).
+        """
+        return (
+            np.sqrt(self.kernel_.k1.constant_value),
+            np.array(self.kernel_.k2.length_scale),
+        )
+
     def fit(self, X, y, noise_level=None, fit_hyperparameters=True, validate=True):
         r"""
         Re-implementation of the sk GPR fit method, that allows for updating the noise
-        level (as alpha), and iexposes flags for input validationand hyperparameter
+        level (as alpha), and exposes flags for input validation and hyperparameter
         fitting.
 
         If hyperparameters are kept constant, fitting here refers to the re-calculation of
@@ -288,12 +247,17 @@ class GaussianProcessRegressor(sk_GPR):
             level will be overwritten. In this case it is advisable to refit the
             hyperparameters of the kernel.
 
-        fit_gpr : Bool or 'simple', dict, optional (default: True)
+        fit_hyperparameters : Bool or 'simple', dict, optional (default: True)
             Whether the GPR :math:`\theta`-parameters are optimised (``'simple'`` for a
             single run from last optimum; ``True`` for a more thorough search with
             multiple restarts), or a simple kernel matrix inversion is performed
             (``False``) with constant hyperparameters. Can also be passed a dict with
             arguments to be passed to the `_fit_hyperparameters` method.
+
+        validate : bool, default: True
+            If False, ``X`` and ``y`` are assumed to be correctly formatted, and no
+            checks are performed on them. Reduces overhead. Use only for repeated calls
+            when the input is programmatically generated to be correct at each stage.
 
         Returns
         -------
@@ -395,18 +359,18 @@ class GaussianProcessRegressor(sk_GPR):
 
         Parameters
         ----------
-        n_restarts : int, default None
-            Number of restarts of the optimizer. If not defined, uses the one set at
-            instantiation. ``1`` means a single optimizer run.
+        simple : bool, default: False
+            If True, runs the optimiser only from the last optimum of the hyperparameters,
+            without restarts. Shorthand for ``start_from_current=True, n_restarts=1``. (it
+            overrides them if True).
 
         start_from_current : bool, default: True
             Starts the first optimization run from the current hyperparameters (ignored if
             not previously fitted).
 
-        simple : bool, default: False
-            If True, runs the optimiser only from the last optimum of the hyperparameters,
-            without restarts. Shorthand for ``start_from_current=True, n_restarts=1``. (it
-            overrides them if True).
+        n_restarts : int, default None
+            Number of restarts of the optimizer. If not defined, uses the one set at
+            instantiation. ``1`` means a single optimizer run.
 
         hyperparameter_bounds : array-like, default: None
             Bounds for the hyperparameters, if different from those declared at init.
@@ -532,10 +496,9 @@ class GaussianProcessRegressor(sk_GPR):
             Only valid when X is a single point.
 
         validate : bool, default: True
-            If False, ``X`` is assumed to be correctly formatted (2-d float array, with
-            points as rows and dimensions/features as columns, C-contiguous), and no
-            checks are performed on it. Reduces overhead. Use only for repeated calls when
-            the input is programmatically generated to be correct at each stage.
+            If False, ``X`` and ``y`` are assumed to be correctly formatted, and no
+            checks are performed on them. Reduces overhead. Use only for repeated calls
+            when the input is programmatically generated to be correct at each stage.
 
         .. note::
 
@@ -646,10 +609,9 @@ class GaussianProcessRegressor(sk_GPR):
             Query points where the GP is evaluated.
 
         validate : bool, default: True
-            If False, ``X`` is assumed to be correctly formatted (2-d float array, with
-            points as rows and dimensions/features as columns, C-contiguous), and no
-            checks are performed on it. Reduces overhead. Use only for repeated calls when
-            the input is programmatically generated to be correct at each stage.
+            If False, ``X`` and ``y`` are assumed to be correctly formatted, and no
+            checks are performed on them. Reduces overhead. Use only for repeated calls
+            when the input is programmatically generated to be correct at each stage.
 
         Returns
         -------

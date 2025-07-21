@@ -652,7 +652,7 @@ def getdist_add_training(
         )
         Xs_infinite = np.atleast_2d(np.squeeze(Xs_infinite[i_within_infinite]))
         if highlight_last:
-            Xs_last = surrogate.last_appended[0]
+            Xs_last = surrogate.X_last_appended
             i_within_last = np.argwhere(
                 np.logical_or(mini < Xs_last[:, i], Xs_last[:, i] < maxi)
             )
@@ -867,7 +867,7 @@ def plot_trace(
     X = surrogate.X
     y = surrogate.y
     if surrogate.infinities_classifier is not None:
-        y_finite = surrogate.infinities_classifier.y_finite
+        y_finite = surrogate.is_finite_y(y)
     else:
         y_finite = np.full(shape=len(y), fill_value=True)
     if reference is not None:

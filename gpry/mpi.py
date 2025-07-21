@@ -216,3 +216,24 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
             merge_step_split(this_sigma_y),
         )
     return (y, sigma_y) if is_main_process else (None, None)
+
+
+def round_MPI(n, up=True, warn=True, name=None):
+    """
+    Rounds up (default) or down the value of the first argument to an integer multiple
+    of the number of MPI processes.
+
+    Does never round down ``n < mpi.SIZE`` to 0.
+    """
+    if n < SIZE and up:
+        new_n = SIZE
+    elif n > SIZE and n % SIZE:
+        new_n = n // SIZE * (SIZE + (1 if up else 0))
+    else:
+        new_n = n
+    if new_n != n and warn:
+        warn(
+            f"{name or 'Variable'} has been rounded {'up' if up else 'down'} from {n} "
+            f"to {new_n} to better exploit parallelization."
+        )
+    return new_n

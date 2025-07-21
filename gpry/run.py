@@ -25,8 +25,7 @@ from gpry.surrogate import SurrogateModel
 from gpry.gp_acquisition import GenericGPAcquisition
 import gpry.gp_acquisition as gprygpacqs
 import gpry.acquisition_functions as gpryacqfuncs
-from gpry.svm import SVM
-from gpry.preprocessing import Normalize_bounds, Normalize_y
+from gpry.preprocessing import NormalizeBounds, NormalizeY
 import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
@@ -46,156 +45,180 @@ _plots_path = "images"
 
 class Runner:
     r"""
-        Class that takes care of constructing the Bayesian quadrature/likelihood
-        characterization loop. After initialisation, the algorithm can be launched with
-        :func:`Runner.run`, and, optionally after that, an MC process can be launched on the
-        surrogate model with :func:`Runner.generate_mc_sample`.
+    Class that takes care of constructing the Bayesian quadrature/posterior
+    characterization loop. After initialisation, the algorithm can be launched with
+    :func:`Runner.run`, and, optionally after that, an MC process can be launched on the
+    surrogate model with :func:`Runner.generate_mc_sample`.
 
-        Parameters
-        ----------
-        loglike : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
-            Likelihood function (returning log-likelihood; requires additional argument
-            ``bounds``) or Cobaya Model instance (which contains all information about the
-            parameters in the likelihood and their priors as well as the likelihood itself).
-            It must not be specified if 'resuming' from a checkpoint (see ``load_checkpoint``
-            below).
+    Parameters
+    ----------
+    loglike : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Log-likelihood function or Cobaya Model instance. If a Cobaya model is passed,
+        arguments ``bounds``, ``ref_bounds`` and ``params`` are ignored, since all
+        that information is already contained in the Cobaya model.
+        It must not be specified if 'resuming' from a checkpoint (see
+        ``load_checkpoint`` below).
 
-        bounds: List of [min, max], or Dict {name: [min, max],...}
-            List or dictionary of parameter bounds. If it is a dictionary, the keys need to
-            correspond to the argument names of the ``likelihood`` function, and the values
-            can be either bounds specified as ``[min, max]``, or bounds and labels, as
-            ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
-            be ignored) if a Cobaya ``Model`` instance is passed as ``loglike``.
+    bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
+        correspond to the argument names of the ``likelihood`` function, and the values
+        can be either bounds specified as ``[min, max]``, or bounds and labels, as
+        ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
+        be ignored) if a Cobaya ``Model`` instance is passed as ``loglike``.
 
-        surrogate : SurrogateModel, str, dict, optional (default="RBF")
-            The surrogate model used for interpolating the posterior. If None or "RBF" is
-            given, it generates a surrogate model consisting of a GPR with a constant
-            kernel multiplied with an anisotropic RBF kernel and dynamic bounds. The same
-            kernel with a Matern 3/2 kernel instead of a RBF is generated if "Matern" is
-            passed. This might be useful if the posterior is not very smooth. Otherwise a
-            custom surrogate model regressor can be defined as a dict containing the
-            arguments of ``SurrogateModel``, or passing an already initialized instance.
+    ref_bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of "reference" parameter bounds, i.e. bounds from within
+        which to raw the initial set of training samples.
 
-        gp_acquisition : GenericGPAcquisition, optional (default="LogExp")
-            The acquisition object. If None is given the BatchOptimizer with a LogExp
-            acquisition function is used (with the :math:`\zeta` value chosen automatically
-            depending on the dimensionality of the prior) and the GP's X-values are
-            preprocessed to be in the uniform hypercube before optimizing the
-            acquistion function. It can also be passed an initialized instance, or a dict with
-            arguments with which to initialize one.
+    params : list of str, dict {str: str}, optional
+        List of names for the parameters. Alternatively, a dictionary ``{name: label}``,
+        where ``label`` is a LaTeX-coded string, without ``$``'s.
+        By default, generic parameter names ``x_1, x_2,...`` will be used.
 
-        initial_proposer : InitialPointProposer, str, dict, optional (default="reference")
-            Proposer used for drawing the initial training samples before running the
-            Bayesian optimisation loop. As standard the samples are drawn from the model
-            reference (prior if no reference is specified). Alternative options which can be
-            passed as strings are ``"prior", "uniform"``. The ``"reference"`` proposer
-            defaults to the prior if no reference distribution is provided. If defined as a
-            dict with the proposer name as single key, the values will be passed as kwargs to
-            the proposer.
+    surrogate : SurrogateModel, str, dict, optional (default="RBF")
+        The surrogate model used for interpolating the posterior. A full specification
+        consists of a dict detailing the ``regressor`` options (see
+        :class:`gpr.GaussianProcessRegressor`), and optionally, ``preprocessing_X|y``
+        transformations, an ``infinities_classifier`` dict (see
+        :class:`infinities_classifier.InfinitiesClassifiers`) and a clip factor for
+        large regressor values. E.g.:
 
-        convergence_criterion : ConvergenceCriterion, str, dict, False, optional (default=None)
-            The convergence criterion. If None is given the default criterion is used:
-            CorrectCounter for BatchOptimizer with adaptive thresholds, and a combination of
-            a less stringent CorrectCounter and a GaussianKL for NORA. Can be specified as a
-            dict to initialize one or more ConvergenceCriterion classes with some arguments,
-            or directly as an instance or class name of some ConvergenceCriterion. If False,
-            no convergence criterion is used, and the process runs until the budget is
-            exhausted.
+        ..code :: yaml
 
-        options : dict, optional (default=None)
-            A dict containing all options regarding the bayesian optimization loop.
-            The available options are:
+            surrogate = {
+                "regressor": {
+                    "kernel": "RBF",
+                    "noise_level" : 1e-2,
+                },
+                "clip_factor" : 1.1,
+                "infinities_classifier" : {
+                    "svm": {"threshold": "20s"},
+                    "trust_region": {"threshold": "10s"},
+                }
 
-                * n_initial : Number of finite initial truth evaluations before starting the
-                  BO loop (default: 3 * number of dimensions)
-                * max_initial : Maximum number of truth evaluations at initialization. If it
-                  is reached before `n_initial` finite points have been found, the run will
-                  fail. To avoid that, try decreasing the volume of your prior (default:
-                  30 * (number of dimensions)**1.5).
-                * max_total : Maximum number of attempted sampling points before the run
-                  stops. This is useful if you e.g. want to restrict the maximum computation
-                  resources (default: 70 * (number of dimensions)**1.5 or max_initial,
-                  whichever is largest).
-                * max_finite : Maximum number of sampling points accepted into the GP training
-                  set before the run stops. This might be useful if you use the DontConverge
-                  convergence criterion, specifying exactly how many points you want to have
-                  in your GP. If you set this limit by hand and find that it is easily
-                  saturated, try decreasing the volume of your prior (default: max_total).
-                * n_points_per_acq : Number of points which are aquired with Kriging believer
-                  for every acquisition step. It will be adjusted within a 20% tolerance to
-                  match a multiple of the number of parallel processes (default: number of
-                  dimensions).
-                * fit_full_every : Number of iterations between full GP hyperparameters fits,
-                  including several restarts of the optimiser. Pass 'np.inf' or a large number
-                  to never refit with restarts (default : 2 * sqrt(number of dimensions)).
-                * fit_simple_every : Similar to ``fit_full_every``, but with a single
-                  optimiser run from the last optimum hyperparameters. Overridden by
-                  ``fit_full_every`` where it matches its periodicity. Pass np.inf or a large
-                  number to never refit from last optimum (default : 1, i.e. every iteration).
+        If None is passed, the regressor is created with an anisotropic RBF kernel,
+        a noise level of 0.01, preprocessors normalizing X values within bounds and
+        y values as a standard normal, a clipping factor of 1.1, and an SVM as an
+        infinities classifier. If a string is passed, it is interpreted as a length
+        correlation kernel specification, and the rest of defaults are kept.
+        Alternatively, an already initialized instance can be passed.
 
-        callback : callable, optional (default=None)
-            Function run each iteration after adapting the recently acquired points and
-            the computation of the convergence criterion. This function should take the
-            runner as argument: ``callback(runner_instance)``.
-            When running in parallel, the function is run by the main process only, unless
-            ``callback_is_MPI_aware=True``.
+    gp_acquisition : GenericGPAcquisition, optional (default="LogExp")
+        The acquisition object. If None is given the BatchOptimizer with a LogExp
+        acquisition function is used (with the :math:`\zeta` value chosen
+        automatically depending on the dimensionality of the prior).
+        It can also be passed an initialized instance, or a dict with
+        arguments with which to initialize one. The acquisition engine works in the
+        space defined by the preprocessors of the surrogate model.
 
-        callback_is_MPI_aware : bool (default: False)
-            If True, the callback function is called for every process simultaneously, and
-            it is expected to handle parallelisation internally. If false, only the main
-            process calls it.
+    initial_proposer : InitialPointProposer, str, dict, optional (default="reference")
+        Proposer used for drawing the initial training samples before running the
+        Bayesian optimisation loop. By default the samples are drawn from the model
+        reference (prior if no reference is specified). Alternative options which can be
+        passed as strings are ``"prior", "uniform"``. The ``"reference"`` proposer
+        defaults to the prior if no reference distribution is provided. If defined as a
+        dict with the proposer name as single key, the values will be passed as kwargs to
+        the proposer.
 
-        checkpoint : str, optional (default=None)
-            Path for storing checkpointing information from which to resume in case the
-            algorithm crashes. If None is given no checkpoint is saved.
+    convergence_criterion : ConvergenceCriterion, str, dict, False, optional (default=None)
+        The convergence criterion. If None is given the default criterion is used:
+        CorrectCounter for BatchOptimizer with adaptive thresholds, and a combination of
+        a less stringent CorrectCounter and a GaussianKL for NORA. Can be specified as a
+        dict to initialize one or more ConvergenceCriterion classes with some arguments,
+        or directly as an instance or class name of some ConvergenceCriterion. If False,
+        no convergence criterion is used, and the process runs until the budget is
+        exhausted.
 
-        load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
-            Whether to resume from the checkpoint files if existing ones are found
-            at the location specified by `checkpoint`.
+    options : dict, optional (default=None)
+        A dict containing all options regarding the bayesian optimization loop.
+        The available options are:
 
-        seed: int or numpy.random.Generator, optional
-            Seed for the random number generator, or an already existing generator, for
-            reproducible runs. For MPI runs, if a seed is passed,
-            ``numpy.random.SeedSequence`` will be used to generate seeds for every ranks.
+            * n_initial : Number of finite initial truth evaluations before starting the
+              BO loop (default: 3 * number of dimensions)
+            * max_initial : Maximum number of truth evaluations at initialization. If it
+              is reached before `n_initial` finite points have been found, the run will
+              fail. To avoid that, try decreasing the volume of your prior (default:
+              30 * (number of dimensions)**1.5).
+            * max_total : Maximum number of attempted sampling points before the run
+              stops. This is useful if you e.g. want to restrict the maximum computation
+              resources (default: 70 * (number of dimensions)**1.5 or max_initial,
+              whichever is largest).
+            * max_finite : Maximum number of sampling points accepted into the GP training
+              set before the run stops. This might be useful if you use the DontConverge
+              convergence criterion, specifying exactly how many points you want to have
+              in your GP. If you set this limit by hand and find that it is easily
+              saturated, try decreasing the volume of your prior (default: max_total).
+            * n_points_per_acq : Number of points which are aquired with Kriging believer
+              for every acquisition step. It will be adjusted within a 20% tolerance to
+              match a multiple of the number of parallel processes (default: number of
+              dimensions).
+            * fit_full_every : Number of iterations between full GP hyperparameters fits,
+              including several restarts of the optimiser. Pass 'np.inf' or a large number
+              to never refit with restarts (default : 2 * sqrt(number of dimensions)).
+            * fit_simple_every : Similar to ``fit_full_every``, but with a single
+              optimiser run from the last optimum hyperparameters. Overridden by
+              ``fit_full_every`` where it matches its periodicity. Pass np.inf or a large
+              number to never refit from last optimum (default : 1, i.e. every iteration).
 
-        plots : bool, dict (default: True)
-            If True, produces some progress plots. One can also pass the arguments of
-            ``Runner.plot_progress`` as a dict for finer control, e.g.
-            ``{"timing": True, "convergence": True, "trace": False, "slices": False,
-            "ext": "svg"}``.
+    callback : callable, optional (default=None)
+        Function run each iteration after adapting the recently acquired points and
+        the computation of the convergence criterion. This function should take the
+        runner as argument: ``callback(runner_instance)``.
+        When running in parallel, the function is run by the main process only, unless
+        ``callback_is_MPI_aware=True``.
 
-        verbose : 1, 2, 3, optional (default: 3)
-            Level of verbosity. 3 prints Infos, Warnings and Errors, 2
-            Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
-            problems arise. Is passed to the GP, Acquisition and Convergence
-            criterion if they are built automatically.
+    callback_is_MPI_aware : bool (default: False)
+        If True, the callback function is called for every process simultaneously, and
+        it is expected to handle parallelisation internally. If false, only the main
+        process calls it.
 
-        Attributes
-        ----------
-        model : Cobaya model
-            The model that was used to run the GP on (if running in parallel, needs to be
-            passed for all processes).
+    checkpoint : str, optional (default=None)
+        Path for storing checkpointing information from which to resume in case the
+        algorithm crashes. If None is given no checkpoint is saved.
 
-        gpr : GaussianProcessRegressor
-            This can be used to call an MCMC sampler for getting marginalized
-            properties. This is the most crucial component.
+    load_checkpoint: "resume" or "overwrite", must be specified if path is not None.
+        Whether to resume from the checkpoint files if existing ones are found
+        at the location specified by `checkpoint`.
 
-        gp_acquisition : GenericGPAcquisition
-            The acquisition object that was used for the active sampling procedure.
+    seed: int or numpy.random.Generator, optional
+        Seed for the random number generator, or an already existing generator, for
+        reproducible runs. For MPI runs, if a seed is passed,
+        ``numpy.random.SeedSequence`` will be used to generate seeds for every ranks.
 
-        convergence_criterion : Convergence_criterion
-            The convergence criterion used for determining convergence. Depending
-            on the criterion used this also contains the approximate covariance
-            matrix of the posterior distribution which can be used by the MCMC
-            sampler.
+    plots : bool, dict (default: True)
+        If True, produces some progress plots. One can also pass the arguments of
+        ``Runner.plot_progress`` as a dict for finer control, e.g.
+        ``{"timing": True, "convergence": True, "trace": False, "slices": False,
+        "ext": "svg"}``.
 
-        options : dict
-            The options dict used for the active sampling loop.
+    verbose : 1, 2, 3, optional (default: 3)
+        Level of verbosity. 3 prints Infos, Warnings and Errors, 2
+        Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
+        problems arise. Is passed to the GP, Acquisition and Convergence
+        criterion if they are built automatically.
 
-        progress : Progress
-            Object containing per-iteration progress information: number of finite training
-            points, number of GP evaluations, timing of different parts of the algorithm, and
-            value of the convergence criterion.
+    Attributes
+    ----------
+    truth : :class:`truth.Truth`
+        The model whose log-posterior is learned.
+
+    surrogate : :class: surrogate.SurrogateModel`
+        Surrogate model of ``truth``. It can be used to call an MCMC sampler for getting
+        marginalized properties.
+
+    gp_acquisition : GenericGPAcquisition
+        The acquisition engine that was used for the active sampling procedure.
+
+    convergence_criterion : Convergence_criterion
+        The convergence critera used for determining convergence.
+
+    options : dict
+        The options dict used for the active sampling loop.
+
+    progress : Progress
+        Object containing per-iteration progress information: number of finite training
+        points, number of GP evaluations, timing of different parts of the algorithm, and
+        value of the convergence criterion.
     """
 
     def __init__(
@@ -204,6 +227,7 @@ class Runner:
         bounds=None,
         ref_bounds=None,
         params=None,
+        gpr=None,  # to be deprecated
         surrogate="RBF",
         gp_acquisition="LogExp",
         initial_proposer="reference",
@@ -276,7 +300,9 @@ class Runner:
             # DEPRECATION BLOCK 04/07/25
             if gpr is not None:
                 warnings.warn(
-                    "Argument 'gpr' will be deprecated soon in favor of 'surrogate'."
+                    "Argument 'gpr' will be deprecated soon in favor of 'surrogate'. "
+                    "Pass the options of the GPR as "
+                    "``surrogate={'regressor' : {'kernel': ..., }``."
                 )
                 surrogate = gpr
             # END OF DEPRECATION BLOCK
@@ -325,42 +351,46 @@ class Runner:
             self.surrogate = surrogate
         elif isinstance(surrogate, (Mapping, str)):
             if isinstance(surrogate, str):
-                surrogate = {"kernel": surrogate}
+                surrogate = {"regressor": {"kernel": surrogate}}
             else:  # Mapping
                 surrogate = deepcopy(surrogate)
             surrogate_defaults = {
-                "kernel": "RBF",
-                "n_restarts_optimizer": 10 + 2 * self.d,
-                "preprocessing_X": Normalize_bounds(self.prior_bounds),
-                "preprocessing_y": Normalize_y(),
                 "bounds": self.prior_bounds,
+                "preprocessing_X": NormalizeBounds(self.prior_bounds),
+                "preprocessing_y": NormalizeY(),
                 "random_state": self.rng,
                 "verbose": self.verbose,
-                "account_for_inf": "SVM",
-                "inf_threshold": "20s",
+                "regressor": {
+                    "kernel": "RBF",
+                    "output_scale_prior": [1e-2, 1e3],
+                    "length_scale_prior": [1e-3, 1e1],
+                    "noise_level" : 1e-2,
+                    "optimizer": "fmin_l_bfgs_b",
+                    "n_restarts_optimizer": 10 + 2 * self.d,
+                },
+                "clip_factor" : 1.1,
+                "infinities_classifier" : {
+                    "svm": {"threshold": "20s"},
+                },
             }
+            # Update with defaults (2-levels-deep update)
             for k, default_value in surrogate_defaults.items():
                 if k not in surrogate:
                     surrogate[k] = default_value
-            surrogate["n_restarts_optimizer"] = get_Xnumber(
-                surrogate["n_restarts_optimizer"],
-                "d",
-                self.d,
-                int,
-                "n_restarts_optimizer",
-            )
+                elif isinstance(default_value, Mapping):
+                    for k2, default_value2 in default_value.items():
+                        if k2 not in surrogate[k]:
+                            surrogate[k][k2] = default_value2
             # If running with MPI, round down the #restarts of hyperparam optimizer to
             # a multiple of the MPI size (NB: #restarts includes from current best)
-            if (
-                surrogate["n_restarts_optimizer"] > mpi.SIZE
-                and surrogate["n_restarts_optimizer"] % mpi.SIZE
-            ):
-                surrogate["n_restarts_optimizer"] = (
-                    surrogate["n_restarts_optimizer"] // mpi.SIZE
-                ) * mpi.SIZE
-                warnings.warn(
-                    "The number of restarts of the optimizer has been rounded down to "
-                    f"{surrogate['n_restarts_optimizer']} to better exploit parallelization."
+            nres = "n_restarts_optimizer"
+            if nres in surrogate.get("regressor", {}):
+                surrogate["regressor"][nres] = get_Xnumber(
+                    surrogate["regressor"][nres], "d", self.d, int, nres
+                )
+                surrogate["regressor"][nres]
+                mpi.round_MPI(
+                    surrogate["regressor"][nres], up=False, warn=True, name=nres
                 )
             try:
                 self.surrogate = SurrogateModel(**surrogate)
@@ -1159,18 +1189,16 @@ class Runner:
         self.progress.add_current_n_truth(0, 0)
         self.progress.add_acquisition(0, 0)
         self.progress.add_convergence(0, 0, [np.nan] * len(self.convergence))
-        # Check if there's an SVM and if so read out it's threshold value
-        # We will compare it against y - max(y)
-        if isinstance(self.surrogate.infinities_classifier, SVM):
-            # Check by hand against the threshold (in the non-transformed space)
-            # NB: the SVM has not been trained yet, so we need to call the raw classifier.
-            is_finite = lambda ymax_minus_y: (
-                self.surrogate.infinities_classifier._is_finite_raw(
-                    -ymax_minus_y, self.surrogate._diff_threshold, max_y=0
+        # We need to know the current number of finite points *before* fitting the
+        # infinities classifier. So we'll just compare against the threshold.
+        if self.surrogate.infinities_classifier is None:
+            get_n_finite = lambda y: sum(np.isfinite(y))
+        else:
+            get_n_finite = lambda y: len(
+                self.surrogate.infinities_classifier._i_finite_y_prefit(
+                    y, validate=False
                 )
             )
-        else:
-            is_finite = np.isfinite
         if mpi.is_main_process:
             # Check if the GP already contains points. If so they are reused.
             pretrained = 0
@@ -1242,7 +1270,7 @@ class Runner:
                     X_init = np.concatenate([X_init, np.concatenate(all_points)])
                     y_init = np.concatenate([y_init, np.concatenate(all_posts)])
                     # Only finite values contribute to the number of initial samples
-                    n_finite_new = sum(is_finite(max(y_init) - y_init))
+                    n_finite_new = get_n_finite(y_init)
                     # NB: tqdm.update takes *increments*
                     progress_bar.update(n_finite_new - progress_bar.n)
                     # Break loop if the desired number of initial samples is reached

@@ -38,6 +38,10 @@ class DummyPreprocessor:
         return bounds
 
     @classmethod
+    def inverse_transform_bounds(cls, transf_bounds):
+        return transf_bounds
+
+    @classmethod
     def transform(cls, _):
         return _
 
@@ -54,7 +58,7 @@ class DummyPreprocessor:
         return _
 
 
-class Pipeline_X:
+class PipelineX:
     """
     Used for building a pipeline for preprocessing X-values. This is provided
     with a list of preprocessors in the order they shall be applied. The
@@ -82,11 +86,19 @@ class Pipeline_X:
                     return self
 
                 def transform_bounds(self, bounds):
-                    # This method should transform the bounds of the prior. If
-                    # the bounds remain unchanged after the transformation this
-                    # method should just return the (untransformed) bounds.
+                    # This method should transform a set of bounds, e.g. the prior
+                    # bounds. If the bounds remain unchanged after the transformation
+                    # this method should just return the (untransformed) bounds.
                     ...
                     return transformed_bounds
+
+                def inverse_transform_bounds(self, transformed_bounds):
+                    # This method should invert the transformation of the given
+                    # bounds. If the bounds remain unchanged after the
+                    # transformation this method should just return the
+                    # (untransformed) bounds.
+                    ...
+                    return trasnformed_bounds
 
                 def transform(self, X):
                     # This method transforms the X-data. For this the fit
@@ -126,6 +138,12 @@ class Pipeline_X:
         for preprocessor in self.preprocessors:
             transformed_bounds = preprocessor.transform_bounds(transformed_bounds)
         return transformed_bounds
+
+    def inverse_transform_bounds(self, transformed_bounds):
+        bounds = transformed_bounds
+        for preprocessor in reversed(self.preprocessors):
+            bounds = preprocessor.inverse_transform_bounds(bounds)
+        return bounds
 
     def fit(self, X, y):
         """
@@ -309,7 +327,7 @@ class Whitening:
         return transf_bounds
 
 
-class Normalize_bounds:
+class NormalizeBounds:
     """
     A class which transforms all bounds of the prior such that the prior
     hypervolume occupies the unit hypercube in the interval [0, 1].
@@ -358,9 +376,10 @@ class Normalize_bounds:
             )
 
     def transform_bounds(self, bounds):
-        transformed_bounds = np.ones_like(bounds)
-        transformed_bounds[:, 0] = 0
-        return transformed_bounds
+        return self.transform(np.atleast_2d(bounds).T).T
+
+    def inverse_transform_bounds(self, transf_bounds):
+        return self.inverse_transform(np.atleast_2d(transf_bounds).T).T
 
     def fit(self, X, y):
         """Fits the transformer (which in reality does nothing)"""
@@ -412,7 +431,7 @@ class Normalize_bounds:
         return X * (self.bounds_max - self.bounds_min)
 
 
-class Pipeline_y:
+class PipelineY:
     """
     Used for building a pipeline for preprocessing y-values. This is provided
     with a list of preprocessors in the order they shall be applied. The
@@ -526,7 +545,7 @@ class Pipeline_y:
         return scale_transformed
 
 
-class Normalize_y:
+class NormalizeY:
     """
     Transforms y-values (target values) such that they are centered around 0
     with a standard deviation of 1. This is done so that the constant
@@ -631,7 +650,7 @@ class Normalize_y:
         return scale * self.std_  # Multiply by the standard deviation
 
 
-class NormalizeChi2_y(Normalize_y):
+class NormalizeYChi2(NormalizeY):
     """
     Transforms y-values (target values) such that they are centered around the Gaussian
     1-sigma value with respect to the largest logp, so that the standard deviation is the
