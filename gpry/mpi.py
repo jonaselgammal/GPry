@@ -6,7 +6,7 @@ the :class:`run.Runner` class to run GPry.
 """
 
 # Defining some helpers for parallelisation.
-import dill
+import dill  # type:  ignore
 import numpy as np
 from warnings import warn
 from numpy.random import SeedSequence, default_rng, Generator
@@ -15,7 +15,7 @@ try:
     from mpi4py import MPI
 
     # Use dill pickler (can seriealize more stuff, e.g. lambdas)
-    MPI.pickle.__init__(dill.dumps, dill.loads)
+    MPI.pickle.__init__(dill.dumps, dill.loads)  # type: ignore
     # Define some interfaces
     comm = MPI.COMM_WORLD
     SIZE = comm.Get_size()
@@ -28,7 +28,7 @@ except ImportError:
         "It is optional but recommended for faster running in parallel."
     )
     # Define dummy interfaces
-    comm = None
+    comm = None  # type: ignore
     SIZE = 1
     RANK = 0
     is_main_process = True

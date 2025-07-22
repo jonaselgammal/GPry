@@ -94,7 +94,9 @@ class GenericGPAcquisition:
 
     def __call__(self, X, surrogate, eval_gradient=False, validate=True):
         """Returns the value of the acquision function at ``X`` given a ``surrogate``."""
-        return self.acq_func(X, surrogate, eval_gradient=eval_gradient, validate=validate)
+        return self.acq_func(
+            X, surrogate, eval_gradient=eval_gradient, validate=validate
+        )
 
     def multi_add(self, surrogate, n_points=1, bounds=None, rng=None):
         r"""Method to query multiple points where the objective function

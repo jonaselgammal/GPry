@@ -6,35 +6,43 @@ This module is mostly based on the kernels module of the
 `scikit-optimize <https://scikit-optimize.github.io/stable/>`_ package.
 """
 
-from math import sqrt
-
-import numpy as np
-import warnings
-from sklearn.gaussian_process.kernels import Kernel as sk_Kernel
-from sklearn.gaussian_process.kernels import ConstantKernel \
-    as sk_ConstantKernel
-from sklearn.gaussian_process.kernels import DotProduct as sk_DotProduct
-from sklearn.gaussian_process.kernels import Exponentiation \
-    as sk_Exponentiation
-from sklearn.gaussian_process.kernels import ExpSineSquared \
-    as sk_ExpSineSquared
-from sklearn.gaussian_process.kernels import Matern as sk_Matern
-from sklearn.gaussian_process.kernels import Product as sk_Product
-from sklearn.gaussian_process.kernels import RationalQuadratic \
-    as sk_RationalQuadratic
-from sklearn.gaussian_process.kernels import RBF as sk_RBF
-from sklearn.gaussian_process.kernels import Sum as sk_Sum
-from sklearn.gaussian_process.kernels import WhiteKernel as sk_WhiteKernel
-
-from collections import namedtuple
-
 # Copyright (c) 2016-2020 The scikit-optimize developers.
 # This module contains (heavily modified) code of the scikit-optimize package.
 
-class Hyperparameter(namedtuple('Hyperparameter',
-                                ('name', 'value_type', 'bounds',
-                                 'max_length',
-                                 'n_elements', 'fixed', 'dynamic'))):
+import warnings
+from math import sqrt
+from collections import namedtuple
+
+import numpy as np
+from sklearn.gaussian_process.kernels import (  # type: ignore
+    Kernel as sk_Kernel,
+    ConstantKernel as sk_ConstantKernel,
+    DotProduct as sk_DotProduct,
+    Exponentiation as sk_Exponentiation,
+    ExpSineSquared as sk_ExpSineSquared,
+    Matern as sk_Matern,
+    Product as sk_Product,
+    RationalQuadratic as sk_RationalQuadratic,
+    RBF as sk_RBF,
+    Sum as sk_Sum,
+    WhiteKernel as sk_WhiteKernel,
+)
+
+
+class Hyperparameter(
+    namedtuple(
+        "Hyperparameter",
+        (
+            "name",
+            "value_type",
+            "bounds",
+            "max_length",
+            "n_elements",
+            "fixed",
+            "dynamic",
+        ),
+    )
+):
     """A kernel hyperparameter's specification in form of a namedtuple.
 
     .. note::
@@ -90,37 +98,48 @@ class Hyperparameter(namedtuple('Hyperparameter',
     # subclass so we set __slots__ to the empty tuple.
     __slots__ = ()
 
-    def __new__(cls, name, value_type, bounds, max_length, n_elements=1, fixed=None,
-                dynamic=None):
-        if not isinstance(bounds, str) or (bounds != "fixed" and
-                                           bounds != "dynamic"):
+    def __new__(
+        cls,
+        name,
+        value_type,
+        bounds,
+        max_length,
+        n_elements=1,
+        fixed=None,
+        dynamic=None,
+    ):
+        if not isinstance(bounds, str) or (bounds != "fixed" and bounds != "dynamic"):
             bounds = np.atleast_2d(bounds)
             if n_elements > 1:  # vector-valued parameter
                 if bounds.shape[0] == 1:
                     bounds = np.repeat(bounds, n_elements, 0)
                 elif bounds.shape[0] != n_elements:
-                    raise ValueError("Bounds on %s should have either 1 or "
-                                     "%d dimensions. Given are %d"
-                                     % (name, n_elements, bounds.shape[0]))
+                    raise ValueError(
+                        "Bounds on %s should have either 1 or "
+                        "%d dimensions. Given are %d"
+                        % (name, n_elements, bounds.shape[0])
+                    )
 
         if fixed is None:
             fixed = isinstance(bounds, str) and bounds == "fixed"
         if dynamic is None:
             dynamic = isinstance(bounds, str) and bounds == "dynamic"
         return super(Hyperparameter, cls).__new__(
-            cls, name, value_type, bounds, max_length, n_elements, fixed,
-            dynamic)
+            cls, name, value_type, bounds, max_length, n_elements, fixed, dynamic
+        )
 
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
-        return (self.name == other.name and
-                self.value_type == other.value_type and
-                np.all(self.bounds == other.bounds) and
-                self.n_elements == other.n_elements and
-                self.fixed == other.fixed and
-                self.dynamic == other.dynamic and
-                self.max_length == other.max_length)
+        return (
+            self.name == other.name
+            and self.value_type == other.value_type
+            and np.all(self.bounds == other.bounds)
+            and self.n_elements == other.n_elements
+            and self.fixed == other.fixed
+            and self.dynamic == other.dynamic
+            and self.max_length == other.max_length
+        )
 
 
 class Kernel(sk_Kernel):
@@ -158,8 +177,11 @@ class Kernel(sk_Kernel):
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter specifications."""
-        r = [getattr(self, attr) for attr in dir(self)
-             if attr.startswith("hyperparameter_")]
+        r = [
+            getattr(self, attr)
+            for attr in dir(self)
+            if attr.startswith("hyperparameter_")
+        ]
         return r
 
     @property
@@ -180,17 +202,24 @@ class Kernel(sk_Kernel):
                     if np.iterable(thetas):
                         for t, theta in enumerate(thetas):
                             if hyperparameter.max_length[t] is None:
-                                bounds.append([theta * 1e-3, theta * 100.])
+                                bounds.append([theta * 1e-3, theta * 100.0])
                             else:
                                 bounds.append(
-                                    [hyperparameter.max_length[t] * 1e-3,
-                                     hyperparameter.max_length[t] * 100.])
+                                    [
+                                        hyperparameter.max_length[t] * 1e-3,
+                                        hyperparameter.max_length[t] * 100.0,
+                                    ]
+                                )
                     else:
                         if hyperparameter.max_length[0] is None:
-                            bounds.append([thetas * 1e-3, thetas * 100.])
+                            bounds.append([thetas * 1e-3, thetas * 100.0])
                         else:
-                            bounds.append([hyperparameter.max_length[0] * 1e-3,
-                                           hyperparameter.max_length[0] * 100.])
+                            bounds.append(
+                                [
+                                    hyperparameter.max_length[0] * 1e-3,
+                                    hyperparameter.max_length[0] * 100.0,
+                                ]
+                            )
                 else:
                     bounds.append(hyperparameter.bounds)
         if len(bounds) > 0:
@@ -219,9 +248,9 @@ class Kernel(sk_Kernel):
 
 
 class RBF(Kernel, sk_RBF):
-
-    def __init__(self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5),
-                 prior_bounds=None):
+    def __init__(
+        self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5), prior_bounds=None
+    ):
         self.length_scale = length_scale
         self.length_scale_bounds = length_scale_bounds
         self.prior_bounds = prior_bounds
@@ -232,7 +261,8 @@ class RBF(Kernel, sk_RBF):
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
-                    "'fixed'")
+                    "'fixed'"
+                )
             elif not np.iterable(prior_bounds):
                 raise TypeError("prior_bounds needs to be an iterable.")
             prior_bounds = np.asarray(prior_bounds)
@@ -244,23 +274,27 @@ class RBF(Kernel, sk_RBF):
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
-                        "unintended behaviour.")
-                self.max_length = (prior_bounds[:, 1] - prior_bounds[:, 0])
+                        "unintended behaviour."
+                    )
+                self.max_length = prior_bounds[:, 1] - prior_bounds[:, 0]
             else:
-                self.max_length = (prior_bounds[:, 1] - prior_bounds[:, 0])
+                self.max_length = prior_bounds[:, 1] - prior_bounds[:, 0]
         else:
             self.max_length = None
 
     @property
     def hyperparameter_length_scale(self):
         if self.anisotropic:
-            return Hyperparameter("length_scale", "numeric",
-                                  self.length_scale_bounds,
-                                  self.max_length,
-                                  len(self.length_scale))
+            return Hyperparameter(
+                "length_scale",
+                "numeric",
+                self.length_scale_bounds,
+                self.max_length,
+                len(self.length_scale),
+            )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds,
-            self.max_length)
+            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+        )
 
     def gradient_x(self, x, X_train):
         # diff = (x - X) / length_scale
@@ -287,9 +321,13 @@ class RBF(Kernel, sk_RBF):
 
 
 class Matern(Kernel, sk_Matern):
-
-    def __init__(self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5),
-                 nu=1.5, prior_bounds=None):
+    def __init__(
+        self,
+        length_scale=1.0,
+        length_scale_bounds=(1e-5, 1e5),
+        nu=1.5,
+        prior_bounds=None,
+    ):
         self.length_scale = length_scale
         self.length_scale_bounds = length_scale_bounds
         self.nu = nu
@@ -301,7 +339,8 @@ class Matern(Kernel, sk_Matern):
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
-                    "'fixed'")
+                    "'fixed'"
+                )
             elif not np.iterable(prior_bounds):
                 raise TypeError("prior_bounds needs to be an iterable.")
             prior_bounds = np.asarray(prior_bounds)
@@ -313,23 +352,27 @@ class Matern(Kernel, sk_Matern):
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
-                        "unintended behaviour.")
-                self.max_length = (prior_bounds[:, 1] - prior_bounds[:, 0])
+                        "unintended behaviour."
+                    )
+                self.max_length = prior_bounds[:, 1] - prior_bounds[:, 0]
             else:
-                self.max_length = (prior_bounds[:, 1] - prior_bounds[:, 0])
+                self.max_length = prior_bounds[:, 1] - prior_bounds[:, 0]
         else:
             self.max_length = None
 
     @property
     def hyperparameter_length_scale(self):
         if self.anisotropic:
-            return Hyperparameter("length_scale", "numeric",
-                                  self.length_scale_bounds,
-                                  self.max_length,
-                                  len(self.length_scale))
+            return Hyperparameter(
+                "length_scale",
+                "numeric",
+                self.length_scale_bounds,
+                self.max_length,
+                len(self.length_scale),
+            )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds,
-            self.max_length)
+            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+        )
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -441,10 +484,14 @@ class Matern(Kernel, sk_Matern):
 
 
 class RationalQuadratic(Kernel, sk_RationalQuadratic):
-
-    def __init__(self, length_scale=1.0, alpha=1.0,
-                 length_scale_bounds=(1e-5, 1e5),
-                 alpha_bounds=(1e-5, 1e5), prior_bounds=None):
+    def __init__(
+        self,
+        length_scale=1.0,
+        alpha=1.0,
+        length_scale_bounds=(1e-5, 1e5),
+        alpha_bounds=(1e-5, 1e5),
+        prior_bounds=None,
+    ):
         self.length_scale = length_scale
         self.alpha = alpha
         self.length_scale_bounds = length_scale_bounds
@@ -457,7 +504,8 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
-                    "'fixed'")
+                    "'fixed'"
+                )
             elif not np.iterable(prior_bounds):
                 raise TypeError("prior_bounds needs to be an iterable.")
             prior_bounds = np.asarray(prior_bounds)
@@ -469,9 +517,9 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
-                        "unintended behaviour.")
-                self.max_length = 2 * \
-                    max(prior_bounds[:, 1] - prior_bounds[:, 0])
+                        "unintended behaviour."
+                    )
+                self.max_length = 2 * max(prior_bounds[:, 1] - prior_bounds[:, 0])
             else:
                 self.max_length = 2 * (prior_bounds[:, 1] - prior_bounds[:, 0])
         else:
@@ -484,13 +532,16 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
     @property
     def hyperparameter_length_scale(self):
         if self.anisotropic:
-            return Hyperparameter("length_scale", "numeric",
-                                  self.length_scale_bounds,
-                                  self.max_length,
-                                  len(self.length_scale))
+            return Hyperparameter(
+                "length_scale",
+                "numeric",
+                self.length_scale_bounds,
+                self.max_length,
+                len(self.length_scale),
+            )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds,
-            self.max_length)
+            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+        )
 
     @property
     def hyperparameter_alpha(self):
@@ -510,9 +561,9 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         # dist = -(1 + (\sum_{i=1}^d (diff^2) / (2 * alpha)))** (-alpha - 1)
         # size = (n_train_samples,)
         scaled_dist = np.sum(diff**2, axis=1)
-        scaled_dist /= (2 * self.alpha)
+        scaled_dist /= 2 * self.alpha
         scaled_dist += 1
-        scaled_dist **= (-alpha - 1)
+        scaled_dist **= -alpha - 1
         scaled_dist *= -1
 
         scaled_dist = np.expand_dims(scaled_dist, axis=1)
@@ -521,10 +572,14 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
 
 
 class ExpSineSquared(Kernel, sk_ExpSineSquared):
-
-    def __init__(self, length_scale=1.0, periodicity=1.0,
-                 length_scale_bounds=(1e-5, 1e5),
-                 periodicity_bounds=(1e-5, 1e5), prior_bounds=None):
+    def __init__(
+        self,
+        length_scale=1.0,
+        periodicity=1.0,
+        length_scale_bounds=(1e-5, 1e5),
+        periodicity_bounds=(1e-5, 1e5),
+        prior_bounds=None,
+    ):
         self.length_scale = length_scale
         self.periodicity = periodicity
         self.length_scale_bounds = length_scale_bounds
@@ -537,7 +592,8 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
-                    "'fixed'")
+                    "'fixed'"
+                )
             elif not np.iterable(prior_bounds):
                 raise TypeError("prior_bounds needs to be an iterable.")
             prior_bounds = np.asarray(prior_bounds)
@@ -549,9 +605,9 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
                         "dimension with the largest prior. This may lead to "
-                        "unintended behaviour.")
-                self.max_length = 2 * \
-                    max(prior_bounds[:, 1] - prior_bounds[:, 0])
+                        "unintended behaviour."
+                    )
+                self.max_length = 2 * max(prior_bounds[:, 1] - prior_bounds[:, 0])
             else:
                 self.max_length = 2 * (prior_bounds[:, 1] - prior_bounds[:, 0])
         else:
@@ -564,18 +620,23 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
     @property
     def hyperparameter_length_scale(self):
         if self.anisotropic:
-            return Hyperparameter("length_scale", "numeric",
-                                  self.length_scale_bounds,
-                                  len(self.length_scale),
-                                  max_length=self.max_length)
+            return Hyperparameter(
+                "length_scale",
+                "numeric",
+                self.length_scale_bounds,
+                len(self.length_scale),
+                max_length=self.max_length,
+            )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds,
-            max_length=self.max_length)
+            "length_scale",
+            "numeric",
+            self.length_scale_bounds,
+            max_length=self.max_length,
+        )
 
     @property
     def hyperparameter_periodicity(self):
-        return Hyperparameter(
-            "periodicity", "numeric", self.periodicity_bounds)
+        return Hyperparameter("periodicity", "numeric", self.periodicity_bounds)
 
     def gradient_x(self, x, X_train):
         x = np.asarray(x)
@@ -602,27 +663,27 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         grad_wrt_theta = np.zeros_like(dist)
         nzd = dist != 0.0
         grad_wrt_theta[nzd] = np.pi / (periodicity * dist[nzd])
-        return np.expand_dims(
-            grad_wrt_theta * exp_sine_squared * grad_wrt_exp, axis=1) * diff
+        return (
+            np.expand_dims(grad_wrt_theta * exp_sine_squared * grad_wrt_exp, axis=1)
+            * diff
+        )
 
 
 class ConstantKernel(Kernel, sk_ConstantKernel):
-
     @property
     def hyperparameter_constant_value(self):
         return Hyperparameter(
-            "constant_value", "numeric", self.constant_value_bounds, None)
+            "constant_value", "numeric", self.constant_value_bounds, None
+        )
 
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
 
 
 class WhiteKernel(Kernel, sk_WhiteKernel):
-
     @property
     def hyperparameter_noise_level(self):
-        return Hyperparameter(
-            "noise_level", "numeric", self.noise_level_bounds, None)
+        return Hyperparameter("noise_level", "numeric", self.noise_level_bounds, None)
 
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
@@ -636,33 +697,45 @@ class KernelOperator:
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter."""
-        r = [Hyperparameter("k1__" + hyperparameter.name,
-                            hyperparameter.value_type,
-                            hyperparameter.bounds, hyperparameter.max_length,
-                            hyperparameter.n_elements)
-             for hyperparameter in self.k1.hyperparameters]
+        r = [
+            Hyperparameter(
+                "k1__" + hyperparameter.name,
+                hyperparameter.value_type,
+                hyperparameter.bounds,
+                hyperparameter.max_length,
+                hyperparameter.n_elements,
+            )
+            for hyperparameter in self.k1.hyperparameters
+        ]
 
         for hyperparameter in self.k2.hyperparameters:
-            r.append(Hyperparameter("k2__" + hyperparameter.name,
-                                    hyperparameter.value_type,
-                                    hyperparameter.bounds,
-                                    hyperparameter.max_length,
-                                    hyperparameter.n_elements))
+            r.append(
+                Hyperparameter(
+                    "k2__" + hyperparameter.name,
+                    hyperparameter.value_type,
+                    hyperparameter.bounds,
+                    hyperparameter.max_length,
+                    hyperparameter.n_elements,
+                )
+            )
         return r
 
 
 class Exponentiation(Kernel, sk_Exponentiation):
-
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter."""
         r = []
         for hyperparameter in self.kernel.hyperparameters:
-            r.append(Hyperparameter("kernel__" + hyperparameter.name,
-                                    hyperparameter.value_type,
-                                    hyperparameter.bounds,
-                                    hyperparameter.max_length,
-                                    hyperparameter.n_elements))
+            r.append(
+                Hyperparameter(
+                    "kernel__" + hyperparameter.name,
+                    hyperparameter.value_type,
+                    hyperparameter.bounds,
+                    hyperparameter.max_length,
+                    hyperparameter.n_elements,
+                )
+            )
         return r
 
     def gradient_x(self, x, X_train):
@@ -671,13 +744,11 @@ class Exponentiation(Kernel, sk_Exponentiation):
         expo = self.exponent
         kernel = self.kernel
 
-        K = np.expand_dims(
-            kernel(np.expand_dims(x, axis=0), X_train)[0], axis=1)
+        K = np.expand_dims(kernel(np.expand_dims(x, axis=0), X_train)[0], axis=1)
         return expo * K ** (expo - 1) * kernel.gradient_x(x, X_train)
 
 
 class Sum(KernelOperator, Kernel, sk_Sum):
-
     @property
     def hyperparameters(self):
         return super().hyperparameters
@@ -687,7 +758,6 @@ class Sum(KernelOperator, Kernel, sk_Sum):
 
 
 class Product(KernelOperator, Kernel, sk_Product):
-
     @property
     def hyperparameters(self):
         return super().hyperparameters
@@ -696,19 +766,16 @@ class Product(KernelOperator, Kernel, sk_Product):
         x = np.asarray(x)
         x = np.expand_dims(x, axis=0)
         X_train = np.asarray(X_train)
-        f_ggrad = (
-            np.expand_dims(self.k1(x, X_train)[0], axis=1) *
-            self.k2.gradient_x(x, X_train)
+        f_ggrad = np.expand_dims(self.k1(x, X_train)[0], axis=1) * self.k2.gradient_x(
+            x, X_train
         )
-        fgrad_g = (
-            np.expand_dims(self.k2(x, X_train)[0], axis=1) *
-            self.k1.gradient_x(x, X_train)
+        fgrad_g = np.expand_dims(self.k2(x, X_train)[0], axis=1) * self.k1.gradient_x(
+            x, X_train
         )
         return f_ggrad + fgrad_g
 
 
 class DotProduct(Kernel, sk_DotProduct):
-
     @property
     def hyperparameter_sigma_0(self):
         return Hyperparameter("sigma_0", "numeric", self.sigma_0_bounds)

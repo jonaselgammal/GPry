@@ -77,8 +77,8 @@ from inspect import signature, getmembers
 import warnings
 
 import numpy as np
-from scipy.stats import norm
-from sklearn.base import clone
+from scipy.stats import norm  # type: ignore
+from sklearn.base import clone  # type: ignore
 
 
 # UNUSED
@@ -97,9 +97,14 @@ def builtin_names():
     """
     Lists all names of all built-in acquisition functions criteria.
     """
-    list_names = [name for name, obj in getmembers(sys.modules[__name__])
-                  if (issubclass(obj.__class__, AcquisitionFunction.__class__) and
-                      obj is not AcquisitionFunction)]
+    list_names = [
+        name
+        for name, obj in getmembers(sys.modules[__name__])
+        if (
+            issubclass(obj.__class__, AcquisitionFunction.__class__)
+            and obj is not AcquisitionFunction
+        )
+    ]
     return list_names
 
 
@@ -187,31 +192,33 @@ class AcquisitionFunction(metaclass=ABCMeta):
         # introspect the constructor arguments to find the model parameters
         # to represent
         cls = self.__class__
-        init = getattr(cls.__init__, 'deprecated_original', cls.__init__)
+        init = getattr(cls.__init__, "deprecated_original", cls.__init__)
         init_sign = signature(init)
         args, varargs = [], []
         for parameter in init_sign.parameters.values():
-            if parameter.kind != parameter.VAR_KEYWORD and \
-               parameter.name != 'self':
+            if parameter.kind != parameter.VAR_KEYWORD and parameter.name != "self":
                 args.append(parameter.name)
             if parameter.kind == parameter.VAR_POSITIONAL:
                 varargs.append(parameter.name)
 
         if len(varargs) != 0:
-            raise RuntimeError("GPry acquisition functions should always "
-                               "specify their parameters in the signature"
-                               " of their __init__ (no varargs)."
-                               " %s doesn't follow this convention."
-                               % (cls, ))
+            raise RuntimeError(
+                "GPry acquisition functions should always "
+                "specify their parameters in the signature"
+                " of their __init__ (no varargs)."
+                " %s doesn't follow this convention." % (cls,)
+            )
         for arg in args:
             try:
                 value = getattr(self, arg)
             except AttributeError:
-                warnings.warn('From version 0.24, get_params will raise an '
-                              'AttributeError if a parameter cannot be '
-                              'retrieved as an instance attribute. Previously '
-                              'it would return None.',
-                              FutureWarning)
+                warnings.warn(
+                    "From version 0.24, get_params will raise an "
+                    "AttributeError if a parameter cannot be "
+                    "retrieved as an instance attribute. Previously "
+                    "it would return None.",
+                    FutureWarning,
+                )
                 value = None
             params[arg] = value
         return params
@@ -238,24 +245,28 @@ class AcquisitionFunction(metaclass=ABCMeta):
             return self
         valid_params = self.get_params(deep=True)
         for key, value in params.items():
-            split = key.split('__', 1)
+            split = key.split("__", 1)
             if len(split) > 1:
                 # nested objects case
                 name, sub_name = split
                 if name not in valid_params:
-                    raise ValueError('Invalid parameter %s for AF %s. '
-                                     'Check the list of available parameters '
-                                     'with `acquisition_function.get_params().keys()`.' %
-                                     (name, self))
+                    raise ValueError(
+                        "Invalid parameter %s for AF %s. "
+                        "Check the list of available parameters "
+                        "with `acquisition_function.get_params().keys()`."
+                        % (name, self)
+                    )
                 sub_object = valid_params[name]
                 sub_object.set_params(**{sub_name: value})
             else:
                 # simple objects case
                 if key not in valid_params:
-                    raise ValueError('Invalid parameter %s for AF %s. '
-                                     'Check the list of available parameters '
-                                     'with `acquisition_function.get_params().keys()`.' %
-                                     (key, self.__class__.__name__))
+                    raise ValueError(
+                        "Invalid parameter %s for AF %s. "
+                        "Check the list of available parameters "
+                        "with `acquisition_function.get_params().keys()`."
+                        % (key, self.__class__.__name__)
+                    )
                 setattr(self, key, value)
         return self
 
@@ -292,8 +303,7 @@ class AcquisitionFunction(metaclass=ABCMeta):
             The reshaped array of input data X
         """
         if not isinstance(X, np.ndarray):
-            raise ValueError(
-                "Expected a numpy array for X, instead got %s" % X)
+            raise ValueError("Expected a numpy array for X, instead got %s" % X)
 
         if X.ndim == 1:
             return X.reshape(1, -1)
@@ -308,8 +318,11 @@ class AcquisitionFunction(metaclass=ABCMeta):
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter specifications."""
-        r = [getattr(self, attr) for attr in dir(self)
-             if attr.startswith("hyperparameter_")]
+        r = [
+            getattr(self, attr)
+            for attr in dir(self)
+            if attr.startswith("hyperparameter_")
+        ]
         return r
 
     @property
@@ -355,16 +368,18 @@ class AcquisitionFunction(metaclass=ABCMeta):
             if hyperparameter.n_elements > 1:
                 # vector-valued parameter
                 params[hyperparameter.name] = np.exp(
-                    theta[i:i + hyperparameter.n_elements])
+                    theta[i : i + hyperparameter.n_elements]
+                )
                 i += hyperparameter.n_elements
             else:
                 params[hyperparameter.name] = np.exp(theta[i])
                 i += 1
 
         if i != len(theta):
-            raise ValueError("theta has not the correct number of entries."
-                             " Should be %d; given are %d"
-                             % (i, len(theta)))
+            raise ValueError(
+                "theta has not the correct number of entries."
+                " Should be %d; given are %d" % (i, len(theta))
+            )
         self.set_params(**params)
 
     @property
@@ -379,8 +394,7 @@ class AcquisitionFunction(metaclass=ABCMeta):
         if isinstance(hasgradient, bool):
             self._hasgradient = hasgradient
         else:
-            raise TypeError("hasgradient needs to be"
-                            "bool, not %s" % hasgradient)
+            raise TypeError("hasgradient needs to bebool, not %s" % hasgradient)
 
     @abstractmethod
     def __call__(self, X, gp, eval_gradient=False, validate=True):
@@ -410,7 +424,7 @@ class AcquisitionFunction(metaclass=ABCMeta):
         return Exponentiation(self, b)
 
     def __eq__(self, b):
-        if type(self) != type(b):
+        if not isinstance(b, AcquisitionFunction):
             return False
         params_a = self.get_params()
         params_b = b.get_params()
@@ -420,8 +434,9 @@ class AcquisitionFunction(metaclass=ABCMeta):
         return True
 
     def __repr__(self):
-        return "{0}({1})".format(self.__class__.__name__,
-                                 ", ".join(map("{0:.3g}".format, self.theta)))
+        return "{0}({1})".format(
+            self.__class__.__name__, ", ".join(map("{0:.3g}".format, self.theta))
+        )
 
 
 class ConstantAcqFunc(AcquisitionFunction):
@@ -450,8 +465,7 @@ class ConstantAcqFunc(AcquisitionFunction):
 
     @property
     def hyperparameter_constant_value(self):
-        return Hyperparameter(
-            "constant_value", "numeric", fixed=self.fixed)
+        return Hyperparameter("constant_value", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
@@ -515,8 +529,7 @@ class Mu(AcquisitionFunction):
 
     @property
     def hyperparameter_a(self):
-        return Hyperparameter(
-            "a", "numeric", fixed=self.fixed)
+        return Hyperparameter("a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
@@ -550,8 +563,12 @@ class Mu(AcquisitionFunction):
 
             if eval_gradient:
                 mu, _, mu_grad = gp.predict(
-                    X, return_std=True, return_mean_grad=True,
-                    return_std_grad=False, validate=validate)
+                    X,
+                    return_std=True,
+                    return_mean_grad=True,
+                    return_std_grad=False,
+                    validate=validate,
+                )
 
             else:
                 mu, std = gp.predict(X, return_std=True, validate=validate)
@@ -588,8 +605,7 @@ class ExponentialMu(AcquisitionFunction):
 
     @property
     def hyperparameter_a(self):
-        return Hyperparameter(
-            "a", "numeric", fixed=self.fixed)
+        return Hyperparameter("a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
@@ -620,12 +636,14 @@ class ExponentialMu(AcquisitionFunction):
 
         if not np.iterable(X):
             X = np.array([X])
-        mu, mu_grad = gp.predict(X, return_std=False,
-                                 return_cov=False,
-                                 return_mean_grad=True,
-                                 return_std_grad=False,
-                                 validate=validate,
-                                 )
+        mu, mu_grad = gp.predict(
+            X,
+            return_std=False,
+            return_cov=False,
+            return_mean_grad=True,
+            return_std_grad=False,
+            validate=validate,
+        )
         A_f = np.exp(self.a * mu)
         if eval_gradient:
             A_f_grad = self.a * mu_grad * np.exp(self.a * mu)
@@ -661,8 +679,7 @@ class Std(AcquisitionFunction):
 
     @property
     def hyperparameter_a(self):
-        return Hyperparameter(
-            "a", "numeric", fixed=self.fixed)
+        return Hyperparameter("a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
@@ -695,8 +712,12 @@ class Std(AcquisitionFunction):
 
             if eval_gradient:
                 _, std, _, std_grad = gp.predict(
-                    X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True, validate=validate)
+                    X,
+                    return_std=True,
+                    return_mean_grad=True,
+                    return_std_grad=True,
+                    validate=validate,
+                )
 
             else:
                 mu, std = gp.predict(X, return_std=True, validate=validate)
@@ -734,8 +755,7 @@ class ExponentialStd(AcquisitionFunction):
 
     @property
     def hyperparameter_a(self):
-        return Hyperparameter(
-            "a", "numeric", fixed=self.fixed)
+        return Hyperparameter("a", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
@@ -766,13 +786,14 @@ class ExponentialStd(AcquisitionFunction):
 
         if not np.iterable(X):
             X = np.array([X])
-        _, std, _, std_grad = gp.predict(X,
-                                         return_std=True,
-                                         return_cov=False,
-                                         return_mean_grad=True,
-                                         return_std_grad=True,
-                                         validate=validate,
-                                         )
+        _, std, _, std_grad = gp.predict(
+            X,
+            return_std=True,
+            return_cov=False,
+            return_mean_grad=True,
+            return_std_grad=True,
+            validate=validate,
+        )
         A_f = np.exp(self.a * std)
         if eval_gradient:
             A_f_grad = self.a * std_grad * np.exp(self.a * std)
@@ -816,8 +837,7 @@ class ExpectedImprovement(AcquisitionFunction):
 
     @property
     def hyperparameter_xi(self):
-        return Hyperparameter(
-            "xi", "numeric", fixed=self.fixed)
+        return Hyperparameter("xi", "numeric", fixed=self.fixed)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
@@ -851,8 +871,12 @@ class ExpectedImprovement(AcquisitionFunction):
 
             if eval_gradient:
                 mu, std, mu_grad, std_grad = gp.predict(
-                    X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True, validate=validate)
+                    X,
+                    return_std=True,
+                    return_mean_grad=True,
+                    return_std_grad=True,
+                    validate=validate,
+                )
 
             else:
                 mu, std = gp.predict(X, return_std=True, validate=validate)
@@ -876,7 +900,7 @@ class ExpectedImprovement(AcquisitionFunction):
             # Substitute (y_opt - xi - mu) / sigma = t and apply chain rule.
             # improve_grad is the gradient of t wrt x.
             improve_grad = -mu_grad * std - std_grad * improve
-            improve_grad /= std ** 2
+            improve_grad /= std**2
             cdf_grad = improve_grad * pdf
             pdf_grad = -improve * cdf_grad
             exploit_grad = -mu_grad * cdf - pdf_grad
@@ -928,12 +952,21 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         the scaling power of the zeta with dimension, if auto-scaled
     """
 
-    def __init__(self, zeta=None, sigma_n=None, fixed=False, dimension=None,
-                 zeta_scaling=0.85, linear=True):
+    def __init__(
+        self,
+        zeta=None,
+        sigma_n=None,
+        fixed=False,
+        dimension=None,
+        zeta_scaling=0.85,
+        linear=True,
+    ):
         if zeta is None:
             if dimension is None:
-                raise ValueError("We need the dimensionality of the problem to "
-                                 "guess an appropriate zeta value.")
+                raise ValueError(
+                    "We need the dimensionality of the problem to "
+                    "guess an appropriate zeta value."
+                )
             self.zeta = self.auto_zeta(dimension, scaling=zeta_scaling)
         else:
             self.zeta = zeta
@@ -947,16 +980,14 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
 
     @property
     def hyperparameter_zeta(self):
-        return Hyperparameter(
-            "zeta", "numeric", fixed=self.fixed)
+        return Hyperparameter("zeta", "numeric", fixed=self.fixed)
 
     @property
     def hyperparameter_sigma_n(self):
-        return Hyperparameter(
-            "sigma_n", "numeric", fixed=self.fixed)
+        return Hyperparameter("sigma_n", "numeric", fixed=self.fixed)
 
     def auto_zeta(self, dimension, scaling=0.85):
-        return dimension**(-scaling)
+        return dimension ** (-scaling)
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
@@ -990,8 +1021,12 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
 
             if eval_gradient:
                 mu, std, mu_grad, std_grad = gp.predict(
-                    X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True, validate=validate)
+                    X,
+                    return_std=True,
+                    return_mean_grad=True,
+                    return_std_grad=True,
+                    validate=validate,
+                )
 
             else:
                 mu, std = gp.predict(X, return_std=True, validate=validate)
@@ -1005,7 +1040,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         else:
             noise_var = self.sigma_n
         zeta = self.zeta
-        var = std**2 - noise_var**2.
+        var = std**2 - noise_var**2.0
         mask = (var > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
         baseline = gp.y_max
@@ -1014,13 +1049,15 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         if np.any(mask):
             values[mask] = self.f(mu[mask], std[mask], baseline, noise_var, zeta)
         if np.any(~mask):
-            values[~mask] = - np.inf
+            values[~mask] = -np.inf
         if eval_gradient:
             if np.array(std_grad).ndim > 1:
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
-                    grad[mask] = np.array(std_grad)[mask] / \
-                        (std[mask] - sigma_n) + 2 * zeta * np.array(mu_grad)[mask]
+                    grad[mask] = (
+                        np.array(std_grad)[mask] / (std[mask] - sigma_n)
+                        + 2 * zeta * np.array(mu_grad)[mask]
+                    )
                 if np.any(~mask):
                     grad[~mask] = np.ones_like(std_grad[~mask]) * np.inf
             else:
@@ -1093,9 +1130,8 @@ class LogExp(BaseLogExp):
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
         """Linearized exponentiated log-error bar."""
-        return (
-            2 * zeta * (mu - baseline) +
-            np.log(np.sqrt(np.clip(std**2. - noise_level**2., 0., None)))
+        return 2 * zeta * (mu - baseline) + np.log(
+            np.sqrt(np.clip(std**2.0 - noise_level**2.0, 0.0, None))
         )
 
 
@@ -1150,7 +1186,9 @@ class NonlinearLogExp(BaseLogExp):
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
         """Exponentiated log-error bar"""
-        return 2 * zeta * (mu - baseline) + _safe_log_expm1(np.sqrt(np.clip(std**2.-noise_level**2., 0., None)))
+        return 2 * zeta * (mu - baseline) + _safe_log_expm1(
+            np.sqrt(np.clip(std**2.0 - noise_level**2.0, 0.0, None))
+        )
 
 
 # Function for determining whether an object is an acquisition function
@@ -1172,9 +1210,9 @@ def is_acquisition_function(acq_func):
     return isinstance(acq_func, AcquisitionFunction)
 
 
-class Hyperparameter(namedtuple('Hyperparameter',
-                                ('name', 'value_type',
-                                 'n_elements', 'fixed'))):
+class Hyperparameter(
+    namedtuple("Hyperparameter", ("name", "value_type", "n_elements", "fixed"))
+):
     """An acquisition function hyperparameter's specification in form of a
     namedtuple. This formalism is copied from the ``kernel`` module of
     Scikit-Learn.
@@ -1214,17 +1252,19 @@ class Hyperparameter(namedtuple('Hyperparameter',
     __slots__ = ()
 
     def __new__(cls, name, value_type, n_elements=1, fixed=False):
-
         return super(Hyperparameter, cls).__new__(
-            cls, name, value_type, n_elements, fixed)
+            cls, name, value_type, n_elements, fixed
+        )
 
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
-        return (self.name == other.name and
-                self.value_type == other.value_type and
-                self.n_elements == other.n_elements and
-                self.fixed == other.fixed)
+        return (
+            self.name == other.name
+            and self.value_type == other.value_type
+            and self.n_elements == other.n_elements
+            and self.fixed == other.fixed
+        )
 
 
 class AcquisitionFunctionOperator(AcquisitionFunction):
@@ -1252,24 +1292,32 @@ class AcquisitionFunctionOperator(AcquisitionFunction):
         params = dict(k1=self.k1, k2=self.k2)
         if deep:
             deep_items = self.k1.get_params().items()
-            params.update(('k1__' + k, val) for k, val in deep_items)
+            params.update(("k1__" + k, val) for k, val in deep_items)
             deep_items = self.k2.get_params().items()
-            params.update(('k2__' + k, val) for k, val in deep_items)
+            params.update(("k2__" + k, val) for k, val in deep_items)
 
         return params
 
     @property
     def hyperparameters(self):
         """Returns a list of all hyperparameter."""
-        r = [Hyperparameter("k1__" + hyperparameter.name,
-                            hyperparameter.value_type,
-                            hyperparameter.n_elements)
-             for hyperparameter in self.k1.hyperparameters]
+        r = [
+            Hyperparameter(
+                "k1__" + hyperparameter.name,
+                hyperparameter.value_type,
+                hyperparameter.n_elements,
+            )
+            for hyperparameter in self.k1.hyperparameters
+        ]
 
         for hyperparameter in self.k2.hyperparameters:
-            r.append(Hyperparameter("k2__" + hyperparameter.name,
-                                    hyperparameter.value_type,
-                                    hyperparameter.n_elements))
+            r.append(
+                Hyperparameter(
+                    "k2__" + hyperparameter.name,
+                    hyperparameter.value_type,
+                    hyperparameter.n_elements,
+                )
+            )
         return r
 
     @property
@@ -1303,10 +1351,11 @@ class AcquisitionFunctionOperator(AcquisitionFunction):
         self.k2.theta = theta[k1_dims:]
 
     def __eq__(self, b):
-        if type(self) != type(b):
+        if not isinstance(b, AcquisitionFunction):
             return False
-        return (self.k1 == b.k1 and self.k2 == b.k2) \
-            or (self.k1 == b.k2 and self.k2 == b.k1)
+        return (self.k1 == b.k1 and self.k2 == b.k2) or (
+            self.k1 == b.k2 and self.k2 == b.k1
+        )
 
 
 class Sum(AcquisitionFunctionOperator):
@@ -1383,12 +1432,12 @@ class Exponentiation(AcquisitionFunction):
         params : dict
             Parameter names mapped to their values.
         """
-        params = dict(acquisition_function=self.acquisition_function,
-                      exponent=self.exponent)
+        params = dict(
+            acquisition_function=self.acquisition_function, exponent=self.exponent
+        )
         if deep:
             deep_items = self.acquisition_function.get_params().items()
-            params.update(('acquisition_function__' + k, val) for k,
-                          val in deep_items)
+            params.update(("acquisition_function__" + k, val) for k, val in deep_items)
         return params
 
     @property
@@ -1396,10 +1445,13 @@ class Exponentiation(AcquisitionFunction):
         """Returns a list of all hyperparameter."""
         r = []
         for hyperparameter in self.acquisition_function.hyperparameters:
-            r.append(Hyperparameter("acquisition_function__" +
-                                    hyperparameter.name,
-                                    hyperparameter.value_type,
-                                    hyperparameter.n_elements))
+            r.append(
+                Hyperparameter(
+                    "acquisition_function__" + hyperparameter.name,
+                    hyperparameter.value_type,
+                    hyperparameter.n_elements,
+                )
+            )
         return r
 
     @property
@@ -1431,10 +1483,12 @@ class Exponentiation(AcquisitionFunction):
         self.acquisition_function.theta = theta
 
     def __eq__(self, b):
-        if type(self) != type(b):
+        if not isinstance(b, AcquisitionFunction):
             return False
-        return (self.acquisition_function == b.acquisition_function and
-                self.exponent == b.exponent)
+        return (
+            self.acquisition_function == b.acquisition_function
+            and self.exponent == b.exponent
+        )
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
@@ -1464,11 +1518,10 @@ class Exponentiation(AcquisitionFunction):
         X = self.check_X(X)
         if eval_gradient:
             K, K_grad = self.acquisition_function(X, gp, eval_gradient)
-            return K ** self.exponent, K_grad * self.exponent * \
-                K ** (self.exponent - 1)
+            return K**self.exponent, K_grad * self.exponent * K ** (self.exponent - 1)
         else:
             K = self.acquisition_function(X, gp)
-            return K ** self.exponent
+            return K**self.exponent
 
     def __repr__(self):
         return "{0} ** {1}".format(self.acquisition_function, self.exponent)

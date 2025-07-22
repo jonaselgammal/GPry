@@ -467,9 +467,9 @@ class GaussianKL(ConvergenceCriterion):
         return mean_new, cov_new
 
     def _sample_mcmc(self, surr, covmat=None):
-        from cobaya.model import get_model
-        from cobaya.sampler import get_sampler
-        from cobaya.log import LoggedError
+        from cobaya.model import get_model  # type: ignore
+        from cobaya.sampler import get_sampler  # type: ignore
+        from cobaya.log import LoggedError  # type: ignore
 
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
         self.cobaya_input = cobaya_generate_surr_model_input(

@@ -11,10 +11,9 @@ Every proposer has a ``get`` method which returns a random sample from the propo
 
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from math import inf
 from warnings import warn
 
-import scipy.stats
+import scipy.stats  # type: ignore
 import numpy as np
 
 from gpry.tools import check_random_state, is_in_bounds
@@ -342,8 +341,8 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
     """
 
     def __init__(self, mean, model_info):
-        from cobaya.cosmo_input.autoselect_covmat import get_best_covmat
-        from cobaya.tools import resolve_packages_path
+        from cobaya.cosmo_input.autoselect_covmat import get_best_covmat  # type: ignore
+        from cobaya.tools import resolve_packages_path  # type: ignore
 
         cmat_dir = get_best_covmat(model_info, packages_path=resolve_packages_path())
         if np.any(d != 0 for d in cmat_dir["covmat"].shape):
@@ -353,8 +352,7 @@ class MeanAutoCovProposer(Proposer, InitialPointProposer):
         else:
             # TODO :: how to gracefully fall back if autocovmat not found
             raise Exception("Autocovmat is not valid")
-            # UNDEFINED: model
-            self.proposal_function = model.prior.sample
+            # self.proposal_function = model.prior.sample
 
     @check_in_bounds
     def get(self, rng=None):
@@ -413,7 +411,7 @@ class SmallChainProposer(Proposer):
             this_i = rng.choice(range(len(self.surrogate.X_regress)))
             this_X = np.copy(self.surrogate.X_regress[this_i])
             logpost = self.surrogate.y_regress[this_i]
-            from cobaya.model import LogPosterior
+            from cobaya.model import LogPosterior  # type: ignore
 
             self.sampler.current_point.add(this_X, LogPosterior(logpost=logpost))
             # reset random state and number of samples
