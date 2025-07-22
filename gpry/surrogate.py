@@ -225,7 +225,7 @@ class SurrogateModel:
             )
             + "\n"
             + f"* Noise level: {self._noise_level}\n"
-            + f"* Classifiers for infinities: {self.infinities_classifier}\n"
+            + f"* Classifiers for infinities: {self.infinities_classifier}"
         )
 
     @property

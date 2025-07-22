@@ -1053,7 +1053,8 @@ class Runner:
             if mpi.is_main_process:
                 self.log("[FIT] Starting surrogate model fit...", level=4)
             with TimerCounter(self.surrogate) as timer_fit:
-                properties = {"aqc_func": acq_vals, "y_pred": y_pred}
+                new_logL = new_y - np.array([self.truth.logprior(X) for X in new_X])
+                properties = {"logL": new_logL, "aqc_func": acq_vals, "y_pred": y_pred}
                 fit_msg = self._fit_surrogate_parallel(new_X, new_y, properties)
             if mpi.is_main_process:
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
@@ -1337,7 +1338,10 @@ class Runner:
                 )
             # Append the initial samples to the surrogate
             with TimerCounter(self.surrogate) as timer_fit:
-                self.surrogate.append(X_init, y_init, i_iter=0)
+                logL_init = y_init - np.array([self.truth.logprior(X) for X in X_init])
+                self.surrogate.append(
+                    X_init, y_init, i_iter=0, properties={"logL": logL_init}
+                )
             self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
             self.log(
                 f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
