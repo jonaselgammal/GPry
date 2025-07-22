@@ -1,5 +1,5 @@
-**GPry**: A package for Bayesian inference of expensive likelihoods with Gaussian Processes
--------------------------------------------------------------------------------------------
+**GPry**: Bayesian inference of expensive likelihoods with Gaussian Processes
+-----------------------------------------------------------------------------
 
 :Author: Jonas El Gammal, Jesus Torrado, Nils Schoeneberg and Christian Fidler
 

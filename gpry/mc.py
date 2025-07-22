@@ -397,7 +397,7 @@ def mc_sample_from_gp_ns(
 
     def logp(X):
         y = surrogate.predict(np.atleast_2d(X), return_std=False, validate=False)
-        if verbose >= 4:
+        if verbose > 4:
             print(f"SurrogateModel: got {X}, mean GP prediction {y}")
         return y
 

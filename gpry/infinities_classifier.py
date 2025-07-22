@@ -79,7 +79,7 @@ class InfinitiesClassifiers:
                 )
 
     def __str__(self):
-        return f"{list(self.classifiers)}"
+        return ", ".join(str(c) for c in self.classifiers.values())
 
     @property
     def trust_bounds(self):
@@ -415,6 +415,9 @@ class ThresholdClassifier:
         # possibly dep. on keep_min in the last self.fit call.
         self._current_threshold = None
         self.update_threshold_definition(nstd_calculator)
+
+    def __str__(self):
+        return f"{self.__class__.__name__} (threshold: {self.threshold_definition})"
 
     def update_threshold_definition(self, nstd_calculator):
         """

@@ -208,25 +208,23 @@ class SurrogateModel:
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
         if self.verbose >= 3:
-            print("Initializing GP with the following options:")
-            print("===========================================")
+            print("Initializing SurrogateModel with the following options:")
+            print("=======================================================")
             print(str(self))
 
     def __str__(self):
         return (
-            "* Kernel:\n"
+            f"* X-preprocessor: {self.preprocessing_X.__class__.__name__}\n"
+            + f"* y-preprocessor: {self.preprocessing_y.__class__.__name__}\n"
+            + "* GPR kernel:\n"
             + f"   {str(self.gpr.kernel)}\n"
-            + "  with hyperparameters:\n"
+            + "  with hyperparameters (in transformed scale):\n"
             + "    -"
             + "\n    -".join(
                 str(h) for h in self.gpr.kernel.hyperparameters
-            )  # print in direct scale
+            )
             + "\n"
             + f"* Noise level: {self._noise_level}\n"
-            # + f"* Optimizer: {self.optimizer}"
-            # + f"* Optimizer restarts: {self.n_restarts_optimizer}"
-            + f"* X-preprocessor: {self.preprocessing_X is not None}\n"
-            + f"* y-preprocessor: {self.preprocessing_y is not None}\n"
             + f"* Classifiers for infinities: {self.infinities_classifier}\n"
         )
 
