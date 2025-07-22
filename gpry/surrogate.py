@@ -133,6 +133,8 @@ class SurrogateModel:
         self._X_, self._y_ = None, None
         # Iteration index, use if specified only
         self._i_iter = np.empty((0,), dtype=int)
+        # Custom properties for the input points
+        self._properties = {}
         # Masks for being used at any time for which part of the model
         self._i_regress = np.empty((0,), dtype=bool)
         # Trackers for last-appended points
@@ -488,6 +490,8 @@ class SurrogateModel:
             data["is_finite"] = np.isfinite(data["y"])
         else:
             data["is_finite"] = self.is_finite_y(self.y)
+        for k, v in self._properties.items():
+            data[f"property:{k}"] = v
         return pd.DataFrame(data)
 
     def set_random_state(self, random_state):
@@ -562,6 +566,28 @@ class SurrogateModel:
         elif noise_level is None:
             pass  # keep old level for new points.
 
+    def _update_properties(self, properties):
+        if properties is None:
+            return
+        err_msg = (
+            "`properties` must be a dict of {property: [values1, value2, ...]}, with as "
+            "many values as points passed to `append`."
+        )
+        if not isinstance(properties, Mapping):
+            raise TypeError(f"{err_msg} Got {properties}.")
+        for k, v in properties.items():
+            if not hasattr(v, "__len__"):
+                raise TypeError(f"{err_msg} Got {v} (not a Sequence) for property {k}.")
+            if len(v) != self.n_last_appended:
+                raise TypeError(
+                    f"{err_msg} Wrong number of values in {k}:{v}: should be "
+                    f"{self.n_last_appended}."
+                )
+            # New property -> assign NaN to previous entries
+            if k not in self._properties:
+                self._properties[k] = [np.nan] * (self.n_total - self.n_last_appended)
+            self._properties[k] += list(v)
+
     def append(
         self,
         X,
@@ -571,6 +597,7 @@ class SurrogateModel:
         fit_classifier=True,
         validate=True,
         i_iter=None,
+        properties=None,
     ):
         r"""
         Append newly acquired data to the GPR and the infinities classifier, and updates
@@ -640,6 +667,10 @@ class SurrogateModel:
             An index to be assigned to the newly-appended points. If None, assigns the
             last entry +1.
 
+        properies : dict {str: Sequence}, optional
+            A dictionary of property names, with a list of the same length as ``X`` as
+            values. These properties have no effect, beyond being kept track of.
+
         Returns
         -------
         self
@@ -704,6 +735,7 @@ class SurrogateModel:
         self._y = np.append(self._y, y)
         self._i_y_sorted = None
         self._update_noise_level(noise_level_valid)
+        self._update_properties(properties)
         # 1. Fit preprocessors with finite points and select finite points in the process,
         #    and create transformed training set and noises.
         # NB: which points are finite does not change after classifier is refit (as long

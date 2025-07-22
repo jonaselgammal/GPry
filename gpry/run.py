@@ -1053,7 +1053,7 @@ class Runner:
             if mpi.is_main_process:
                 self.log("[FIT] Starting surrogate model fit...", level=4)
             with TimerCounter(self.surrogate) as timer_fit:
-                fit_msg = self._fit_surrogate_parallel(new_X, new_y)
+                fit_msg = self._fit_surrogate_parallel(new_X, new_y, acq_vals)
             if mpi.is_main_process:
                 self.progress.add_fit(timer_fit.time, timer_fit.evals_loglike)
                 self.log(f"[FIT] ({timer_fit.time:.2g} sec) {fit_msg}", level=3)
@@ -1394,7 +1394,7 @@ class Runner:
             )
         return new_y, eval_msg
 
-    def _fit_surrogate_parallel(self, new_X, new_y):
+    def _fit_surrogate_parallel(self, new_X, new_y, new_acq=None):
         # Prepare hyperparameter fit
         hyperparams_bounds = None
         # if self.cov is not None:
@@ -1437,6 +1437,7 @@ class Runner:
                 # Supresses warning:
                 fit_gpr=(fit_gpr_kwargs if fit_gpr_kwargs["n_restarts"] else False),
                 i_iter=self.current_iteration,
+                properties=({"acq_func": new_acq} if new_acq is not None else None),
             )
             lml = self.surrogate.gpr.log_marginal_likelihood_value_
             self.log(
