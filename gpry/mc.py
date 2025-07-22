@@ -16,7 +16,7 @@ import numpy as np
 from getdist.mcsamples import MCSamples, loadMCSamples  # type: ignore
 from getdist.gaussian_mixtures import GaussianND  # type: ignore
 
-from gpry import mpi, check_cobaya_installed
+from gpry import mpi
 from gpry.tools import generic_params_names, is_valid_covmat
 from gpry.io import ensure_surrogate, create_path
 import gpry.ns_interfaces as nsint
@@ -251,6 +251,8 @@ def mc_sample_from_gp_cobaya(
         The sampler instance that has been run (or just initialised). The sampler products
         can be retrieved with the `Sampler.products()` method.
     """
+    from gpry import check_cobaya_installed
+
     if not check_cobaya_installed():
         raise ModuleNotFoundError(
             "You need to install Cobaya ('python -m pip install cobaya) in order to use "

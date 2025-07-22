@@ -10,7 +10,6 @@ from copy import deepcopy
 
 import numpy as np
 
-from gpry import check_cobaya_installed
 from gpry.tools import (
     check_and_return_bounds,
     generic_params_names,
@@ -52,7 +51,9 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
     """
     if callable(loglike):
         return Truth(loglike, bounds=bounds, ref_bounds=ref_bounds, params=params)
-    elif check_cobaya_installed():
+    from gpry import check_cobaya_installed
+
+    if check_cobaya_installed():
         from cobaya.log import LoggedError  # type: ignore
         from cobaya.model import Model, get_model  # type: ignore
 
