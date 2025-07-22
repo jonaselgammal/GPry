@@ -3,18 +3,16 @@ This module contains general tools used in different parts of the code.
 """
 
 from copy import deepcopy
-from inspect import signature
 import inspect
-from typing import Mapping, Iterable
 from warnings import warn
 
 import numpy as np
 from numpy import trace as tr
 from numpy.linalg import det
-from scipy.linalg import eigh
-from scipy.special import gamma, erfc
-from scipy.stats import chi2
-from sklearn.utils import check_random_state as check_random_state_sklearn
+from scipy.linalg import eigh  # type: ignore
+from scipy.special import gamma, erfc  # type: ignore
+from scipy.stats import chi2  # type: ignore
+from sklearn.utils import check_random_state as check_random_state_sklearn  # type: ignore
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):
@@ -66,7 +64,9 @@ def is_valid_covmat(covmat):
     """Returns True for a Real, positive-definite, symmetric matrix."""
     covmat = np.atleast_2d(covmat)
     try:
-        if np.allclose(covmat.T, covmat) and np.all(eigh(covmat, eigvals_only=True) > 0):
+        if np.allclose(covmat.T, covmat) and np.all(
+            eigh(covmat, eigvals_only=True) > 0
+        ):
             return True
         return False
     except (AttributeError, np.linalg.LinAlgError):
@@ -153,7 +153,9 @@ def generic_params_names(n, prefix="x_"):
         and not (isinstance(n, float) and np.isclose(n, int(n)))
         or n <= 0
     ):
-        raise TypeError(f"'n' must be a positive integer. Got {n!r} of type {type(n)}).")
+        raise TypeError(
+            f"'n' must be a positive integer. Got {n!r} of type {type(n)})."
+        )
     if not isinstance(prefix, str):
         raise TypeError(
             f"'prefix' must be a string. Got {prefix!r} of type {type(prefix)})."
@@ -234,43 +236,42 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
         ) from excpt
 
 
-def check_candidates(gpr, new_X, tol=1e-8):
+def check_candidates(surrogate, new_X, tol=1e-8):
     """
     Method for determining whether points which have been found by the
-    acquisition algorithm are already in the GP or appear multiple times
-    so that they can be removed.
+    acquisition algorithm are already in the GPR or the surrogate model or appear multiple
+    times so that they can be removed.
     Returns two boolean arrays, the first one indicating whether the point
-    is already in the GP and the second one indicating whether the point
-    appears multiple times.
+    is already in the GPR of the surrogate model and the second one indicating whether the
+    point appears multiple times.
     """
-    if gpr.preprocessing_X is not None:
-        new_X = gpr.preprocessing_X.transform(np.copy(new_X))
-    X_train = np.copy(gpr.X_train_)
-
-    new_X_r = np.round(new_X, decimals=int(-np.log10(tol)))
-    X_train_r = np.round(X_train, decimals=int(-np.log10(tol)))
-    in_training_set = np.any(np.all(X_train_r[:, None, :] == new_X_r, axis=2), axis=0)
-
+    new_X_ = surrogate.preprocessing_X.transform(np.copy(new_X))
+    X_train_ = np.copy(surrogate._X_)
+    new_X_r_ = np.round(new_X_, decimals=int(-np.log10(tol)))
+    X_train_r_ = np.round(X_train_, decimals=int(-np.log10(tol)))
+    in_training_set = np.any(np.all(X_train_r_[:, None, :] == new_X_r_, axis=2), axis=0)
     unique_rows, indices, counts = np.unique(
-        new_X_r, axis=0, return_index=True, return_counts=True
+        new_X_r_, axis=0, return_index=True, return_counts=True
     )
     is_duplicate = counts > 1
-    duplicates = np.isin(new_X_r, unique_rows[is_duplicate]).all(axis=1)
+    duplicates = np.isin(new_X_r_, unique_rows[is_duplicate]).all(axis=1)
     duplicates[indices[is_duplicate]] = False
     return in_training_set, duplicates
 
 
-def is_in_bounds(points, bounds, check_shape=False):
+def is_in_bounds(points, bounds, validate=False):
     """
     Checks if a point or set of points is within the given bounds.
 
     Parameters
     ----------
     points: numpy.ndarray
-        An (N, d) array of points to check
+        An (N, d) array of points to check. If validate=`True` it accepts a single point
+        too, either as a 1-d array (of d>=1) or a scalar (d=1), at the cost of some
+        overhead.
     bounds: numpy.ndarray
         An (d, 2) array of parameter bounds
-    check_shape : bool (default: False)
+    validate : bool (default: False)
         Whether to check for consistency of array shapes.
 
     Returns
@@ -278,8 +279,11 @@ def is_in_bounds(points, bounds, check_shape=False):
     numpy.ndarray:
         A boolean array of length N indicating whether each point is within the bounds.
     """
-    points = np.atleast_2d(points)
-    if check_shape:
+    if validate:
+        if not hasattr(points, "shape"):
+            points = np.array([[points]])
+        elif len(points.shape) == 1:
+            points = np.array([points])
         bounds = check_and_return_bounds(bounds)
         if bounds.shape[0] != points.shape[1]:
             raise ValueError(
@@ -360,6 +364,7 @@ def shrink_bounds(bounds, samples, factor=1):
     updated_bounds[:, 1] = np.array([updated_bounds[:, 1], bounds[:, 1]]).min(axis=0)
     return updated_bounds
 
+
 def wrap_likelihood(loglike, ndim):
     """
     Wraps a likelihood function to accept a single argument (a vector of parameters) if it takes
@@ -370,14 +375,15 @@ def wrap_likelihood(loglike, ndim):
 
     # Count parameters by kind
     positional = [
-        p for p in params.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        p
+        for p in params.values()
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
-    keyword = [
-        p for p in params.values()
-        if p.kind == inspect.Parameter.KEYWORD_ONLY
-    ]
-    var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values())
+    keyword = [p for p in params.values() if p.kind == inspect.Parameter.KEYWORD_ONLY]
+    var_positional = any(
+        p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()
+    )
     var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
     n_args = len(positional)
@@ -385,8 +391,10 @@ def wrap_likelihood(loglike, ndim):
 
     # Case 1: function takes exactly ndim arguments (positional/keyword), wrap it
     if n_args == ndim or n_all == ndim:
+
         def wrapped(X):
             return loglike(*X)
+
         return wrapped
 
     # Case 2: function takes one argument (e.g. already accepts a vector), pass through
@@ -394,7 +402,9 @@ def wrap_likelihood(loglike, ndim):
         return loglike
 
     else:
-        raise ValueError(f"Function has signature {sig} which is incompatible with ndim={ndim}")
+        raise ValueError(
+            f"Function has signature {sig} which is incompatible with ndim={ndim}"
+        )
 
 
 def remove_0_weight_samples(weights, *arrays):

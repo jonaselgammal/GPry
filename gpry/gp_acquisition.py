@@ -13,14 +13,17 @@ from copy import deepcopy
 from typing import Mapping
 from functools import partial
 import numpy as np
-import scipy.optimize
-from sklearn.base import is_regressor
+import scipy.optimize  # type: ignore
 
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.proposal import PartialProposer, CentroidsProposer, Proposer, UniformProposer
 from gpry import mpi
-from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples, \
-    is_in_bounds
+from gpry.tools import (
+    NumpyErrorHandling,
+    get_Xnumber,
+    remove_0_weight_samples,
+    is_in_bounds,
+)
 import gpry.ns_interfaces as nsint
 from gpry.mc import samples_dict_to_getdist, _name_logp
 
@@ -29,21 +32,27 @@ def builtin_names():
     """
     Lists all names of all built-in acquisition functions criteria.
     """
-    list_names = [name for name, obj in inspect.getmembers(sys.modules[__name__])
-                  if (issubclass(obj.__class__, GenericGPAcquisition.__class__) and
-                      obj is not GenericGPAcquisition)]
+    list_names = [
+        name
+        for name, obj in inspect.getmembers(sys.modules[__name__])
+        if (
+            issubclass(obj.__class__, GenericGPAcquisition.__class__)
+            and obj is not GenericGPAcquisition
+        )
+    ]
     return list_names
 
 
-class GenericGPAcquisition():
+class GenericGPAcquisition:
     """Generic class for acquisition objects."""
 
-    def __init__(self,
-                 bounds,
-                 preprocessing_X=None,
-                 verbose=1,
-                 acq_func="LogExp",
-                 ):
+    def __init__(
+        self,
+        bounds,
+        preprocessing_X=None,
+        verbose=1,
+        acq_func="LogExp",
+    ):
         self.bounds_ = np.array(bounds).copy()
         self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
@@ -77,11 +86,11 @@ class GenericGPAcquisition():
                 f"specification. Got {acq_func}"
             )
 
-    def __call__(self, X, gpr, eval_gradient=False):
-        """Returns the value of the acquision function at ``X`` given a ``gpr``."""
-        return self.acq_func(X, gpr, eval_gradient=eval_gradient)
+    def __call__(self, X, surrogate, eval_gradient=False, validate=True):
+        """Returns the value of the acquision function at ``X`` given a ``surrogate``."""
+        return self.acq_func(X, surrogate, eval_gradient=eval_gradient, validate=validate)
 
-    def multi_add(self, gpr, n_points=1, bounds=None, rng=None):
+    def multi_add(self, surrogate, n_points=1, bounds=None, rng=None):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
 
@@ -91,7 +100,7 @@ class GenericGPAcquisition():
 
         Parameters
         ----------
-        gpr : GaussianProcessRegressor
+        surrogate : SurrogateModel
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
@@ -100,8 +109,8 @@ class GenericGPAcquisition():
             evaluations per unit of time.
 
         bounds : np.array, optional
-            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
-            If not defined, the prior bounds are used.
+            Bounds inside which to look for the next proposals, e.g. the surrogate model's
+            trust region. If not defined, the prior bounds are used.
 
         rng : int or numpy.random.Generator, optional
             The generator used to perform the acquisition process. If an integer is given,
@@ -200,25 +209,28 @@ class BatchOptimizer(GenericGPAcquisition):
 
     Attributes
     ----------
-    gpr_ : GaussianProcessRegressor
+    surrogate_ : GaussianProcessRegressor
             The GP Regressor which is currently used for optimization.
 
     """
 
-    def __init__(self,
-                 bounds,
-                 preprocessing_X=None,
-                 verbose=1,
-                 acq_func="LogExp",
-                 # Class-specific:
-                 proposer=None,
-                 acq_optimizer="fmin_l_bfgs_b",
-                 n_restarts_optimizer="5d",
-                 n_repeats_propose=10,
-                 ):
+    def __init__(
+        self,
+        bounds,
+        preprocessing_X=None,
+        verbose=1,
+        acq_func="LogExp",
+        # Class-specific:
+        proposer=None,
+        acq_optimizer="fmin_l_bfgs_b",
+        n_restarts_optimizer="5d",
+        n_repeats_propose=10,
+    ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X,
-            verbose=verbose, acq_func=acq_func,
+            bounds=bounds,
+            preprocessing_X=preprocessing_X,
+            verbose=verbose,
+            acq_func=acq_func,
         )
         self.proposer = proposer
         self.obj_func = None
@@ -226,7 +238,9 @@ class BatchOptimizer(GenericGPAcquisition):
         # If nothing is provided for the proposal, we use a centroids proposer with
         # a fraction of uniform samples.
         if self.proposer is None:
-            self.proposer = PartialProposer(self.bounds_, CentroidsProposer(self.bounds_))
+            self.proposer = PartialProposer(
+                self.bounds_, CentroidsProposer(self.bounds_)
+            )
         else:
             if not isinstance(proposer, Proposer):
                 raise TypeError(
@@ -250,14 +264,17 @@ class BatchOptimizer(GenericGPAcquisition):
                     raise ValueError(
                         "In order to use the 'fmin_l_bfgs_b' "
                         "optimizer the acquisition function needs to be able "
-                        "to return gradients. Got %s" % self.acq_func)
+                        "to return gradients. Got %s" % self.acq_func
+                    )
                 self.acq_optimizer = "fmin_l_bfgs_b"
             elif acq_optimizer == "sampling":
                 self.acq_optimizer = "sampling"
             else:
-                raise ValueError("Supported internal optimizers are 'auto', "
-                                 "'lbfgs' or 'sampling', "
-                                 "got {0}".format(acq_optimizer))
+                raise ValueError(
+                    "Supported internal optimizers are 'auto', "
+                    "'lbfgs' or 'sampling', "
+                    "got {0}".format(acq_optimizer)
+                )
         else:
             self.acq_optimizer = acq_optimizer
         self.n_restarts_optimizer = get_Xnumber(
@@ -267,14 +284,14 @@ class BatchOptimizer(GenericGPAcquisition):
         self.mean_ = None
         self.cov = None
 
-    def optimize_acquisition_function(self, gpr, i, bounds=None, rng=None):
+    def optimize_acquisition_function(self, surrogate, i, bounds=None, rng=None):
         """Exposes the optimization method for the acquisition function. When
         called it proposes a single point where for where to evaluate the true
         model next. It is internally called in the :meth:`multi_add` method.
 
         Parameters
         ----------
-        gpr : GaussianProcessRegressor
+        surrogate : SurrogateModel
             The GP Regressor which is used as surrogate model.
 
         i : int
@@ -292,44 +309,44 @@ class BatchOptimizer(GenericGPAcquisition):
         func : float
             The value of the acquisition function at X_opt
         """
-        # Update proposer with new gpr and new bounds
-        self.proposer.update(gpr)
+        # Update proposer with new surrogate model and new bounds
+        self.proposer.update(surrogate)
         use_bounds = self.bounds_ if bounds is None else bounds
         self.proposer.update_bounds(use_bounds)
 
         # If we do a first-time run, use this
         if not self.obj_func:
-
-            # Check whether gpr is a GP regressor
-            if not is_regressor(gpr):
-                raise ValueError("surrogate model has to be a GP Regressor. "
-                                 "Got %s instead." % gpr)
-
             # Check whether the GP has been fit to data before
-            if not hasattr(gpr, "X_train_"):
+            if not surrogate.fitted:
                 raise AttributeError(
                     "The model which is given has not been fed "
                     "any points. Please make sure, that the model already "
                     "contains data when trying to optimize an acquisition "
-                    "function on it as optimizing priors is not supported yet.")
+                    "function on it as optimizing priors is not supported yet."
+                )
 
             def obj_func(X, eval_gradient=False):
-
                 # TODO: optionally suppress this checks if called by optimiser
                 # Check inputs
                 X = np.asarray(X)
                 X = np.expand_dims(X, axis=0)
                 if X.ndim != 2:
-                    raise ValueError("X is {}-dimensional, however, "
-                                     "it must be 2-dimensional.".format(X.ndim))
+                    raise ValueError(
+                        "X is {}-dimensional, however, "
+                        "it must be 2-dimensional.".format(X.ndim)
+                    )
                 if self.preprocessing_X is not None:
                     X = self.preprocessing_X.inverse_transform(X)
 
                 if eval_gradient:
-                    acq, grad = self.acq_func(X, gpr, eval_gradient=True)
+                    acq, grad = self.acq_func(
+                        X, surrogate, eval_gradient=True, validate=False
+                    )
                     return -1 * acq, -1 * grad
                 else:
-                    return -1 * self.acq_func(X, gpr, eval_gradient=False)
+                    return -1 * self.acq_func(
+                        X, surrogate, eval_gradient=False, validate=False
+                    )
 
             self.obj_func = obj_func
 
@@ -343,8 +360,9 @@ class BatchOptimizer(GenericGPAcquisition):
             # Perform first run from last (in-bounds) training point.
             # Cannot raise StopIteration if trust_region contains at least one point!
             x0 = next(
-                X for X in gpr.X_train[::-1]
-                if np.all(is_in_bounds(X, bounds, check_shape=False))
+                X
+                for X in surrogate.X_regress[::-1]
+                if np.all(is_in_bounds([X], bounds, validate=False))
             )
             if self.preprocessing_X is not None:
                 x0 = self.preprocessing_X.transform(x0)
@@ -357,7 +375,7 @@ class BatchOptimizer(GenericGPAcquisition):
             ifull = 0
             for n_try in range(n_tries):
                 x0 = self.proposer.get(rng=rng)
-                value = self.acq_func(x0, gpr)
+                value = self.acq_func(x0, surrogate, validate=False)
                 if not np.isfinite(value):
                     continue
                 x0s[ifull] = x0
@@ -381,15 +399,17 @@ class BatchOptimizer(GenericGPAcquisition):
                 )
             else:
                 if self.verbose > 1:
-                    print(f"of {n_tries} initial samples for the "
-                          "acquisition optimizer none returned a "
-                          "finite value")
+                    print(
+                        f"of {n_tries} initial samples for the "
+                        "acquisition optimizer none returned a "
+                        "finite value"
+                    )
                 if self.preprocessing_X is not None:
                     x0 = self.preprocessing_X.transform(x0)
                 return x0, -1 * value
 
     def multi_add(
-            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
+        self, surrogate, n_points=1, bounds=None, rng=None, force_resample=False
     ):
         r"""Method to query multiple points where the objective function
         shall be evaluated. The strategy which is used to query multiple
@@ -404,7 +424,7 @@ class BatchOptimizer(GenericGPAcquisition):
 
         Parameters
         ----------
-        gpr : GaussianProcessRegressor
+        surrogate : SurrogateModel
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
@@ -413,8 +433,8 @@ class BatchOptimizer(GenericGPAcquisition):
             evaluations per unit of time.
 
         bounds : np.array, optional
-            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
-            If not defined, the prior bounds are used.
+            Bounds inside which to look for the next proposals, e.g. the surrogate models'
+            trust region. If not defined, the prior bounds are used.
 
         rng : int or numpy.random.Generator, optional
             The generator used to perform the acquisition process. If an integer is given,
@@ -437,36 +457,39 @@ class BatchOptimizer(GenericGPAcquisition):
         use_bounds = self.bounds_ if bounds is None else bounds
         if mpi.is_main_process:
             # Initialize arrays for storing the optimized points
-            X_opts = np.empty((n_points, gpr.d))
+            X_opts = np.empty((n_points, surrogate.d))
             y_lies = np.empty(n_points)
             acq_vals = np.empty(n_points)
             # Copy the GP instance as it is modified during
             # the optimization. The GP will be reset after the
             # Acquisition is done.
-            gpr_ = deepcopy(gpr)
-        gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
-        n_acq_per_process = \
-            mpi.split_number_for_parallel_processes(self.n_restarts_optimizer)
+            surrogate_ = deepcopy(surrogate)
+        surrogate_ = mpi.bcast(surrogate_ if mpi.is_main_process else None)
+        n_acq_per_process = mpi.split_number_for_parallel_processes(
+            self.n_restarts_optimizer
+        )
         n_acq_this_process = n_acq_per_process[mpi.RANK]
-        i_acq_this_process = sum(n_acq_per_process[:mpi.RANK])
-        proposal_X = np.empty((n_acq_this_process, gpr_.d))
+        i_acq_this_process = sum(n_acq_per_process[: mpi.RANK])
+        proposal_X = np.empty((n_acq_this_process, surrogate_.d))
         acq_X = np.empty((n_acq_this_process,))
         for ipoint in range(n_points):
             # Optimize the acquisition function to get a few possible next proposal points
             # (done in parallel)
             for i in range(n_acq_this_process):
                 proposal_X[i], acq_X[i] = self.optimize_acquisition_function(
-                    gpr_, i + i_acq_this_process, bounds=use_bounds, rng=rng
+                    surrogate_, i + i_acq_this_process, bounds=use_bounds, rng=rng
                 )
-            proposal_X_main, acq_X_main = mpi.multi_gather_array(
-                [proposal_X, acq_X])
+            proposal_X_main, acq_X_main = mpi.multi_gather_array([proposal_X, acq_X])
             # Reset the objective function, such that afterwards the correct one is used
             self.obj_func = None
-            # Now take the best and add it to the gpr (done in sequence)
+            # Now take the best and add it to the surrogate model (done in sequence)
             if mpi.is_main_process:
                 # Find out which one of these is the best
-                max_pos = np.argmin(acq_X_main) if np.any(
-                    np.isfinite(acq_X_main)) else len(acq_X_main) - 1
+                max_pos = (
+                    np.argmin(acq_X_main)
+                    if np.any(np.isfinite(acq_X_main))
+                    else len(acq_X_main) - 1
+                )
                 X_opt = proposal_X_main[max_pos]
                 # Transform X and clip to bounds
                 if self.preprocessing_X is not None:
@@ -475,47 +498,55 @@ class BatchOptimizer(GenericGPAcquisition):
                 acq_val = -1 * acq_X_main[max_pos]
                 X_opt = np.array([X_opt])
                 # Get the "lie" (prediction of the GP at X)
-                y_lie = gpr_.predict(X_opt)
+                y_lie = surrogate_.predict(X_opt, validate=False)
                 # Try to append the lie to change uncertainties (and thus acq func)
                 # (no need to append if it's the last iteration)
                 if ipoint < n_points - 1:
                     # Take the mean of errors as supposed measurement error
                     lie_noise_level = (
-                        np.array([np.mean(gpr_.noise_level)])
-                        if np.iterable(gpr_.noise_level) else None
+                        np.array([np.mean(surrogate_.noise_level)])
+                        if np.iterable(surrogate_.noise_level)
+                        else None
                     )
                     # Add lie to GP
-                    gpr_.append_to_data(
-                        X_opt, y_lie, noise_level=lie_noise_level,
-                        fit_gpr=False, fit_classifier=False,
+                    surrogate_.append(
+                        X_opt,
+                        y_lie,
+                        noise_level=lie_noise_level,
+                        fit_gpr=False,
+                        fit_classifier=False,
                     )
                 # Append the points found to the array
                 X_opts[ipoint] = X_opt[0]
                 y_lies[ipoint] = y_lie[0]
                 acq_vals[ipoint] = acq_val
-            # Send this new gpr_ instance to all mpi
-            gpr_ = mpi.bcast(gpr_ if mpi.is_main_process else None)
-        gpr.n_eval = gpr_.n_eval  # gather #evals of the GP, for cost monitoring
+            # Send this new surrogate_ instance to all mpi
+            surrogate_ = mpi.bcast(surrogate_ if mpi.is_main_process else None)
+        # gather #evals of the GP, for cost monitoring
+        surrogate.n_eval = surrogate_.n_eval
         return mpi.bcast(
-            (X_opts, y_lies, acq_vals) if mpi.is_main_process else (None, None, None))
+            (X_opts, y_lies, acq_vals) if mpi.is_main_process else (None, None, None)
+        )
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
-
         if self.acq_optimizer == "fmin_l_bfgs_b":
             # with warnings.catch_warnings():
             #     warnings.simplefilter("ignore")
             opt_res = scipy.optimize.fmin_l_bfgs_b(
-                obj_func, initial_X, args={"eval_gradient": True},
-                bounds=bounds, approx_grad=False)
+                obj_func,
+                initial_X,
+                args={"eval_gradient": True},
+                bounds=bounds,
+                approx_grad=False,
+            )
             theta_opt, func_min = opt_res[0], opt_res[1]
         elif self.acq_optimizer == "sampling":
             opt_res = scipy.optimize.minimize(
-                obj_func, initial_X, args=(False), method="Powell",
-                bounds=bounds)
+                obj_func, initial_X, args=(False), method="Powell", bounds=bounds
+            )
             theta_opt, func_min = opt_res.x, opt_res.fun
         elif callable(self.acq_optimizer):
-            theta_opt, func_min = \
-                self.acq_optimizer(obj_func, initial_X, bounds=bounds)
+            theta_opt, func_min = self.acq_optimizer(obj_func, initial_X, bounds=bounds)
         else:
             raise ValueError("Unknown optimizer %s." % self.acq_optimizer)
 
@@ -544,7 +575,7 @@ class NORA(GenericGPAcquisition):
 
     mc_every : int
         If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
-        otherwise, recomputing y and sigma with the new GPR.
+        otherwise, recomputing y and sigma with the new surrogate model.
 
     nlive_per_training: int
         live points per sample in the current training set.
@@ -576,32 +607,35 @@ class NORA(GenericGPAcquisition):
 
     Attributes
     ----------
-    gpr_ : GaussianProcessRegressor
+    surrogate_ : SurrogateModel
             The GP Regressor which is currently used for optimization.
 
     """
 
-    def __init__(self,
-                 bounds,
-                 preprocessing_X=None,
-                 verbose=1,
-                 acq_func="LogExp",
-                 # Class-specific:
-                 sampler=None,
-                 mc_every="1d",
-                 nlive_per_training=3,
-                 nlive_max="25d",
-                 nlive_per_dim_max=None,  # deprecated
-                 num_repeats="5d",
-                 num_repeats_per_dim=None,  # deprecated
-                 precision_criterion_target=0.01,
-                 nprior_per_nlive=10,
-                 max_ncalls=None,
-                 tmpdir=None,
-                 ):
+    def __init__(
+        self,
+        bounds,
+        preprocessing_X=None,
+        verbose=1,
+        acq_func="LogExp",
+        # Class-specific:
+        sampler=None,
+        mc_every="1d",
+        nlive_per_training=3,
+        nlive_max="25d",
+        nlive_per_dim_max=None,  # deprecated
+        num_repeats="5d",
+        num_repeats_per_dim=None,  # deprecated
+        precision_criterion_target=0.01,
+        nprior_per_nlive=10,
+        max_ncalls=None,
+        tmpdir=None,
+    ):
         super().__init__(
-            bounds=bounds, preprocessing_X=preprocessing_X,
-            verbose=verbose, acq_func=acq_func,
+            bounds=bounds,
+            preprocessing_X=preprocessing_X,
+            verbose=verbose,
+            acq_func=acq_func,
         )
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
@@ -628,7 +662,9 @@ class NORA(GenericGPAcquisition):
             )
             self.num_repeats = num_repeats_per_dim * self.n_d
         else:
-            self.num_repeats = get_Xnumber(num_repeats, "d", self.n_d, int, "num_repeats")
+            self.num_repeats = get_Xnumber(
+                num_repeats, "d", self.n_d, int, "num_repeats"
+            )
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
@@ -671,8 +707,9 @@ class NORA(GenericGPAcquisition):
                 return
         # Load the requested sampler
         try:
-            self.sampler_interface = \
-                nsint._ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
+            self.sampler_interface = nsint._ns_interfaces[this_sampler.lower()](
+                self.bounds_, self.verbose
+            )
         except (AttributeError, KeyError) as excpt:
             if this_sampler.lower() != "uniform":
                 raise ValueError(
@@ -681,7 +718,7 @@ class NORA(GenericGPAcquisition):
                 ) from excpt
         self.sampler = this_sampler
 
-    def update_NS_precision(self, gpr):
+    def update_NS_precision(self, surrogate):
         """
         Updates NS precision parameters:
         - num_repeats: constant for now
@@ -689,13 +726,13 @@ class NORA(GenericGPAcquisition):
             `nlive_max` (typically 25 * dimension).
         - precision_criterion: constant for now.
         """
-        nlive = min(self.nlive_per_training * gpr.n, self.nlive_max)
+        nlive = min(self.nlive_per_training * surrogate.n_regress, self.nlive_max)
         return {
             "nlive": nlive,
             "num_repeats": self.num_repeats,
             "precision_criterion": self.precision_criterion_target,
             "nprior": int(self.nprior_per_nlive * nlive),
-            "max_ncalls": self.max_ncalls
+            "max_ncalls": self.max_ncalls,
         }
 
     def log(self, msg, level=None):
@@ -716,7 +753,6 @@ class NORA(GenericGPAcquisition):
         if not mpi.is_main_process:
             return None
         if self.tmpdir is None:
-            # pylint: disable=consider-using-with
             tmpdir = tempfile.TemporaryDirectory().name
         else:
             tmpdir = os.path.abspath(os.path.join(self.tmpdir, str(self.i)))
@@ -725,7 +761,7 @@ class NORA(GenericGPAcquisition):
             tmpdir += "/"
         return tmpdir
 
-    def do_MC_sample(self, gpr, bounds, rng=None, sampler=None):
+    def do_MC_sample(self, surrogate, bounds, rng=None, sampler=None):
         """
 
         Returns
@@ -736,38 +772,40 @@ class NORA(GenericGPAcquisition):
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
-            return self._do_MC_sample_uniform(gpr, bounds=bounds, rng=rng)
+            return self._do_MC_sample_uniform(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "polychord":
-            return self._do_MC_sample_polychord(gpr, bounds=bounds, rng=rng)
+            return self._do_MC_sample_polychord(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "ultranest":
-            return self._do_MC_sample_ultranest(gpr, bounds=bounds, rng=rng)
+            return self._do_MC_sample_ultranest(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "nessai":
-            return self._do_MC_sample_nessai(gpr, bounds=bounds, rng=rng)
+            return self._do_MC_sample_nessai(surrogate, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
     # TODO: merge samples for >1 MPI processes.
-    def _do_MC_sample_uniform(self, gpr, bounds=None, rng=None):
+    def _do_MC_sample_uniform(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
-        n_total = 1000 * gpr.d
-        X = np.empty(shape=(n_total, gpr.d))
+        n_total = 1000 * surrogate.d
+        X = np.empty(shape=(n_total, surrogate.d))
         for i in range(n_total):
             X[i] = proposer.get(rng=rng)
         return X, None, None, None
 
-    def _do_MC_sample_polychord(self, gpr, bounds=None, rng=None):
+    def _do_MC_sample_polychord(self, surrogate, bounds=None, rng=None):
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
-        self.sampler_interface.set_precision(**self.update_NS_precision(gpr))
+        self.sampler_interface.set_precision(**self.update_NS_precision(surrogate))
         # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
         X_MC, y_MC, w_MC = self.sampler_interface.run(
-            lambda X: gpr.predict(np.atleast_2d(X), return_std=False, validate=False)[0],
+            lambda X: surrogate.predict(
+                np.atleast_2d(X), return_std=False, validate=False
+            )[0],
             out_dir=self._get_output_folder(),
             keep_all=False,
             seed=seed,
@@ -778,25 +816,26 @@ class NORA(GenericGPAcquisition):
         y_MC = None
         return X_MC, y_MC, None, w_MC
 
-    def _do_MC_sample_ultranest(self, gpr, bounds=None, rng=None):
+    def _do_MC_sample_ultranest(self, surrogate, bounds=None, rng=None):
 
-        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
+        # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
             """
             # Ultranest cannot deal with -np.inf
-            prev_miv = gpr.minus_inf_value
-            gpr.minus_inf_value = -1e-300
-            logp = gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
-            gpr.minus_inf_value = prev_miv
+            prev_miv = surrogate.minus_inf_value
+            surrogate.minus_inf_value = -1e-300
+            logp = surrogate.predict(np.atleast_2d(X), return_std=False, validate=False)
+            surrogate.minus_inf_value = prev_miv
             return logp
 
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
         prec_settings = {
-            k: v for k, v in self.update_NS_precision(gpr).items()
+            k: v
+            for k, v in self.update_NS_precision(surrogate).items()
             if k in ["nlive", "precision_criterion", "max_ncalls"]
         }
         self.sampler_interface.set_precision(**prec_settings)
@@ -816,8 +855,7 @@ class NORA(GenericGPAcquisition):
         y_MC = None
         return X_MC, y_MC, None, w_MC
 
-    # pylint: disable=import-outside-toplevel
-    def _do_MC_sample_nessai(self, gpr, bounds=None, rng=None):
+    def _do_MC_sample_nessai(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         if mpi.multiple_processes:
@@ -825,18 +863,20 @@ class NORA(GenericGPAcquisition):
                 "Support for Nessai is experimental at the moment, and not MPI-compatible"
                 " (running in rank-0 process only)."
             )
-        # Initialise "likelihood" -- returns GPR value and deals with pooling/ranking
+
+        # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
             """
-            return gpr.predict(X, return_std=False, validate=False)
+            return surrogate.predict(X, return_std=False, validate=False)
 
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
         prec_settings = {
-            k: v for k, v in self.update_NS_precision(gpr).items()
+            k: v
+            for k, v in self.update_NS_precision(surrogate).items()
             if k in ["nlive", "precision_criterion"]
         }
         self.sampler_interface.set_precision(**prec_settings)
@@ -855,13 +895,13 @@ class NORA(GenericGPAcquisition):
         y_MC = None
         return X_MC, y_MC, None, w_MC
 
-    def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, gpr=None):
+    def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, surrogate=None):
         """
         Stores the MC sample as attributes.
 
         If either `y` and/or `sigma_y` are passed as `None`, you can ensure their
-        calculation (in parallel) with `ensure_y_sigma=True`. In that case, a `gpr` is
-        needed.
+        calculation (in parallel) with `ensure_y_sigma=True`. In that case, a
+        ``surrogate`` is needed.
 
         Use ``last_MC_sample[_getdist]`` to retrieve it.
         """
@@ -869,10 +909,10 @@ class NORA(GenericGPAcquisition):
         self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = X, y, sigma_y, w
         if ensure_y_sigma_y:
             self._y_mc, self._sigma_y_mc = mpi.compute_y_parallel(
-                gpr, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
+                surrogate, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
             )
 
-    def _reweight_last_MC_sample(self, gpr, bounds=None, ensure_sigma_y=False):
+    def _reweight_last_MC_sample(self, surrogate, bounds=None, ensure_sigma_y=False):
         """Stores the MC sample as attributes. Use ``last_MC_sample`` to retrieve it."""
         self.is_last_MC_reweighted = True
         X_excpt, y_excpt = None, None
@@ -892,11 +932,11 @@ class NORA(GenericGPAcquisition):
             self._X_mc_reweight = np.copy(self._X_mc)
             if bounds is not None:
                 # Keep points within new bounds (maybe none!)
-                i_within = is_in_bounds(self._X_mc_reweight, bounds, check_shape=False)
+                i_within = is_in_bounds(self._X_mc_reweight, bounds, validate=False)
                 self._X_mc_reweight = self._X_mc_reweight[i_within]
                 # TODO: not handled: there could be 0 points within new bounds
         self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
-            gpr, self._X_mc_reweight, None, None, ensure_sigma_y=ensure_sigma_y
+            surrogate, self._X_mc_reweight, None, None, ensure_sigma_y=ensure_sigma_y
         )
         if mpi.is_main_process:
             # Reweight, and drop 0 weights
@@ -908,21 +948,29 @@ class NORA(GenericGPAcquisition):
                     w_mc = w_mc[i_within] if w_mc is not None else None
                 reweight_factor = np.exp(self._y_mc_reweight - y_mc)
                 w_mc_reweight = (
-                    w_mc if w_mc is not None
+                    w_mc
+                    if w_mc is not None
                     else np.ones(shape=self._X_mc_reweight.shape[0])
                 ) * reweight_factor
                 w_mc_reweight /= max(w_mc_reweight)
-            self._w_mc_reweight, self._X_mc_reweight, self._y_mc_reweight, \
-                self._sigma_y_mc_reweight = remove_0_weight_samples(
-                    w_mc_reweight, self._X_mc_reweight,
-                    self._y_mc_reweight, self._sigma_y_mc_reweight
-                )
+            (
+                self._w_mc_reweight,
+                self._X_mc_reweight,
+                self._y_mc_reweight,
+                self._sigma_y_mc_reweight,
+            ) = remove_0_weight_samples(
+                w_mc_reweight,
+                self._X_mc_reweight,
+                self._y_mc_reweight,
+                self._sigma_y_mc_reweight,
+            )
 
     def last_MC_sample(self, copy=False, warn_reweight=True):
         """
         Returns the last MC sample as ``(X, y, sigma_y, weights)``. ``y, sigma_y``
-        may be None if not computed while sampling. They can be generated with the gpr.
-        If ``weights`` is None, all samples should be assumed to have equal weights.
+        may be None if not computed while sampling. They can be generated with the
+        surrogate model. If ``weights`` is None, all samples should be assumed to have
+        equal weights.
 
         Prints a warning if it is a reweighted sample.
         """
@@ -932,8 +980,10 @@ class NORA(GenericGPAcquisition):
                     "This is a reweighted sample! (disable with `warn_reweight=False`)"
                 )
             return_values = (
-                self._X_mc_reweight, self._y_mc_reweight,
-                self._sigma_y_mc_reweight, self._w_mc_reweight
+                self._X_mc_reweight,
+                self._y_mc_reweight,
+                self._sigma_y_mc_reweight,
+                self._w_mc_reweight,
             )
         else:
             return_values = (self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc)
@@ -969,7 +1019,7 @@ class NORA(GenericGPAcquisition):
         )
 
     def multi_add(
-            self, gpr, n_points=1, bounds=None, rng=None, force_resample=False
+        self, surrogate, n_points=1, bounds=None, rng=None, force_resample=False
     ):
         r"""Method to query multiple points where the objective function
         shall be evaluated.
@@ -987,7 +1037,7 @@ class NORA(GenericGPAcquisition):
 
         Parameters
         ----------
-        gpr : GaussianProcessRegressor
+        surrogate : SurrogateModel
             The GP Regressor which is used as surrogate model.
 
         n_points : int, optional (default=1)
@@ -996,8 +1046,8 @@ class NORA(GenericGPAcquisition):
             evaluations per unit of time.
 
         bounds : np.array, optional
-            Bounds inside which to look for the next proposals, e.g. the GPR trust region.
-            If not defined, the prior bounds are used.
+            Bounds inside which to look for the next proposals, e.g. the surrogate model's
+            trust region. If not defined, the prior bounds are used.
 
         rng : int or numpy.random.Generator, optional
             The generator used to perform the acquisition process. If an integer is given,
@@ -1020,15 +1070,18 @@ class NORA(GenericGPAcquisition):
         # Gather an MC sample, only not-None for rank 0; bcasted by _split_and_compute_acq
         if mpi.is_main_process:
             start_sample = time()
-        mc_sample_this_time = not bool(self.mc_every_i % self.mc_every) or force_resample
+        mc_sample_this_time = (
+            not bool(self.mc_every_i % self.mc_every) or force_resample
+        )
         if mc_sample_this_time:
             self._set_MC_sample(
-                *self.do_MC_sample(gpr, bounds=bounds, rng=rng),
-                ensure_y_sigma_y=True, gpr=gpr
+                *self.do_MC_sample(surrogate, bounds=bounds, rng=rng),
+                ensure_y_sigma_y=True,
+                surrogate=surrogate,
             )
-            self._X_already_proposed = np.empty(shape=(0, gpr.d))
+            self._X_already_proposed = np.empty(shape=(0, surrogate.d))
         else:
-            self._reweight_last_MC_sample(gpr, bounds=bounds, ensure_sigma_y=True)
+            self._reweight_last_MC_sample(surrogate, bounds=bounds, ensure_sigma_y=True)
         self.mc_every_i += 1
         X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
         # Find indices of already used elements to exclude them.
@@ -1047,23 +1100,27 @@ class NORA(GenericGPAcquisition):
             sigma_y_mc = np.delete(sigma_y_mc, i_already_proposed, axis=0)
         # Compute acq functions and missing quantities.
         self.acq_func_y_sigma = partial(
-            self.acq_func.f, baseline=gpr.y_max,
-            noise_level=gpr.noise_level, zeta=self.acq_func.zeta)
+            self.acq_func.f,
+            baseline=surrogate.y_max,
+            noise_level=surrogate.noise_level,
+            zeta=self.acq_func.zeta,
+        )
         # *Split* among MPI processes and compute acq func value (in parallel)
-        this_X, this_y, this_sigma_y, this_acq = \
-            self._split_and_compute_acq(X_mc, y_mc, sigma_y_mc)
+        this_X, this_y, this_sigma_y, this_acq = self._split_and_compute_acq(
+            X_mc, y_mc, sigma_y_mc
+        )
         if mpi.is_main_process:
             what_we_did = (
-                f"Obtained new MC sample with {self.sampler}" if mc_sample_this_time
+                f"Obtained new MC sample with {self.sampler}"
+                if mc_sample_this_time
                 else "Re-evaluated previous MC sample"
             )
-            self.log(
-                f"({(time()-start_sample):.2g} sec) {what_we_did}")
+            self.log(f"({(time() - start_sample):.2g} sec) {what_we_did}")
         # Rank to get best points:
         mpi.sync_processes()
         if mpi.is_main_process:
             start_rank = time()
-        args = (this_X, this_y, this_sigma_y, this_acq, n_points, gpr)
+        args = (this_X, this_y, this_sigma_y, this_acq, n_points, surrogate)
         # TODO: facility to test speed of ranking methods
         # CHECK: if no MPI, all methods starting with the same one should yield the same
         # IMPLEMENT: non-parallel even if MPI
@@ -1071,18 +1128,19 @@ class NORA(GenericGPAcquisition):
         # if not hasattr(self, "totals"):
         #     self.totals = {}
         for method, merge_method in [
-                # ("bulk", "bulk"),
-                # ("bulk", "single sort acq"),
-                ("single sort acq", "bulk"),  # seems to be the fastest
-                # ("bulk", "single sort y"),
-                # ("single sort acq", "single sort acq"),
-                # ("single sort y", "bulk"),
-                # ("single sort y", "single sort y"),
-                # ("single", "single"),
+            # ("bulk", "bulk"),
+            # ("bulk", "single sort acq"),
+            ("single sort acq", "bulk"),  # seems to be the fastest
+            # ("bulk", "single sort y"),
+            # ("single sort acq", "single sort acq"),
+            # ("single sort y", "bulk"),
+            # ("single sort y", "single sort y"),
+            # ("single", "single"),
         ]:
             # start = time()
             merged_pool = self._parallel_rank_and_merge(
-                *args, method=method, merge_method=merge_method)
+                *args, method=method, merge_method=merge_method
+            )
             # delta = time() - start
             # if (method, merge_method) not in self.totals:
             #     self.totals[(method, merge_method)] = 0
@@ -1096,15 +1154,14 @@ class NORA(GenericGPAcquisition):
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
         X_pool, y_pool = merged_pool.X[:n_points], merged_pool.y[:n_points]
-        with np.errstate(divide='ignore'):
+        with np.errstate(divide="ignore"):
             acq_pool = self.acq_func_y_sigma(y_pool, merged_pool.sigma[:n_points])
         # Track the used ones, to ignore them until new MC sample drawn.
         self._X_already_proposed = np.concatenate([self._X_already_proposed, X_pool])
         mpi.sync_processes()
         self.pool.reset_cache()  # reduces size of pickled object
         if mpi.is_main_process:
-            self.log(
-                f"({(time()-start_rank):.2g} sec) Ranked pool of candidates.")
+            self.log(f"({(time() - start_rank):.2g} sec) Ranked pool of candidates.")
         return X_pool, y_pool, acq_pool
 
     def _split_and_compute_acq(self, X, y, sigma_y):
@@ -1120,29 +1177,41 @@ class NORA(GenericGPAcquisition):
         this_X = mpi.step_split(X)
         this_y = mpi.step_split(y)
         this_sigma_y = mpi.step_split(sigma_y)
-        with np.errstate(divide='ignore'):
+        with np.errstate(divide="ignore"):
             this_acq = self.acq_func_y_sigma(this_y, this_sigma_y)
         return this_X, this_y, this_sigma_y, this_acq
 
     # Parallel version of the ranking of the MC points
     def _parallel_rank_and_merge(
-            self, this_X, this_y, this_sigma_y, this_acq, n_points, gpr, method=None,
-            merge_method=None):
+        self,
+        this_X,
+        this_y,
+        this_sigma_y,
+        this_acq,
+        n_points,
+        surrogate,
+        method=None,
+        merge_method=None,
+    ):
         if method is None:
             method = "auto"
         # For dimensionalities 4 and smaller, bulk adding is expected to be faster.
         if method.lower() == "auto":
-            method = "bulk" if gpr.d <= 4 else "single sort acq"
+            method = "bulk" if surrogate.d <= 4 else "single sort acq"
             merge_method = "bulk"
         # The size of the pool should be at least the amount of points to be acquired.
         # If running several processes in parallel, it can be reduced down to the number
         #   of points to be evaluated per process, but with less guarantee to find an
         #   optimal set.
         self.pool = RankedPool(
-            n_points, gpr=gpr, acq_func=self.acq_func_y_sigma, verbose=self.verbose - 3)
-        with np.errstate(divide='ignore'):
+            n_points,
+            surrogate=surrogate,
+            acq_func=self.acq_func_y_sigma,
+            verbose=self.verbose - 3,
+        )
+        with np.errstate(divide="ignore"):
             self.pool.add(this_X, this_y, this_sigma_y, this_acq, method=method)
-            merged_pool = self._merge_pools(n_points, gpr, method=merge_method)
+            merged_pool = self._merge_pools(n_points, surrogate, method=merge_method)
         return merged_pool
 
     def _gather_pools(self):
@@ -1152,13 +1221,13 @@ class NORA(GenericGPAcquisition):
         rank-0 process returns [X, y, sigma, acq], where the last two are the
         unconditioned input ones.
         """
-        pool_X = mpi.gather(self.pool.X[:len(self.pool)])
-        pool_y = mpi.gather(self.pool.y[:len(self.pool)])
-        pool_sigma = mpi.gather(self.pool.sigma[:len(self.pool)])
-        pool_acq = mpi.gather(self.pool.acq[:len(self.pool)])
+        pool_X = mpi.gather(self.pool.X[: len(self.pool)])
+        pool_y = mpi.gather(self.pool.y[: len(self.pool)])
+        pool_sigma = mpi.gather(self.pool.sigma[: len(self.pool)])
+        pool_acq = mpi.gather(self.pool.acq[: len(self.pool)])
         # Using the conditional acq value just to discard empty slots (acq=-inf)
         # Later discarded (not returned), since they need to be recomputed anyway.
-        pool_acq_cond = mpi.gather(self.pool.acq_cond[:len(self.pool)])
+        pool_acq_cond = mpi.gather(self.pool.acq_cond[: len(self.pool)])
         if mpi.is_main_process:
             # Discard unfilled positions
             pool_acq_cond = np.concatenate(pool_acq_cond)
@@ -1170,7 +1239,7 @@ class NORA(GenericGPAcquisition):
             return pool_X, pool_y, pool_sigma, pool_acq
         return None, None, None, None
 
-    def _merge_pools(self, n_points, gpr, method=None):
+    def _merge_pools(self, n_points, surrogate, method=None):
         """
         Merges the pools of parallel processes to find ``n_points`` optimal locations.
 
@@ -1184,14 +1253,17 @@ class NORA(GenericGPAcquisition):
         merged_pool = None
         if mpi.is_main_process:
             merged_pool = RankedPool(
-                n_points, gpr=gpr, acq_func=self.acq_func_y_sigma,
-                verbose=self.pool.verbose)
+                n_points,
+                surrogate=surrogate,
+                acq_func=self.acq_func_y_sigma,
+                verbose=self.pool.verbose,
+            )
             merged_pool.add(pool_X, pool_y, pool_sigma, pool_acq, method=method)
         merged_pool = mpi.bcast(merged_pool)
         return merged_pool
 
 
-class RankedPool():
+class RankedPool:
     """
     Keeps a ranked pool of sample proposal for Krigging-believer, given a GP regressor
     and an acquisition function.
@@ -1201,7 +1273,7 @@ class RankedPool():
     size : int
         Number of points sampled proposals targeted.
 
-    gpr : GaussianProcessRegressor
+    surrogate : SurrogateModel
         The GP Regressor which is used as surrogate model.
 
     acq_func : callable
@@ -1214,19 +1286,19 @@ class RankedPool():
         problems arise.
     """
 
-    def __init__(self, size, gpr, acq_func, verbose=1):
-        self._gpr = gpr
+    def __init__(self, size, surrogate, acq_func, verbose=1):
+        self._surrogate = surrogate
         self._acq_func = acq_func
         self.verbose = verbose
         # The pool should have one more element than the number of desired points.
-        self.X = np.zeros((size + 1, gpr.d))
+        self.X = np.zeros((size + 1, surrogate.d))
         self.y = np.zeros((size + 1))
         # Condioned acquisition, used for ranking; -np.inf means "empty slot"
         self.acq_cond = np.full((size + 1), -np.inf)
         # Input quantities, only used at point, stored just for logging
         self.sigma = np.zeros((size + 1))
         self.acq = np.zeros((size + 1))
-        # Cached conditioned GPR's
+        # Cached conditioned surrogates
         self.reset_cache()
         # Counter how many models have been cached, for efficieny checks
         self.cache_counter = 0
@@ -1262,27 +1334,47 @@ class RankedPool():
         return f"{X}, y = {y} +/- {sigma}{sigma_cond_str}; acq = {acq}{acq_cond_str}"
 
     def str_pool(
-            self, include_last=False, last_sorted=None, prefix=None, suffix_last=None):
+        self, include_last=False, last_sorted=None, prefix=None, suffix_last=None
+    ):
         """Returns a string representation of the current pool."""
         pool_str = ""
         for i in range(len(self.X) + (-1 if not include_last else 0)):
             pool_str += (
-                (prefix or "") + f"{i + 1} : " + self.str_point(
-                    self.X[i], self.y[i], self.sigma[i], self.acq[i],
-                    acq_cond=self.acq_cond[i]
-                ) + (" [last sorted]" if i == last_sorted else "") + "\n"
+                (prefix or "")
+                + f"{i + 1} : "
+                + self.str_point(
+                    self.X[i],
+                    self.y[i],
+                    self.sigma[i],
+                    self.acq[i],
+                    acq_cond=self.acq_cond[i],
+                )
+                + (" [last sorted]" if i == last_sorted else "")
+                + "\n"
             )
         return pool_str.rstrip("\n") + (
-            f" {suffix_last}" if include_last and suffix_last else "")
+            f" {suffix_last}" if include_last and suffix_last else ""
+        )
 
     def log_pool(
-            self, level=4, include_last=False, last_sorted=None, prefix=None,
-            suffix_last=None):
+        self,
+        level=4,
+        include_last=False,
+        last_sorted=None,
+        prefix=None,
+        suffix_last=None,
+    ):
         """Prints the current pool."""
         if self.verbose >= level:
-            self.log(level=level, msg=self.str_pool(
-                include_last=include_last, last_sorted=last_sorted, prefix=prefix,
-                suffix_last=suffix_last))
+            self.log(
+                level=level,
+                msg=self.str_pool(
+                    include_last=include_last,
+                    last_sorted=last_sorted,
+                    prefix=prefix,
+                    suffix_last=suffix_last,
+                ),
+            )
 
     def __str__(self):
         return self.str_pool(include_last=False)
@@ -1297,10 +1389,11 @@ class RankedPool():
             Position of the proposed sample.
 
         y: np.ndarray (1 dimension fewer than X) or float, optional
-            Predicted value under the GPR.
+            Predicted value under the surrogate model.
 
         sigma: np.ndarray (1 dimension fewer than X) or float, optional
-            Predicted standard deviation under the GPR. Will be computed if not passed.
+            Predicted standard deviation under the surrogate model. Will be computed if
+            not passed.
 
         acq: np.ndarray (1 dimension fewer than X) or float, optional
             Acquisition function values (unconditioned). Will be computed if not passed.
@@ -1315,9 +1408,9 @@ class RankedPool():
         if sigma is not None:
             sigma = np.atleast_1d(sigma)
         if y is None:
-            y, sigma = self._gpr.predict(X, return_std=True, validate=False)
+            y, sigma = self._surrogate.predict(X, return_std=True, validate=False)
         elif sigma is None:
-            sigma = self._gpr.predict_std(X, validate=False)
+            sigma = self._surrogate.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
         if method.lower() == "bulk":
@@ -1325,11 +1418,12 @@ class RankedPool():
         elif method.lower().startswith("single"):
             i_sort = None
             if "sort" in method.lower():
-                i_sort = np.argsort(
-                    {"acq": acq, "y": y}[method.lower().split()[-1]])[::-1]
+                i_sort = np.argsort({"acq": acq, "y": y}[method.lower().split()[-1]])[
+                    ::-1
+                ]
             # Descending order of unconditioned acq or unconditional mean prediction:
             # minimizes the number of swaps: model caches + calculation of acq_cond
-            for i in (i_sort if i_sort is not None else range(len(X))):
+            for i in i_sort if i_sort is not None else range(len(X)):
                 self.add_one(X[i], y[i], sigma[i], acq[i])
         else:
             raise ValueError(f"Algorithm '{method}' not known.")
@@ -1349,16 +1443,16 @@ class RankedPool():
         """
         # Compute acq using the model just above (and cache it if needed)
         if i_start == 0:  # no need to condition
-            gpr = self._gpr
+            surrogate = self._surrogate
             acq_cond = acq if isinstance(acq, np.ndarray) else np.array(acq)
         else:
-            gpr = self.cache_model(i_start - 1)
-            sigma_cond = gpr.predict_std(X, validate=False)
+            surrogate = self.cache_model(i_start - 1)
+            sigma_cond = surrogate.predict_std(X, validate=False)
             acq_cond = self._acq_func(y, sigma_cond)
         if acq_cond.size == 0:
             self.log(
                 level=4,
-                msg=f"No finite acq points to fill the pool from [{i_start}] down."
+                msg=f"No finite acq points to fill the pool from [{i_start}] down.",
             )
             return
         # Find best
@@ -1367,7 +1461,7 @@ class RankedPool():
         if acq_cond_max == np.inf:
             self.log(
                 level=4,
-                msg=f"No finite acq points to fill the pool from [{i_start}] down."
+                msg=f"No finite acq points to fill the pool from [{i_start}] down.",
             )
             return
         self.X[i_start] = X[i_max]
@@ -1411,10 +1505,10 @@ class RankedPool():
             Position of the proposed sample.
 
         y: float, optional
-            Predicted value under the GPR.
+            Predicted value under the surrogate model.
 
         sigma: float, optional
-            Predicted standard deviation under the GPR.
+            Predicted standard deviation under the surrogate model.
 
         acq: float, optional
             Value of the acquisition function.
@@ -1434,18 +1528,19 @@ class RankedPool():
             return
         X = np.atleast_2d(X)
         if y is None:  # assume sigma is also None
-            y, sigma = self._gpr.predict(X, return_std=True, validate=False)
+            y, sigma = self._surrogate.predict(X, return_std=True, validate=False)
             y, sigma = y[0], sigma[0]
         elif not hasattr(y, "__len__"):
             y = np.array([y])
         if sigma is None:
-            sigma = self._gpr.predict_std(X, validate=False)
+            sigma = self._surrogate.predict_std(X, validate=False)
         if acq is None:
             acq = self._acq_func(y, sigma)
         if self.verbose >= 4:
             self.log(
-                level=4, msg=("[pool.add] Checking point " +
-                              self.str_point(X, y, sigma, acq)))
+                level=4,
+                msg=("[pool.add] Checking point " + self.str_point(X, y, sigma, acq)),
+            )
         # Repeat the min acq test above to leave asap
         if acq <= self.min_acq:
             self.log(level=4, msg="[pool.add] Acq. func. value too small. Ignoring.")
@@ -1467,9 +1562,9 @@ class RankedPool():
                 # with high acq. func. value is close to one of the top points, and its
                 # conditioned acq. func. value drops to a small value after conditioning.
                 # The equals sign below prevents -inf's from climbing up the list.
-                i_new = (len(self) -
-                         next(i for i in range(len(self))
-                              if self.acq_cond[-(i + 2)] >= acq_cond))
+                i_new = len(self) - next(
+                    i for i in range(len(self)) if self.acq_cond[-(i + 2)] >= acq_cond
+                )
             except StopIteration:  # top of the list reached
                 i_new = 0
             self.log(level=4, msg=f"[pool.add] Provisional position: [{i_new + 1}]")
@@ -1478,7 +1573,9 @@ class RankedPool():
                 break
             # Otherwise, compute conditioned acquisition value, using point above,
             # and continue to the next iteration to re-rank
-            sigma_cond = self.gpr_cond[i_new - 1].predict_std(X, validate=False)[0]
+            sigma_cond = self.surrogate_cond[i_new - 1].predict_std(X, validate=False)[
+                0
+            ]
             # New acquisition should not be higher than the old one, since the new one
             # corresponds to a model with more training points (though fake ones).
             # This may happen anyway bc numerical errors, e.g. when the correlation
@@ -1488,48 +1585,60 @@ class RankedPool():
             acq_cond = min(acq_cond, self._acq_func(y, sigma_cond))
             i_new_last = i_new
             if self.verbose >= 4:  # avoid creating the f-strings
-                self.log(level=4,
-                         msg=f"[pool.add] Updated conditional std: {sigma_cond}")
-                self.log(level=4,
-                         msg=f"[pool.add] Updated conditional acquisition: {acq_cond}")
+                self.log(
+                    level=4, msg=f"[pool.add] Updated conditional std: {sigma_cond}"
+                )
+                self.log(
+                    level=4,
+                    msg=f"[pool.add] Updated conditional acquisition: {acq_cond}",
+                )
         # The last position is just a place-holder: don't save it if it falls there.
         if i_new >= len(self):
             self.log(level=4, msg="[pool.add] Discarded!")
             return
-        self.log(level=4, msg=f"[pool.add] Final position: [{i_new + 1}] of {len(self)}")
+        self.log(
+            level=4, msg=f"[pool.add] Final position: [{i_new + 1}] of {len(self)}"
+        )
         # Insert the new one in its place, and push the rest down one place.
         # We track the conditioned acq. value (but not the sigma), to retain the
         # information about whether each slot was empty (acq = -inf)
         # (but not for the acq values, which will be updated below)
-        for pool, value in [(self.X, X), (self.y, y),
-                            (self.sigma, sigma), (self.acq, acq),
-                            (self.acq_cond, acq_cond)]:
-            pool[i_new + 1:] = pool[i_new:-1]
+        for pool, value in [
+            (self.X, X),
+            (self.y, y),
+            (self.sigma, sigma),
+            (self.acq, acq),
+            (self.acq_cond, acq_cond),
+        ]:
+            pool[i_new + 1 :] = pool[i_new:-1]
             pool[i_new] = value
         # If not in the last position, we can safely assume that it has finite value,
         # since -inf's from conditional acq cannot climb.
         assert self.acq_cond[i_new] > -np.inf
         self.log(level=4, msg="[pool.add] Current unsorted pool:")
-        self.log_pool(level=4, include_last=True, last_sorted=i_new, prefix="[pool.add] ")
+        self.log_pool(
+            level=4, include_last=True, last_sorted=i_new, prefix="[pool.add] "
+        )
         # Sort the sublist below the new element
         self.sort(i_new + 1)
         self.log(level=4, msg="[pool.add] The new pool, sorted:")
-        self.log_pool(level=4, include_last=True, prefix="[pool.add] ",
-                      suffix_last="[unused]")
+        self.log_pool(
+            level=4, include_last=True, prefix="[pool.add] ", suffix_last="[unused]"
+        )
         # Make sure that the last slot (buffer) is marked as empty
         self.acq_cond[-1] = -np.inf
 
     def cache_model(self, i):
         """
         Cache the GP model that contains the training set plus the pool points up to
-        position ``i`` (0-based), with predicted dummy y, keeping the GPR hyperparameters
-        unchanged.
+        position ``i`` (0-based), with predicted dummy y, keeping the surrogate model
+        hyperparameters unchanged.
 
-        Stores and returns the conditioned gpr (or the original one if ``i=-1``).
+        Stores and returns the conditioned surrofate (or the original one if ``i=-1``).
         """
         # This function accounts for ~50% of the ranking time in add_one() (the rest is
         # mostly predict_std()).
-        # Taking dim=8 as reference, deepcopy is ~1/3 and append_to_data ~2/3 of the cost.
+        # Taking dim=8 as reference, deepcopy is ~1/3 and append ~2/3 of the cost.
         # Possible optimization strategies:
         # - Disable SVM in cached models (no need to copy, fit, or evaluate), assuming all
         #   passed points are finite [tested to improve <10% overall in add_one{}]
@@ -1539,37 +1648,40 @@ class RankedPool():
         #   If there are very few inversions, we save the cost of copying [potentially
         #   ~30% this function, 15% overall in add_one()]
         # - Disable the copying of stuff not needed to compute std.
-        # - At append_to_data, compute only what is strictly needed for std (I think the
+        # - At append, compute only what is strictly needed for std (I think the
         #   kernel gradient is the only such thing.
         # - Create model anew with fixed given kernel and no SVM, and fit all points.
         # In any case, the cost is now very low compared to nested sampling and hyperparam
         # fitting.
         if i < 0:
-            return self._gpr
+            return self._surrogate
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
-        self.gpr_cond[i] = deepcopy(self._gpr)
-        self.gpr_cond[i].append_to_data(
-            self.X[:i + 1], self.y[:i + 1], fit_gpr=False, fit_classifier=False
+        self.surrogate_cond[i] = deepcopy(self._surrogate)
+        self.surrogate_cond[i].append(
+            self.X[: i + 1], self.y[: i + 1], fit_gpr=False, fit_classifier=False
         )
         self.cache_counter += 1
-        return self.gpr_cond[i]
+        return self.surrogate_cond[i]
 
     def reset_cache(self):
         """
-        Deletes the cached GPR models when there are not needed any more.
+        Deletes the cached surrogate models when there are not needed any more.
         """
         # No need to store the last element in the list (or the last buffer slot)
-        self.gpr_cond = [None] * len(self.X - 1)
+        self.surrogate_cond = [None] * len(self.X - 1)
 
     def __getstate__(self):
         return deepcopy(self).__dict__
 
-    # Remove references to external objects (gpr and acq_func) and cached gpr's
+    # Remove references to external objects (surrogate and acq_func) and cached surrogates
     def __deepcopy__(self, memo=None):
-        attrs_ignore_at_copy = ["_gpr", "_acq_func", "gpr_cond"]
+        attrs_ignore_at_copy = ["_surrogate", "_acq_func", "surrogate_cond"]
         new = self.__class__.__new__(self.__class__)
-        new.__dict__ = {k: deepcopy(v) for k, v in self.__dict__.items()
-                        if k not in attrs_ignore_at_copy}
+        new.__dict__ = {
+            k: deepcopy(v)
+            for k, v in self.__dict__.items()
+            if k not in attrs_ignore_at_copy
+        }
         return new
 
     def copy(self, drop_empty=False):
@@ -1598,7 +1710,7 @@ class RankedPool():
     def sort(self, i_start=0):
         """
         Sorts in descending order of acquisition function value, where the acq of the
-        ``i``-th element (0-based) is conditioned on the GPR model that includes the
+        ``i``-th element (0-based) is conditioned on the surrogate model that includes the
         points with j<i with their predicted (mean) y.
 
         If ``i_start!=0`` is given, assumes the upper elements in the list are already
@@ -1611,14 +1723,14 @@ class RankedPool():
         # If beyond last position, nothing to do (the = case is the last buffer slot):
         if i_start >= len(self):
             self.log(
-                level=4,
-                msg="[pool.sort] Nothing to do (sorting beyond last position).")
+                level=4, msg="[pool.sort] Nothing to do (sorting beyond last position)."
+            )
             return
         self.log(
             level=4,
             msg=f"[pool.sort] Sorting the pool starting at [{i_start + 1}]",
         )
-        upper_gpr_cond = self.cache_model(i_start - 1)
+        upper_surrogate_cond = self.cache_model(i_start - 1)
         # If list not full (first sublist element's acq_cond=-inf), do nothing
         if self.acq_cond[i_start] == -np.inf:
             self.log(level=4, msg="[pool.sort] Nothing to do (list is not full yet).")
@@ -1628,30 +1740,36 @@ class RankedPool():
             i_1st_inf = next(i for i, ac in enumerate(self.acq_cond) if ac == -np.inf)
         except StopIteration:
             i_1st_inf = len(self) + 1
-        sigma_cond = upper_gpr_cond.predict_std(
-            self.X[i_start:i_1st_inf], validate=False)
+        sigma_cond = upper_surrogate_cond.predict_std(
+            self.X[i_start:i_1st_inf], validate=False
+        )
         # Cond acq cannot be higher than less cond one. This clipping takes care of
         # numerical noise that may make it higher. In particular, keeps -inf if it was so.
         acq_cond = np.clip(
             self._acq_func(self.y[i_start:i_1st_inf], sigma_cond),
-            None, np.inf if i_start == 0 else self.acq_cond[i_start - 1]
+            None,
+            np.inf if i_start == 0 else self.acq_cond[i_start - 1],
         )
         if self.verbose >= 4:  # avoid creating the f-strings
             self.log(level=4, msg=f"[pool.sort] New conditioned std: {sigma_cond}")
             self.log(level=4, msg=f"[pool.sort] New conditioned acq: {acq_cond}")
-        j_sort = np.argsort(-acq_cond)  # descending order! -- This is a *sub*list index!
+        # descending order! -- This is a *sub*list index!
+        j_sort = np.argsort(-acq_cond)
         acq_cond_max = acq_cond[j_sort[0]]
         # If the max found was -inf, no need to re-sort points: disable all and return
         if acq_cond_max == -np.inf:
             self.log(
                 level=4,
-                msg="[pool.sort] Nothing to do (all sublist elements have -inf acq)."
+                msg="[pool.sort] Nothing to do (all sublist elements have -inf acq).",
             )
             self.acq_cond[i_start:i_1st_inf] = -np.inf
             return
-        self.log(level=4, msg=(
-            f"[pool.sort] New max acq_cond = {acq_cond_max} "
-            f"at position [{i_start + j_sort[0] + 1}]")
+        self.log(
+            level=4,
+            msg=(
+                f"[pool.sort] New max acq_cond = {acq_cond_max} "
+                f"at position [{i_start + j_sort[0] + 1}]"
+            ),
         )
         # Reorder (not enough to swap the max here, because new -inf may have been
         # generated, and we need to push them too the bottom.
@@ -1665,6 +1783,7 @@ class RankedPool():
         self.acq_cond[i_start:i_1st_inf] = acq_cond[j_sort]
         self.log(level=4, msg=f"[pool.sort] Partial sort up to {i_start + 1}:")
         self.log_pool(
-            level=4, include_last=True, last_sorted=i_start, prefix="[pool.sort] ")
+            level=4, include_last=True, last_sorted=i_start, prefix="[pool.sort] "
+        )
         # Sort the sublist below (if empty or single element, taken care of inside)
         self.sort(i_start + 1)

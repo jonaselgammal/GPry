@@ -83,7 +83,6 @@ class NSInterface(ABC):
         """
         if out_dir is None:
             if random_if_undefined:
-                # pylint: disable=consider-using-with
                 return tempfile.TemporaryDirectory().name, default_prefix
             raise ValueError(
                 "No output root passed. Use ``random_if_undefined=True`` to generate a "
@@ -108,9 +107,8 @@ class InterfacePolyChord(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel
-            from pypolychord.settings import PolyChordSettings
-            from pypolychord import run_polychord
+            from pypolychord.settings import PolyChordSettings  # type: ignore
+            from pypolychord import run_polychord  # type: ignore
 
             self.globals = {"run_polychord": run_polychord}
         except ModuleNotFoundError as excpt:
@@ -152,8 +150,7 @@ class InterfacePolyChord(NSInterface):
 
     def set_prior(self, bounds):
         """Sets the prior used by the nested sampler."""
-        # pylint: disable=import-outside-toplevel
-        from pypolychord.priors import UniformPrior
+        from pypolychord.priors import UniformPrior  # type: ignore
 
         self.prior = UniformPrior(*(bounds.T))
 
@@ -162,7 +159,12 @@ class InterfacePolyChord(NSInterface):
         known = ["nlive", "num_repeats", "precision_criterion", "nprior", "max_ncalls"]
         for p in known:
             val = kwargs.pop(p, None)
-            if val is not None and p in ["nlive", "num_repeats", "nprior", "max_ncalls"]:
+            if val is not None and p in [
+                "nlive",
+                "num_repeats",
+                "nprior",
+                "max_ncalls",
+            ]:
                 val = get_Xnumber(val, "d", self.dim, int, p)
             if val is not None:
                 setattr(self.polychord_settings, p, val)
@@ -191,13 +193,15 @@ class InterfacePolyChord(NSInterface):
                 logp = logp_func(*x)
                 self.X_all.append(x[0])
                 self.y_all.append(logp)
-                return logp
+                return logp, []
 
         else:
             logp_func_wrapped = logp_func
         # Configure folders and settings
         if mpi.is_main_process:
-            base_dir, file_root = self.process_out_dir(out_dir, random_if_undefined=True)
+            base_dir, file_root = self.process_out_dir(
+                out_dir, random_if_undefined=True
+            )
             self.polychord_settings.base_dir = base_dir
             self.polychord_settings.file_root = file_root
         # Set seed (only that of rank 0 is used, and incremented internally by PolyChord)
@@ -250,7 +254,9 @@ class InterfacePolyChord(NSInterface):
             base_dir = self.polychord_settings.base_dir
             file_root = self.polychord_settings.file_root
         else:
-            base_dir, file_root = self.process_out_dir(out_dir, random_if_undefined=False)
+            base_dir, file_root = self.process_out_dir(
+                out_dir, random_if_undefined=False
+            )
         if not file_root:
             # Delete whole folder
             shutil.rmtree(base_dir)
@@ -279,9 +285,8 @@ class InterfaceNessai(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel
-            from nessai.model import Model as NessaiModel
-            from nessai.flowsampler import FlowSampler
+            from nessai.model import Model as NessaiModel  # type: ignore
+            from nessai.flowsampler import FlowSampler  # type: ignore
 
             self.globals = {"NessaiModel": NessaiModel, "FlowSampler": FlowSampler}
         except ModuleNotFoundError as excpt:
@@ -428,8 +433,7 @@ class InterfaceUltraNest(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            # pylint: disable=import-outside-toplevel
-            from ultranest import ReactiveNestedSampler
+            from ultranest import ReactiveNestedSampler  # type: ignore
 
             self.globals = {"ReactiveNestedSampler": ReactiveNestedSampler}
         except ModuleNotFoundError as excpt:
@@ -497,7 +501,6 @@ class InterfaceUltraNest(NSInterface):
         """
         if keep_all:
             raise NotImplementedError("keep_all=True not yet possible for ultranest.")
-        # pylint: disable=consider-using-with
         if mpi.is_main_process:
             self.output, _ = self.process_out_dir(out_dir, random_if_undefined=True)
         sampler = self.globals["ReactiveNestedSampler"](

@@ -28,8 +28,8 @@ def check_in_bounds(get_method):
 
     def wrapper(self, *args, **kwargs):
         i = 0
-        x = np.nan
-        while not is_in_bounds(x, self.bounds, check_shape=False)[0]:
+        x = [np.nan]
+        while not is_in_bounds([x], self.bounds, validate=False)[0]:
             i += 1
             if not i % 1000:
                 warn(
@@ -64,7 +64,6 @@ class Proposer(metaclass=ABCMeta):
             seed for the default global numpy random number generator.
         """
 
-    # pylint: disable=attribute-defined-outside-init
     def update_bounds(self, bounds):
         """
         Updates the bounds for the proposal.
@@ -77,14 +76,14 @@ class Proposer(metaclass=ABCMeta):
         """
         self.bounds = np.atleast_2d(bounds)
 
-    def update(self, gpr):
+    def update(self, surrogate):
         """
         Updates the internal GP instance if it has been updated with new data.
 
         Parameters
         ----------
-        gpr : GaussianProcessRegressor
-            The gpr instance that has been updated.
+        surrogate : SurrogateModel
+            The surrogate instance that has been updated.
         """
 
 
@@ -185,7 +184,6 @@ class PartialProposer(Proposer, InitialPointProposer):
 
     # Either sample from true_proposer, or give a random prior sample
     def __init__(self, bounds, true_proposer, random_proposal_fraction=0.25):
-
         if random_proposal_fraction > 1.0 or random_proposal_fraction < 0.0:
             raise ValueError(
                 "Cannot pass a fraction outside of [0,1]. "
@@ -207,8 +205,8 @@ class PartialProposer(Proposer, InitialPointProposer):
             return self.true_proposer.get(rng=rng)
         return self.random_proposer.get(rng=rng)
 
-    def update(self, gpr):
-        self.true_proposer.update(gpr)
+    def update(self, surrogate):
+        self.true_proposer.update(surrogate)
 
     def update_bounds(self, bounds):
         self.random_proposer.update_bounds(bounds)
@@ -292,7 +290,9 @@ class CentroidsProposer(Proposer):
                 rng.choice(len(self.training_), size=m, replace=False)
             ]
         except ValueError:  # m > len(training_)
-            subset = self.training[rng.choice(len(self.training), size=m, replace=False)]
+            subset = self.training[
+                rng.choice(len(self.training), size=m, replace=False)
+            ]
         centroid = np.average(subset, axis=0)
         # perturb the point: per dimension, add a random multiple of the difference
         # between the centroid and one of the points.
@@ -307,9 +307,9 @@ class CentroidsProposer(Proposer):
         # points which are exactly on the edges.
         return np.clip(centroid + kick, self.bounds[:, 0], self.bounds[:, 1])
 
-    def update(self, gpr):
-        # Get training locations from gpr and save them
-        self.training = np.copy(gpr.X_train)
+    def update(self, surrogate):
+        # Get training locations from surrogate and save them
+        self.training = np.copy(surrogate.X_regress)
 
     def update_bounds(self, bounds):
         super().update_bounds(bounds)
@@ -405,9 +405,9 @@ class SmallChainProposer(Proposer):
     def resample(self, rng=None):
         rng = check_random_state(rng)
         for i in range(self.nretries):
-            this_i = rng.choice(range(len(self.gpr.X_train)))
-            this_X = np.copy(self.gpr.X_train[this_i])
-            logpost = self.gpr.y_train[this_i]
+            this_i = rng.choice(range(len(self.surrogate.X_regress)))
+            this_X = np.copy(self.surrogate.X_regress[this_i])
+            logpost = self.surrogate.y_regress[this_i]
             from cobaya.model import LogPosterior
 
             self.sampler.current_point.add(this_X, LogPosterior(logpost=logpost))
@@ -427,17 +427,20 @@ class SmallChainProposer(Proposer):
         for i in range(self.nsteps):
             self.samples[i] = self.random_proposer.get()
 
-    def update(self, gpr):
+    def update(self, surrogate):
         self.samples = []
         from gpry.mc import mc_sample_from_gp_cobaya
 
         surr_info, sampler = mc_sample_from_gp_cobaya(
-            gpr,
+            surrogate,
             self.bounds,
             sampler="mcmc",
             run=False,
-            sampler_options={"max_samples": self.npoints, "max_tries": 10 * self.npoints},
+            sampler_options={
+                "max_samples": self.npoints,
+                "max_tries": 10 * self.npoints,
+            },
         )
         self.sampler = sampler
         self.parnames = list(surr_info["params"])
-        self.gpr = gpr
+        self.surrogate = surrogate

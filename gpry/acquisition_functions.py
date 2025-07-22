@@ -125,12 +125,15 @@ class AcquisitionFunction(metaclass=ABCMeta):
                 return Hyperparameter(
                     "param_1", "numeric", fixed=self.fixed)
 
-            def __call__(self, X, gp, eval_gradient=False):
+            def __call__(self, X, gp, eval_gradient=False, validate=True):
                 # * 'X': The value(s) at which the acquisition function is
                 #    evaluated
                 # * 'GP': The surrogate GP model which shall be used.
                 # * 'eval_gradient': Whether the gradient shall be given or
                 #   not. Only required if 'self.hasgradient' is true.
+                # * 'validate': Whether the args of the gp.predict methods
+                #   will be checked to have the correct type, shape, etc.
+                #   at some overhead cost.
                 ....
                 # Returned are the value(s) of the acquisition function at
                 # point(s) X and optionally their gradient(s)
@@ -362,7 +365,7 @@ class AcquisitionFunction(metaclass=ABCMeta):
                             "bool, not %s" % hasgradient)
 
     @abstractmethod
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Evaluate the acquisition function."""
 
     def __add__(self, b):
@@ -432,7 +435,7 @@ class ConstantAcqFunc(AcquisitionFunction):
         return Hyperparameter(
             "constant_value", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
         gradient.
 
@@ -497,7 +500,7 @@ class Mu(AcquisitionFunction):
         return Hyperparameter(
             "a", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
         its gradient.
 
@@ -530,10 +533,10 @@ class Mu(AcquisitionFunction):
             if eval_gradient:
                 mu, _, mu_grad = gp.predict(
                     X, return_std=True, return_mean_grad=True,
-                    return_std_grad=False)
+                    return_std_grad=False, validate=validate)
 
             else:
-                mu, std = gp.predict(X, return_std=True)
+                mu, std = gp.predict(X, return_std=True, validate=validate)
 
         if eval_gradient:
             return mu, mu_grad
@@ -570,7 +573,7 @@ class ExponentialMu(AcquisitionFunction):
         return Hyperparameter(
             "a", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
         gradient.
 
@@ -602,7 +605,9 @@ class ExponentialMu(AcquisitionFunction):
         mu, mu_grad = gp.predict(X, return_std=False,
                                  return_cov=False,
                                  return_mean_grad=True,
-                                 return_std_grad=False)
+                                 return_std_grad=False,
+                                 validate=validate,
+                                 )
         A_f = np.exp(self.a * mu)
         if eval_gradient:
             A_f_grad = self.a * mu_grad * np.exp(self.a * mu)
@@ -641,7 +646,7 @@ class Std(AcquisitionFunction):
         return Hyperparameter(
             "a", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
         its gradient.
 
@@ -673,10 +678,10 @@ class Std(AcquisitionFunction):
             if eval_gradient:
                 _, std, _, std_grad = gp.predict(
                     X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True)
+                    return_std_grad=True, validate=validate)
 
             else:
-                mu, std = gp.predict(X, return_std=True)
+                mu, std = gp.predict(X, return_std=True, validate=validate)
 
         if eval_gradient:
             return std, std_grad
@@ -714,7 +719,7 @@ class ExponentialStd(AcquisitionFunction):
         return Hyperparameter(
             "a", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
         gradient.
 
@@ -747,7 +752,9 @@ class ExponentialStd(AcquisitionFunction):
                                          return_std=True,
                                          return_cov=False,
                                          return_mean_grad=True,
-                                         return_std_grad=True)
+                                         return_std_grad=True,
+                                         validate=validate,
+                                         )
         A_f = np.exp(self.a * std)
         if eval_gradient:
             A_f_grad = self.a * std_grad * np.exp(self.a * std)
@@ -794,7 +801,7 @@ class ExpectedImprovement(AcquisitionFunction):
         return Hyperparameter(
             "xi", "numeric", fixed=self.fixed)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
         gradient.
 
@@ -827,10 +834,10 @@ class ExpectedImprovement(AcquisitionFunction):
             if eval_gradient:
                 mu, std, mu_grad, std_grad = gp.predict(
                     X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True)
+                    return_std_grad=True, validate=validate)
 
             else:
-                mu, std = gp.predict(X, return_std=True)
+                mu, std = gp.predict(X, return_std=True, validate=validate)
 
             y_opt = gp.y_max
 
@@ -933,7 +940,7 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
     def auto_zeta(self, dimension, scaling=0.85):
         return dimension**(-scaling)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
         its gradient.
 
@@ -966,10 +973,10 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
             if eval_gradient:
                 mu, std, mu_grad, std_grad = gp.predict(
                     X, return_std=True, return_mean_grad=True,
-                    return_std_grad=True)
+                    return_std_grad=True, validate=validate)
 
             else:
-                mu, std = gp.predict(X, return_std=True)
+                mu, std = gp.predict(X, return_std=True, validate=validate)
 
         if self.sigma_n is None:
             sigma_n = gp.noise_level
@@ -1293,7 +1300,7 @@ class Sum(AcquisitionFunctionOperator):
     a real number.
     """
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         if eval_gradient:
             k1, k1_grad = self.k1(X, gp, eval_gradient)
             k2, k2_grad = self.k2(X, gp, eval_gradient)
@@ -1314,7 +1321,7 @@ class Product(AcquisitionFunctionOperator):
     a real number.
     """
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         if eval_gradient:
             k1, k1_grad = self.k1(X, gp, eval_gradient)
             k2, k2_grad = self.k2(X, gp, eval_gradient)
@@ -1411,7 +1418,7 @@ class Exponentiation(AcquisitionFunction):
         return (self.acquisition_function == b.acquisition_function and
                 self.exponent == b.exponent)
 
-    def __call__(self, X, gp, eval_gradient=False):
+    def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally its
         gradient.
 
