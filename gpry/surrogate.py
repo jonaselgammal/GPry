@@ -1,7 +1,43 @@
 """
 Class holding the surrogate model.
 
-Underscored-after attributes mean "preprocessed/transformed"
+The surrogate model consists of different parts, some of them optional, acting in
+descending order:
+
+- Preprocessors: defined using kwargs ``preprocessing_X|y``, they define the
+  transformation between the input space and the space in which the GP Regressor and the
+  infinities classifiers are trained on. See the :doc:`documentation of the preprocessing
+  module<module_preprocessing>`.
+
+- Infinities classifier(s): a class handling one or more classifiers that divide the
+  space into regions where the log-posterior is expected to be finite or not. Its purpose
+  is both to focus the GP Regressor into areas where the posterior is more regular, and to
+  save time by avoiding evaluating the GP Regressor in uninsteresting regions. See
+  :doc:`its documentation<module_infinities_classifier>`.
+
+- GP Regressor: It is the heart of the surrogate model and thus the only non-optionally
+  trivial part. It is described in more detail in :doc:`the documentation of its
+  module<module_gpr>`.
+
+- Clipper: an optional post-processor that clips the output of the GP Regressor whenever
+  it is above some factor of the maximum log-posterior difference in the training set.
+
+The :class:`surrogate.SurrogateModel` class provides the :meth:`SurrogateModel.append`
+method to add new data to the model and optionally fit its different components (including
+their hyperparameters if present).
+
+Surrogate model predictions can be obtained using the :meth:`SurrogateModel.logp` method,
+or more generally the :meth:`SurrogateModel.predict` method. Classification of finite
+vs infinite log-posterior values can be obtained with :meth:`SurrogateModel.is_finite_X`
+(for predicting with the classifier(s) based on some input) or
+:meth:`SurrogateModel.is_finite_y` (comparison against a set threshold). Do not call
+methods of the GP Regressor or the classifiers directly, since they need to be passed
+preprocessed input.
+
+To extract the current training set there are a number of class properties defined,
+depending on whether one wants all the training points, just the last ones added, just the
+ones used (or not used) by the GP Regressor, etc. Alternatively, one can get a list of
+all the points and their properties with :meth:`SurrogateModel.training_set_as_df`.
 """
 
 # Builtin
@@ -26,6 +62,9 @@ class SurrogateModel:
     r"""
     Object holding the Gaussian Process Regressor, and, if applicable, the
     input/output preprocessing layer and the infinities classifier.
+
+    Attributes ending with an underscore possess values in the respective preprocessed
+    spaces.
 
     Parameters
     ----------
@@ -62,101 +101,6 @@ class SurrogateModel:
         Level of verbosity of the GP. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
         problems arise.
-
-    Attributes
-    ----------
-    d : int
-        Dimensionality of the training data.
-
-    bounds : array
-        The bounds with which the GPR was defined.
-
-    trust_bounds : array or None
-        The bounds of a smaller trust region possibly defined by a classifier (in
-        particular if :class:`infinities_classifer.TrustRegion` is being used.
-        Otherwise returns the original prior bounds.
-
-    fitted : bool
-        True whenever the the surrogate model has already been fitted to some points.
-
-    n_total : int
-        Number of points/features in the training set of the model, including points with
-        target values classified as infinite.
-
-    X : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values in training data of the GPR. Intended to
-        be used when one wants to access the training data for any purpose.
-
-    y : array-like, shape = (n_samples)
-        Original (untransformed) target values in training data of the GPR. Intended to be
-        used when one wants to access the training data for any purpose.
-
-    X_last_appended : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values added in the training set in the last
-        call to :meth:`Surrogate.append`.
-
-    y_last_appended : array-like, shape = (n_samples)
-        Original (untransformed) targer values added in the training set in the last
-        call to :meth:`Surrogate.append`.
-
-    n_init : int
-        Number of points/features provided as an initial training set.
-
-    X_init : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values provided as an initial training set.
-
-    y_init : array-like, shape = (n_samples)
-        Original (untransformed) target values provided as an initial training set.
-
-    n_regress : int
-        Number of points/features currently in use to train the GP Regressor.
-
-    X_regress : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values currently in use to train the GP
-        Regressor.
-
-    y_regress : array-like, shape = (n_samples)
-        Original (untransformed) target values currently in use to train the GP
-        Regressor.
-
-    X_last_appended_regress : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values added in the training set in the last
-        call to :meth:`Surrogate.append` and accepted into the Regressor.
-
-    y_last_appended_regress : array-like, shape = (n_samples)
-        Original (untransformed) targer values added in the training set in the last
-        call to :meth:`Surrogate.append` and accepted into the Regressor.
-
-    X_infinite : array-like, shape = (n_samples, n_features)
-        Original (untransformed) feature values whose target log-posterior has been
-        classified as non-finite.
-
-    y_infinite : array-like, shape = (n_samples)
-        Original (untransformed) target values that have been classified as non-finite.
-
-    y_max : float
-        Maximum target (log-posterior) value in the training set.
-
-    noise_level : array-like, shape = (n_samples, [n_output_dims]) or scalar
-        The noise level (square-root of the variance) of the uncorrelated
-        training data, un-transformed. Returns a copy.
-
-    scales : tuple(float, (float, float, ...))
-        GPR kernel scales in untransformed space as
-        ``(output_scale, (length_scale1, ...))``.
-
-    abs_finite_threshold : float
-        Absolute threshold above which log-posteriors are considered finite.
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        append
-        fit
-        _update_model
-        predict
     """
 
     def __init__(
@@ -286,7 +230,7 @@ class SurrogateModel:
 
     @property
     def d(self):
-        """Dimension of the feature space."""
+        """Dimensionality of the training data."""
         return len(self._bounds)
 
     @property
@@ -297,8 +241,10 @@ class SurrogateModel:
     @property
     def trust_bounds(self):
         """
-        Bounds of the trust region, i.e. the hyperrectable where the log-posterior is
-        expected to be "finite", defined as being used by the GPR.
+        The bounds of a smaller trust region where the log-posterior is expected to be
+        finite, possibly defined by a classifier (in particular if
+        :class:`infinities_classifer.TrustRegion` is being used).
+        Otherwise returns a copy of the original prior bounds.
         """
         if self.infinities_classifier is not None:
             return self.preprocessing_X.inverse_transform_bounds(
@@ -308,13 +254,16 @@ class SurrogateModel:
 
     @property
     def fitted(self):
-        """Whether the GPR hyperparameters have been fitted at least once."""
+        """
+        True whenever the the surrogate model has already been fitted to some points.
+        """
         return self._fitted
 
     @property
     def n_total(self):
         """
-        Number of all the points used to train the model.
+        Number of points/features in the training set of the model, including points with
+        target values classified as infinite.
         """
         return len(self._y)
 
@@ -322,6 +271,7 @@ class SurrogateModel:
     def X(self):
         """
         Coordinates of all the points used to train the model (returns a copy).
+        Intended to be used when one wants to access the training data for any purpose.
         """
         return np.copy(self._X)
 
@@ -329,29 +279,30 @@ class SurrogateModel:
     def y(self):
         """
         Log-posterior of all the points used to train the model (returns a copy).
+        Intended to be used when one wants to access the training data for any purpose.
         """
         return np.copy(self._y)
 
     @property
     def X_last_appended(self):
         """
-        Returns a copy of the last appended training points, regardless of
-        classification.
+        Coordinates of the training points added to the surrogate model in the last call
+        to :meth:`Surrogate.append`, regardless of classification (returns a copy).
         """
         return np.copy(self._X[-self.n_last_appended :])
 
     @property
     def y_last_appended(self):
         """
-        Returns a copy of the last appended training target values, regardless of
-        classification.
+        Log-posterior of the training points added to the surrogate model in the last call
+        to :meth:`Surrogate.append`, regardless of classification (returns a copy).
         """
         return np.copy(self._y[-self.n_last_appended :])
 
     @property
     def n_init(self):
         """
-        Number of points passed at evaluation.
+        Number of points passed at initialisation.
         """
         return len(np.where(self._i_iter == 0)[0])
 
@@ -372,35 +323,39 @@ class SurrogateModel:
     @property
     def n_regress(self):
         """
-        Number of points used to train the GPR.
+        Number of points currently in use to train the GP Regressor.
         """
         return np.sum(self._i_regress)
 
     @property
     def X_regress(self):
         """
-        Coordinates of the points used to train the GPR (returns a copy).
+        Coordinates of the points currently in use to train the GP Regressor (returns a
+        copy).
         """
         return np.copy(self._X[self._i_regress])
 
     @property
     def y_regress(self):
         """
-        Log-posterior of the points used to train the GPR (returns a copy).
+        Log-posterior of the points currently in use to train the GP Regressor (returns a
+        copy).
         """
         return np.copy(self._y[self._i_regress])
 
     @property
     def X_last_appended_regress(self):
         """
-        Returns a copy of the last appended training points in the GP Regressor.
+        Coordinates of the training points added to the GP Regressor in the last call
+        to :meth:`Surrogate.append` (returns a copy).
         """
         return np.copy(self._X[self._i_regress][-self.n_last_appended_finite :])
 
     @property
     def y_last_appended_regress(self):
         """
-        Returns a copy of the last appended training target values in the GP Regressor.
+        Log-posterior of the training points added to the GP Regressor in the last call
+        to :meth:`Surrogate.append` (returns a copy).
         """
         return np.copy(self._y[self._i_regress][-self.n_last_appended_finite :])
 
@@ -423,14 +378,16 @@ class SurrogateModel:
     @property
     def X_infinite(self, validate=True):
         """
-        Coordinates of the points classified as infinitely small (returns a copy).
+        Coordinates of the training points classified as infinitely small (returns a
+        copy).
         """
         return np.copy(np.delete(self._X, self._i_finite_y, axis=0))
 
     @property
     def y_infinite(self, validate=True):
         """
-        Log-posterior of the points classified as infinitely small (returns a copy).
+        Log-posterior of the training points classified as infinitely small (returns a
+        copy).
         """
         return np.copy(np.delete(self._y, self._i_finite_y))
 
@@ -450,7 +407,7 @@ class SurrogateModel:
     def noise_level(self):
         """
         The noise level (square-root of the variance) of the uncorrelated training
-        data, un-transformed.
+        data, un-transformed (returns a copy).
         """
         return np.copy(self._noise_level)
 
@@ -658,10 +615,10 @@ class SurrogateModel:
         X : array-like, shape = (n_samples, n_features), or None
             Training data to append to the model.
 
-        y : array-like, shape = (n_samples, [n_output_dims]), or None
+        y : array-like, shape = (n_samples), or None
             Target values to append to the data
 
-        noise_level : array-like, shape = (n_samples, [n_output_dims])
+        noise_level : array-like, shape = (n_samples)
             Uncorrelated standard deviations to add to the diagonal part of the covariance
             matrix. Needs to have the same number of entries as y. If None, the
             noise_level set in the instance is used. If you pass a single number the noise
@@ -876,18 +833,18 @@ class SurrogateModel:
 
         Returns
         -------
-        y_mean : array, shape = (n_samples, [n_output_dims])
-            Mean of predictive distribution a query points
+        y_mean : array, shape = (n_samples)
+            Mean of GPR's predictive distribution a query points
 
         y_std : array, shape = (n_samples,), optional
-            Standard deviation of predictive distribution at query points.
+            Standard deviation of GPR's predictive distribution at query points.
             Only returned when return_std is True.
 
         y_mean_grad : shape = (n_samples, n_features), optional
-            The gradient of the predicted mean.
+            The gradient of GPR's the predicted mean.
 
         y_std_grad : shape = (n_samples, n_features), optional
-            The gradient of the predicted std.
+            The gradient of GPR's the predicted std.
         """
         self.n_eval += len(X)
         if return_std_grad and not (return_std and return_mean_grad):
@@ -979,10 +936,32 @@ class SurrogateModel:
         self,
         X,
         validate=True,
-        ignore_trust_region=False,
+        ignore_classifier=None,
     ):
         """
-        Returns the surrogate log-posterior.
+        Returns the surrogate log-posterior. Alias of :meth:`Surrogate.predict` for the
+        GP Regressor's mean only.
+
+        Parameters
+        ----------
+        X : array-like, shape = (n_samples, n_features)
+            Query points where the GP is evaluated.
+
+        validate : bool, default: True
+            If False, ``X`` is assumed to be correctly formatted (2-d float array, with
+            points as rows and dimensions/features as columns, C-contiguous), and no
+            checks are performed on it. Reduces overhead. Use only for repeated calls when
+            the input is programmatically generated to be correct at each stage.
+
+        ignore_classifier : list, optional (default: None)
+            If defined as a list, the classifiers with names on that list are not used
+            to discard the given points whenever all inputs are predicted to be negative
+            infinity.
+
+        Returns
+        -------
+        log-posterior : array, shape = (n_samples)
+            Predicted log-posterior.
         """
         if validate and (
             self.gpr.kernel is None or self.gpr.kernel.requires_vector_input

@@ -1,5 +1,10 @@
 """
-Classes for timing and progress tracking.
+This module provides the :class:`progress.Progress` class which is used to store
+information about the performance of the algorithm (timing, number of GP evaluations,
+etc.).
+
+Under normal circumstances you shouldn't have to use any of the methods in here if you use
+the :class:`run.Runner` class to run GPry.
 """
 
 import time

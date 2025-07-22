@@ -1,7 +1,7 @@
-SVM
-=======
+``run``
+-------
 
-.. automodule:: svm
+.. automodule:: gpry.run
    :members:
    :undoc-members:
    :show-inheritance:

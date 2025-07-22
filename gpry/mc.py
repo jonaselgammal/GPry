@@ -1,5 +1,9 @@
 """
-Functions to interface Cobaya and GetDist for generation and processing of MC samples.
+This module provides some helper methods to interface between GPry and MC samplers
+(Cobaya and the NS' used for NORA).
+
+Under normal circumstances you shouldn't have to use any of the methods in here if you use
+the :class:`run.Runner` class to run GPry.
 """
 
 import os

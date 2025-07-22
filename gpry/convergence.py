@@ -2,6 +2,42 @@
 This module contains several classes and methods for calculating different
 convergence criterions which can be used to determine if the BO loop has
 converged.
+
+It implements a base :class:`convergence.ConvergenceCriterion` class
+of which several inbuilt convergence criteria inherit. Using this base class
+it is also possible to construct custom convergence criteria. All convergence criteria
+are passed a prior object which is part of the model instance and an options dict.
+
+The fastest one, and reasonably accurate, is :class:`convergence.CorrectCounter`, a local
+criterion that checks that the difference between evaluated and predicted values is small
+enough, taking into account dimensional regularization.
+
+If mean and covariance matrix of the surrogate posterior are available (e.g. when using
+the :class:`NORA` acquisition engine), it is a good idea to combine it with
+:class:`GaussianKL`, a global criterion checking stability of KL divergences between
+iterations in a Gaussian approximation.
+
+There is also a self-explanatory :class:`DontConverge` criterion, that can be used in
+combination with a set training sample budget to ensure that this budget is always
+exhausted.
+
+Finally, :class:`TrainAlignment` is a criterion run at the end of the learning loop, that
+checks that the result of an MC run on the surrogate posterior represents the mode
+described by the training set. This avoids converging on overshoots of the GP Regressor.
+
+Convergence policy
+^^^^^^^^^^^^^^^^^^
+
+You can define a ``policy`` for each convergence criterion:
+
+- ``'n'``: necessary (default if not specified)
+- ``'s'``: sufficient
+- ``'ns'``: necessary and sufficient
+- ``'m'``: monitoring (tracked, but will not affect convergence)
+
+If there are no criteria specified as *necessary* or *sufficient*, i.e. all criteria are
+set to *monitor*, the run will never converge (but it will stop at evaluation budget
+exhaustion).
 """
 
 import sys

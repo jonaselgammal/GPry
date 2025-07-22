@@ -7,7 +7,7 @@ If GPry does not converge for your problem with the default settings, or does no
 
 .. note::
 
-   In general, if there are problems, it is recommended to use the NORA [TODO: add reference] acquisition engine, since it allows for better diagnosis tools.
+   In general, if there are problems, it is recommended to use the :class:`NORA acquisition engine <gp_acquisition.NORA>`, since it allows for better diagnosis tools.
 
 
 .. _help_healthy:
@@ -42,8 +42,8 @@ For example, in the following slice we can see two different relevant features:
    :width: 550
    :align: center
 
-- The likelihood seems to have some numerical noise. To deal with this, you should pass a non-null value for the ``noise_level`` of the GPR [TODO: add reference], here approximately ``noise_level=0.1``.
-- There is a discontinuity at :math:`x_1\approx 0.75`. In general, this would spoil a GPR fit, that expects a nearly-continuous function. Ideally, this would persist in the rest of the dimensions, without presenting degeneracies, and a prior cut :math:`x_1 < 0.75` could be implemented. Otherwise, if the discontinuity leads to posterior values that are low enough, one can choose the ``inf_threshold`` of the GPR [TODO: add reference] so that it always discards these values, here approximately ``inf_threshold=20``.
+- The likelihood seems to have some numerical noise. To deal with this, you should pass a non-null value for the ``noise_level`` to the :class:`gpr.GaussianProcessRegressor` as part of the :class:`surrogate.SurrogateModel` arguments, here approximately ``noise_level=0.1``.
+- There is a discontinuity at :math:`x_1\approx 0.75`. In general, this would spoil a GPR fit, that expects a nearly-continuous function. Ideally, this would persist in the rest of the dimensions, without presenting degeneracies, and a prior cut :math:`x_1 < 0.75` could be implemented. Otherwise, if the discontinuity leads to posterior values that are low enough, one can request an infinities classifier with some low threshold (e.g. an SVM, see :doc:`module_infinities_classifier`), here approximately ``inf_threshold=20`` would work.
 
 .. note::
 
@@ -110,6 +110,6 @@ V. Start with high-precision settings
 
 As expected, turning on the `precision paramters` of the algorithm can make it more likely to converge in exchange for additional computational costs. Two good starting points are:
 
-- If using NORA [TODO: reference], decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
+- If using :class:`gp_acquisition.NORA`, decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
 
 - You can increase the frequency with which hyperparameters are fit with the ``fit_full_every`` option of the runner. This will make it more likely that the best GPR configuration is reached as soon as possible, but at a very high computational cost for dimensions larger than 10.

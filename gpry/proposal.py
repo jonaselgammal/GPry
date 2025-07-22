@@ -1,7 +1,12 @@
 """
-Classes to generate random proposals within the prior or trust bounds, used to generate
-initial samples for the active learning cycle, or as starting points from which to
-optimize the acquisition function.
+This module provides different classes to generate random proposals within the prior or
+trust bounds, to be used as initial samples for the active learning cycle, or as starting
+points from which to optimize the acquisition function.
+
+The way these points are proposed becomes increasingly important with higher dimensions as
+the volume of the parameter space grows exponentially.
+
+Every proposer has a ``get`` method which returns a random sample from the proposer.
 """
 
 from abc import ABCMeta, abstractmethod

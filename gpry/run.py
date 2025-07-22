@@ -1,6 +1,32 @@
 """
-Module that defines the ``Runner`` class, which handles input, the active learning loop,
-and the processing of results.
+This module implements the :class:`~run.Runner` class, which handles the Bayesian
+optimization loop, running it and getting MC samples from it. Furthermore some methods
+for plotting and diagnostics are provided.
+
+After intialization, a :class:`~run.Runner` instance possesse as attributes a wrapper
+of the true model (``Runner.truth``), the surrogate model instance (``Runner.surrogate``),
+the acquision engine (``Runner.acquisition``), and the convergence criterion
+(``Runner.convergence``). It also stores the general learning parameters
+(``Runner.options``) and an object containing progress information (``Runner.progress``).
+
+Furthermore the :class:`run.Runner` object allows for checkpointing. The relevant
+arguments are ``checkpoint="/path/to/checkpoint"``, defining where to save the current
+progress, and ``load_checkpoint="resume"|"overwrite"``, which decides what to do if a
+previous run with the specified checkpoint is found (raises an error if path given but
+action not specified, in order to avoid losing previous work).
+
+A ``callback=[callable]`` function can also be passed. It must take a :class:`run.Runner`
+instance as its single non-keyword argument, through which the current :class:`run.Runner`
+instance will be passed, e.g.:
+
+.. code:: python
+
+   def callback(runner):
+       # Print the current training set as a pandas DataFrame
+       print(runner.surrogate.training_set_as_df())
+
+If running with MPI, pass ``callback_is_MPI_aware=True`` (default ``False``) if the
+callback function is supposed to run on all process simultaneously.
 """
 
 import os
@@ -83,7 +109,7 @@ class Runner:
         :class:`infinities_classifier.InfinitiesClassifiers`) and a clip factor for
         large regressor values. E.g.:
 
-        ..code :: yaml
+        .. code:: python
 
             surrogate = {
                 "regressor": {
@@ -202,7 +228,7 @@ class Runner:
     truth : :class:`truth.Truth`
         The model whose log-posterior is learned.
 
-    surrogate : :class: surrogate.SurrogateModel`
+    surrogate : :class:`surrogate.SurrogateModel`
         Surrogate model of ``truth``. It can be used to call an MCMC sampler for getting
         marginalized properties.
 
@@ -364,12 +390,12 @@ class Runner:
                     "kernel": "RBF",
                     "output_scale_prior": [1e-2, 1e3],
                     "length_scale_prior": [1e-3, 1e1],
-                    "noise_level" : 1e-2,
+                    "noise_level": 1e-2,
                     "optimizer": "fmin_l_bfgs_b",
                     "n_restarts_optimizer": 10 + 2 * self.d,
                 },
-                "clip_factor" : 1.1,
-                "infinities_classifier" : {
+                "clip_factor": 1.1,
+                "infinities_classifier": {
                     "svm": {"threshold": "20s"},
                 },
             }

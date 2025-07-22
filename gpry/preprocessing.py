@@ -3,7 +3,7 @@ This module contains several methods of preprocessing the training and target
 values for both the GP Regressor and acquisition module. Instances of different
 preprocessors can be chained together thereby building a *pipeline*.
 
-The preprocessors are implemented into the GP Acquisition and GP Regressor
+The preprocessors are implemented into the GP Acquisition and surrogate model
 module in a way which performs the transformations *behind the scenes* meaning
 that the user can work in the non-transformed space and all transformations will
 be performed internally.
@@ -121,6 +121,7 @@ class PipelineX:
                     # Applies the inverse transform to ``transform_scale``.
                     ...
                     return transformed_scale
+
         .. note::
 
             All the preprocessor objects need to be initialized! Furthermore
@@ -351,9 +352,6 @@ class NormalizeBounds:
 
     Attributes
     ----------
-    transformed_bounds : array-like, shape = (n_dims, 2)
-        Array with [0, 1] along every dimension.
-
     bounds_min : array-like, shape = (n_dims,)
         Lower bounds along every dimension.
 
@@ -559,14 +557,6 @@ class NormalizeY:
 
     std_ : float
         Standard deviation of the y-values
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        transform
-        inverse_transform
     """
 
     def __init__(self, use_median=False):
@@ -663,14 +653,6 @@ class NormalizeYChi2(NormalizeY):
 
     std_ : float
         Standard deviation of the y-values
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        transform
-        inverse_transform
     """
 
     def __init__(self, nsigma=1):

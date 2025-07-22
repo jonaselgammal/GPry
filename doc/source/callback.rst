@@ -89,4 +89,4 @@ function::
        # share something from the main process to the rest
        if is_main_process:
             something = value
-       something = mpi_comm.bcast(something if is_main_process else None)
+       something = mpi.bcast(something if is_main_process else None)

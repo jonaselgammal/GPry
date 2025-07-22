@@ -1,3 +1,14 @@
+"""
+This module contains the Gaussia Process Regressor class. For now, the only implemented
+one is a modified version of the ``sklearn`` implementation, with some tweaks to allow
+disabling input validation and implementing more control at the hyperparameter
+optimization stage.
+
+At the moment, the GPR kernel is a product of a constant kernel and an anisotropic
+length-correlation one. Noise is treated as uncorrelated standard deviations for inputs,
+and thus simply added to the kernel matrix diagonal.
+"""
+
 # Builtin
 import warnings
 from copy import deepcopy
@@ -133,15 +144,6 @@ class GaussianProcessRegressor(sk_GPR):
 
     scales : tuple
         Kernel scales as ``(output_scale, (length_scale_1, ...))``
-
-    **Methods:**
-
-    .. autosummary::
-        :toctree: stubs
-
-        fit
-        predict
-        predict_std
     """
 
     def __init__(
@@ -202,7 +204,7 @@ class GaussianProcessRegressor(sk_GPR):
     @property
     def scales(self):
         """
-        Kernel scales as ``(output_scale, (length_scale_1, ...)).
+        Kernel scales as ``(output_scale, (length_scale_1, ...))``.
         """
         return (
             np.sqrt(self.kernel_.k1.constant_value),

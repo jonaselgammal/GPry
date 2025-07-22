@@ -1,3 +1,10 @@
+"""
+This module contains a number of handy functions for MPI functionality.
+
+Under normal circumstances you shouldn't have to use any of the methods in here if you use
+the :class:`run.Runner` class to run GPry.
+"""
+
 # Defining some helpers for parallelisation.
 import dill
 import numpy as np

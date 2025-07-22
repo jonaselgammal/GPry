@@ -9,7 +9,7 @@ Here we explain some of the key aspects of the GPry algorithm. Unless otherwise 
 Active learning of a Gaussian Process
 -------------------------------------
 
-GPry does not need any pre-training: it trains its surrogate model at run time by selecting optimal evaluation locations. The process of selecting these optimal locations based on current information is commonly known as **active learning**. It involves finding the maximum of an **acquisition function** measuring the amount of information about the true model expected to be gained by evaluating it at a given point. Acquisition functions must manage a good balance between **exploration** (getting an overall-good model of the true function) versus **exploitation** (prioritising a better modelling of the true function where its value is the highest). The default acquisition function used by GPry is described in section :doc:`acquisition_functions`. The automatic scaling with dimensionality of the balance between exploration and exploitation of this acquisition function is one of the novel aspects of GPry.
+GPry does not need any pre-training: it trains its surrogate model at run time by selecting optimal evaluation locations. The process of selecting these optimal locations based on current information is commonly known as **active learning**. It involves finding the maximum of an **acquisition function** measuring the amount of information about the true model expected to be gained by evaluating it at a given point. Acquisition functions must manage a good balance between **exploration** (getting an overall-good model of the true function) versus **exploitation** (prioritising a better modelling of the true function where its value is the highest). The default acquisition function used by GPry is described in section :doc:`module_acquisition_functions`. The automatic scaling with dimensionality of the balance between exploration and exploitation of this acquisition function is one of the novel aspects of GPry.
 
 You can see the way active learning works in the following figure: the top plots show the current GP model, and the bottom ones the value of the acquisition function (for this simple example, the GP standard deviation times the exponential of the double of the GP mean); every column is an iteration of the algorithm. Notice how at every step an evaluation of the true function at the previous maximum of the acquisition function has been added:
 
@@ -43,9 +43,9 @@ In the following figure, to be compared with the one above, we only evaluate the
 The acquisition engine
 ----------------------
 
-It is implied above that the acquisition step of active learning involves a direct optimization of the acquisition function. GPry provides an acquisition engine that does precisely that, with some parallelization involved (see :ref:`batchoptimizer`).
+It is implied above that the acquisition step of active learning involves a direct optimization of the acquisition function. GPry provides an acquisition engine that does precisely that, with some parallelization involved (see :class:`gp_acquisition.BatchOptimizer`).
 
-GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquistion). In it, the optimization of the acquisition function is swapped by a Nested Sampling exploration of the mean of the GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list. For more detail, see :ref:`nora`.
+GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquistion). In it, the optimization of the acquisition function is swapped by a Nested Sampling exploration of the mean of the GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list. For more detail, see :class:`gp_acquisition.NORA`.
 
 This approach has a number of advantages:
 
@@ -75,7 +75,23 @@ Both operations entail a matrix inversion that scales as :math:`N^3`, where :mat
 
 .. note::
 
-   At this step of the algorithm we also re-fit the pre-processors for the input and output data, as well as, if used, the SVM aimed at classifying regions of the parameter space as either interesting (if the posterior value is expected to be significantly high) or not (if the posterior value is expected to be very or infinitely low), see section :ref:`svm`.
+   At this step of the algorithm we also re-fit the pre-processors for the input and output data, as well as, if used, the classifiers aimed partitioning the parameter space into regions of high and low expected posterior value (see below).
+
+
+The infinities classifier
+-------------------------
+
+Though in principle there is no lower limit to the log-posterior values that GPry can handle, there are reasons in practice for dealing with very small posterior values in a different way:
+
+- Large negative log-posteriors, especially those that are literally or effectively minus infinity, can create instabilities in the GP interpolation, even when regularised.
+
+- It is common that returning these values is the way likelihood implementations signify that somewhere along the computational pipeline a particular step failed, so it would not make sense to include it in the interpolation.
+
+- Especially for likelihoods of noisy data, very-low-likelihood values have numerical (deterministic) noise, which does not make sense to model with the GPR.
+
+Since GPry is an inference code, aiming at modelling probability density functions around their modes, it makes sense to censor such values, and if possible to predict them before evaluation of the true likelihood to prevent wasting time exploring a very-low-probability region and making the GPR model heavier.
+
+To do that, we implement :doc:`classifiers for finite vs infinite<module_infinities_classifier>` values, where finiteness is defined as having a (true or predicted) value above a given /threshold/. This threshold is defined in terms of the difference between their log-posterior and the maximum found so far. Only points classified as /finite/ will form part of the GP Regressor's training set, whereas both point types will be used to retrain the classifiers at each iteration. The trained classifier(s) partition the coordinate space into regions for which the log-posterior is expected to be finite or not. When predicting log-posterior values using the surrogate models, the classifier is called before the regressor, and the latter is only run for classified-finite inputs.
 
 
 Convergence check

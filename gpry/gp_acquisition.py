@@ -1,6 +1,12 @@
 """
-GPAcquisition classes, which take care of proposing new locations where to evaluate the
-true function.
+This module implements tools for active sampling with Gaussian Process surrogate models.
+
+It implements two acquisition *engines*: a *classic* one based on optimizint the
+acquisition function (:class:`BatchOptimizer`), and a more exploratory one based on
+a nested sampling exploration of the mean of the GP Regressor (:class:`NORA`).
+
+All classes are MPI-enabled, and can produce multiple optima where to evaluate the true
+log-posterior in parallel.
 """
 
 import os
@@ -721,9 +727,12 @@ class NORA(GenericGPAcquisition):
     def update_NS_precision(self, surrogate):
         """
         Updates NS precision parameters:
+
         - num_repeats: constant for now
+
         - nlive: `nlive_per_training` times the size of the training set, capped at
             `nlive_max` (typically 25 * dimension).
+
         - precision_criterion: constant for now.
         """
         nlive = min(self.nlive_per_training * surrogate.n_regress, self.nlive_max)
