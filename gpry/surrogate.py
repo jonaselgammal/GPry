@@ -220,9 +220,7 @@ class SurrogateModel:
             + f"   {str(self.gpr.kernel)}\n"
             + "  with hyperparameters (in transformed scale):\n"
             + "    -"
-            + "\n    -".join(
-                str(h) for h in self.gpr.kernel.hyperparameters
-            )
+            + "\n    -".join(str(h) for h in self.gpr.kernel.hyperparameters)
             + "\n"
             + f"* Noise level: {self._noise_level}\n"
             + f"* Classifiers for infinities: {self.infinities_classifier}"
@@ -325,7 +323,7 @@ class SurrogateModel:
         """
         Number of points currently in use to train the GP Regressor.
         """
-        return np.sum(self._i_regress)
+        return len(self._i_regress)
 
     @property
     def X_regress(self):
@@ -739,7 +737,7 @@ class SurrogateModel:
         # NB: which points are finite does not change after classifier is refit (as long
         #     as the y-preprocessor is a linear transf.), so we can select them now.
         if self.infinities_classifier is None:
-            self._i_regress = np.full(fill_value=True, shape=(len(self._y),))
+            self._i_regress = self._i_y_sorted.copy()
         else:
             # The point of this: select points early, even before fitting preprocessors!
             # precisely because we need this selection to fit the preprocessors!
@@ -924,11 +922,16 @@ class SurrogateModel:
             return_gpr_, return_std, return_mean_grad, return_std_grad
         )
         for k, v in return_gpr_.items():
-            return_dict[k][finite] = self.preprocessing_y.inverse_transform(v)
+            if k == "mean":
+                return_dict[k][finite] = self.preprocessing_y.inverse_transform(v)
+            else:
+                return_dict[k][finite] = self.preprocessing_y.inverse_transform_scale(v)
         # Apply inverse transformation twice for std grad
         if "std_grad" in return_dict:
-            return_dict["std_grad"][finite] = self.preprocessing_y.inverse_transform(
-                return_dict["std_grad"][finite]
+            return_dict["std_grad"][finite] = (
+                self.preprocessing_y.inverse_transform_scale(
+                    return_dict["std_grad"][finite]
+                )
             )
         # Upper clipping to avoid overshoots
         # The 'trivial' check avoids wasting computation in finding the y extremes
@@ -993,13 +996,13 @@ class SurrogateModel:
         log-posterior : array, shape = (n_samples)
             Predicted log-posterior.
         """
-        if validate and (
-            self.gpr.kernel is None or self.gpr.kernel.requires_vector_input
-        ):
-            X = check_array(X, ensure_2d=True, dtype="numeric")
-        elif validate:
-            X = check_array(X, ensure_2d=False, dtype=None)
-        return self.predict(X, validate=False, ignore_classifier=ignore_trust_region)
+        if validate:
+            X = np.atleast_2d(X)
+            if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
+                X = check_array(X, ensure_2d=True, dtype="numeric")
+            else:
+                X = check_array(X, ensure_2d=False, dtype=None)
+        return self.predict(X, validate=False, ignore_classifier=ignore_classifier)
 
     def predict_std(self, X, ignore_classifier=None, validate=True):
         """
@@ -1028,12 +1031,12 @@ class SurrogateModel:
             Only returned when return_std is True.
         """
         self.n_eval += len(X)
-        if validate and (
-            self.gpr.kernel is None or self.gpr.kernel.requires_vector_input
-        ):
-            X = check_array(X, ensure_2d=True, dtype="numeric")
-        elif validate:
-            X = check_array(X, ensure_2d=False, dtype=None)
+        if validate:
+            X = np.atleast_2d(X)
+            if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
+                X = check_array(X, ensure_2d=True, dtype="numeric")
+            else:
+                X = check_array(X, ensure_2d=False, dtype=None)
         # Create placeholders with default values
         X = np.copy(X)  # copy since preprocessors might change it
         n_samples = X.shape[0]
@@ -1048,7 +1051,7 @@ class SurrogateModel:
             return std
         # else: at least some finite points --> GPR predict for them only
         std_ = self.gpr.predict_std(X_[finite], validate=validate)
-        std[finite] = self.preprocessing_y.inverse_transform(std_)
+        std[finite] = self.preprocessing_y.inverse_transform_scale(std_)
         return std
 
 
