@@ -1,8 +1,8 @@
-"""
+r"""
 Interface for Cobaya: wrapper using the Cobaya.sampler.Sampler class.
 
 To use with Cobaya, once GPry has been installed with pip, add it to the sampler block
-as ``gpry.CobayaSampler`.
+as ``gpry.CobayaSampler``.
 
 For input arguments and options, see ``CobayaSampler.yaml`` in this folder, or run
 ``cobaya-doc gpry.CobayaSampler`` in a shell.
@@ -71,7 +71,7 @@ A call to the Cobaya ``run`` function or ``cobaya-run`` shell command will run t
 
    If a run has not converged before the evaluation budget has been exhausted, a warning will be printed at the end of the output, and an MC sample will be run and saved anyway.
 
-The last state/checkpoint of the GPry relevant objects of the run can be found, if writing to the hard drive, in a ``[prefix]_gpry_output`` sub-folder, or via the ``Runner`` instance stored in a ``gpry_runner`` attribute of the Cobaya ``sampler`` object, which in this case is the GPry Cobaya wrapper, :ref:`documented below <cobaya_wrapper>`:
+The last state/checkpoint of the GPry relevant objects of the run can be found, if writing to the hard drive, in a ``[prefix]_gpry_output`` sub-folder, or via the ``Runner`` instance stored in a ``gpry_runner`` attribute of the Cobaya ``sampler`` object, which in this case is the :class:`GPry Cobaya wrapper <CobayaWrapper>`:
 
 .. code:: python
 
