@@ -286,6 +286,7 @@ def mc_sample_from_gp_cobaya(
         else:
             covariance_params = params
     else:
+        covariance_matrix = None
         if acquisition is not None:
             covariance_matrix = getattr(acquisition, "cov", None)
         if covariance_matrix is None and convergence is not None:

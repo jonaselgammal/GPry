@@ -155,6 +155,13 @@ class Runner:
         no convergence criterion is used, and the process runs until the budget is
         exhausted.
 
+    mc : dict, str, optional (default=None)
+        Sampler and it options for the diagnosis and final MC samples as ``{<sampler_name
+        >: {'option1': value1, ...}}``, or simply a struing specifying the sampler name.
+        These settings can be overriden when calling :meth:`run.Runner.generate_mc_sample`
+        using its ``sampler`` argument. By default, the best available nested sampler is
+        used, with standard precision settings.
+
     options : dict, optional (default=None)
         A dict containing all options regarding the bayesian optimization loop.
         The available options are:
@@ -258,6 +265,7 @@ class Runner:
         gp_acquisition="LogExp",
         initial_proposer="reference",
         convergence_criterion=None,
+        mc=None,
         callback=None,
         callback_is_MPI_aware=False,
         options=None,
@@ -341,6 +349,7 @@ class Runner:
                     acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
                 )
             self._share_convergence_from_main()
+            self._construct_mc_options(mc)
             self.progress = Progress()
             self.options = deepcopy(options)
             self._construct_options(self.options)
@@ -580,6 +589,21 @@ class Runner:
                     f"{cc} with arguments {args}: "
                     f"{str(excpt)}"
                 ) from excpt
+
+    def _construct_mc_options(self, mc_options):
+        """Parses the choice and options of the default MC sampler."""
+        typeerr_msg = (
+            "'mc' must be a string specifying a sampler name, or a dict with the sampler "
+            "name as only key and as value a dictionary of its options: `{<sampler_name>:"
+            " {'option1': value1, ...}}`."
+        )
+        if mc_options is None:
+            mc_options = {}
+        elif isinstance(mc_options, str):
+            mc_options = {mc_options: {}}
+        elif not isinstance(mc_options, Mapping) or len(mc_options) > 1:
+            raise TypeError(typeerr_msg)
+        self._mc_options = deepcopy(mc_options)
 
     def _construct_options(self, options):
         if options is None:
@@ -1128,7 +1152,7 @@ class Runner:
                         level=4,
                     )
                 with TimerCounter(self.surrogate, self.old_surrogate) as timer_mc:
-                    self.generate_mc_sample()
+                    self.generate_mc_sample(sampler=self._mc_options)
                     if mpi.is_main_process:
                         self.log(
                             "[MC+DIAGNOSIS] MC sampler done. Diagnosing...", level=4
@@ -1189,7 +1213,7 @@ class Runner:
                         with TimerCounter(
                             self.surrogate, self.old_surrogate
                         ) as timer_mc:
-                            self.generate_mc_sample()
+                            self.generate_mc_sample(sampler=self._mc_options)
                             if mpi.is_main_process:
                                 self.log(
                                     "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
@@ -1777,7 +1801,7 @@ class Runner:
         plt.close("all")
 
     def generate_mc_sample(
-        self, sampler="nested", add_options=None, output=None, resume=False
+        self, sampler=None, add_options=None, output=None, resume=False
     ):
         """
         Runs an MC process using a nested sampler, or
@@ -1787,7 +1811,7 @@ class Runner:
 
         Parameters
         ----------
-        sampler : string (default ``nested``) or dict
+        sampler : string or dict, optional
             Sampler to be initialised. If a string, it must be ``nested`` or the name of
             a sampler recognised by Cobaya (e.g. ``mcmc``).
             If ``nested``, the best available nested sampler is used: PolyChord if
@@ -1798,6 +1822,8 @@ class Runner:
             contained in the set of live points), ``nprior`` (number of initial samples of
             the prior). If using a Cobaya sampler, the options mentioned in the Cobaya
             documentation of the particular sampler can be passed.
+            If undefined, uses the sampler specified by the ``mc`` argument at
+            initialzation ('nested', if unspecified).
 
         add_options : dict, optional
             *DEPRECATED*: pass options by specifying the ``sampler`` argument as a dict.
@@ -1816,6 +1842,8 @@ class Runner:
             )
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, "chains/mc_samples")
+        if sampler is None:
+            sampler = self._mc_options
         if isinstance(sampler, str):
             sampler = {sampler: {}}
         elif not isinstance(sampler, Mapping):
