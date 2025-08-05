@@ -276,6 +276,7 @@ def mc_sample_from_gp_cobaya(
         else:
             covariance_params = params
     else:
+        covariance_matrix = None
         if acquisition is not None:
             covariance_matrix = getattr(acquisition, "cov", None)
         if covariance_matrix is None and convergence is not None:
@@ -385,7 +386,7 @@ def mc_sample_from_gp_ns(
 
     def logp(X):
         y = gpr.predict(np.atleast_2d(X), return_std=False, validate=False)
-        if verbose >=4:
+        if verbose > 4:
             print(f"GPR: got {X}, mean GP prediction {y}")
         return y
 
