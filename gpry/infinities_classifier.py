@@ -17,6 +17,8 @@ At the moment, it impements a Support vector machine (SVM) with an RBF kernel an
 hyper-rectangular constraint fitted to a fraction of the highest log-p samples.
 """
 
+from warnings import warn
+
 import numpy as np
 from sklearn.svm import SVC  # type: ignore
 from sklearn.utils.validation import check_array  # type: ignore
@@ -67,6 +69,14 @@ class InfinitiesClassifiers:
             # Process common parameters (min n finite, threshold) before initialising
             k = k.lower()
             v = v or {}
+            # DEPRECATION BLOCK 26/09/25
+            if "inf_threshold" in v:
+                v["threshold"] = v.pop("inf_threshold")
+                warn(
+                    "'inf_threshold' has been deprecated. This will fail in the future. "
+                    "Use 'threshold' instead."
+                )
+            # END OF DEPRECATION BLOCK
             v["nstd_calculator"] = nstd_calculator
             if k == k_trust:
                 self.classifiers[k] = TrustRegion(bounds=bounds, **v)

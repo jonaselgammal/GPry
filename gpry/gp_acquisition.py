@@ -62,7 +62,7 @@ class GenericGPAcquisition:
         self.bounds_ = np.array(bounds).copy()
         self.n_d = bounds.shape[0]
         self.preprocessing_X = preprocessing_X
-        self.verbose = verbose
+        self.verbose = verbose if verbose is not None else 3
         if gpryacqfuncs.is_acquisition_function(acq_func):
             self.acq_func = acq_func
         elif isinstance(acq_func, (Mapping, str)):
@@ -657,8 +657,8 @@ class NORA(GenericGPAcquisition):
         self.nlive_per_training = nlive_per_training
         if nlive_per_dim_max is not None:
             self.log(
-                "*Warning: 'nlive_per_dim_max' is deprecated. Use e.g. 'nlive_max: 25d'. "
-                "This will fail in the future."
+                "*Warning*: 'nlive_per_dim_max' is deprecated. Use e.g. 'nlive_max: 25d'."
+                " This will fail in the future."
             )
             self.nlive_max = nlive_per_dim_max * self.n_d
         else:
@@ -1300,7 +1300,7 @@ class RankedPool:
     def __init__(self, size, surrogate, acq_func, verbose=1):
         self._surrogate = surrogate
         self._acq_func = acq_func
-        self.verbose = verbose
+        self.verbose = verbose if verbose is not None else 3
         # The pool should have one more element than the number of desired points.
         self.X = np.zeros((size + 1, surrogate.d))
         self.y = np.zeros((size + 1))

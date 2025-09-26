@@ -275,7 +275,7 @@ class Runner:
         plots=False,
         verbose=3,
     ):
-        self.verbose = verbose
+        self.verbose = verbose if verbose is not None else 3
         self.rng = mpi.get_random_generator(seed)
         # Set up I/O
         self.checkpoint = checkpoint

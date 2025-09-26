@@ -122,7 +122,7 @@ class SurrogateModel:
             DummyPreprocessor if preprocessing_y is None else preprocessing_y
         )
         self.n_eval = 0
-        self.verbose = verbose
+        self.verbose = verbose if verbose is not None else 3
         self._fitted = False
         # Arrays containing the evaluations used to train the model,
         # regardless of whether they are used and for what.
