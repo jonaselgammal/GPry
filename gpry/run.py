@@ -63,10 +63,12 @@ from gpry.tools import (
     is_in_bounds,
     mean_covmat_from_evals,
     mean_covmat_from_samples,
+    simple_progress,
     kl_norm,
 )
 
 _plots_path = "images"
+_default_mc_sampler = "nested"
 
 
 class Runner:
@@ -425,7 +427,10 @@ class Runner:
                 )
                 surrogate["regressor"][nres]
                 mpi.round_MPI(
-                    surrogate["regressor"][nres], up=False, warn=True, name=nres
+                    surrogate["regressor"][nres],
+                    up=False,
+                    warn_rounding=True,
+                    name=nres,
                 )
             try:
                 self.surrogate = SurrogateModel(**surrogate)
@@ -598,7 +603,7 @@ class Runner:
             " {'option1': value1, ...}}`."
         )
         if mc_options is None:
-            mc_options = {}
+            mc_options = {_default_mc_sampler: {}}
         elif isinstance(mc_options, str):
             mc_options = {mc_options: {}}
         elif not isinstance(mc_options, Mapping) or len(mc_options) > 1:
@@ -1136,8 +1141,16 @@ class Runner:
                         level=2,
                     )
                     for cc in self.convergence:
+                        n_log10s = 4
+                        if not np.isfinite(np.log10(cc.limit)):
+                            value = 0
+                            value_range = [0, 1]
+                        else:
+                            value = np.log10(cc.last_value)
+                            value_range = np.log10(cc.limit) + 4, np.log10(cc.limit)
+                        bar = simple_progress(value, value_range, length=25)
                         self.log(
-                            f"[CONVERGENCE] - {cc.__class__.__name__} "
+                            f"[CONVERGENCE] {bar} {cc.__class__.__name__} "
                             f"[{cc.convergence_policy}]: {cc.last_value:.2g} "
                             f"(limit {cc.limit:.2g})",
                             level=2,

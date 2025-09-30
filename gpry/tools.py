@@ -448,3 +448,27 @@ def mean_covmat_from_evals(X, logp):
     mean = np.average(X_, axis=0, weights=weights_)
     covmat = np.cov(X_.T, aweights=weights_, ddof=0)
     return mean, covmat
+
+
+def simple_progress(value, value_range, length=10, ind="|", filled="=", empty="·"):
+    """
+    Returns a progress-bar string.
+
+    Values outside the range are indicated with "<>" at the extremes.
+
+    NaN's are interpreted as zero values, and are not allowed as range boundaries.
+    """
+    bar = ["["] + [empty] * (length - 2) + ["]"]
+    if not np.isfinite(value):
+        value = value_range[0]
+    filled_prop = (value - value_range[0]) / (value_range[1] - value_range[0])
+    filled_inner_bar = min(round(filled_prop * (length - 2)), length - 2)
+    if filled_prop <= 0:
+        bar[0] = "<"
+    else:
+        bar[1 : 1 + filled_inner_bar] = [filled] * filled_inner_bar
+        if filled_prop <= 1:
+            bar[filled_inner_bar] = ind
+        else:
+            bar[-1] = ">"
+    return "".join(bar)

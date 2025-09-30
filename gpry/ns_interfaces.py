@@ -446,7 +446,6 @@ class InterfaceUltraNest(NSInterface):
         self.set_prior(bounds)
         self.dim = len(self.bounds)
         self.precision_settings = {}
-
         self.sampler_settings = {
             "resume": "overwrite",
             "vectorized": True,

@@ -95,7 +95,7 @@ class InfinitiesClassifiers:
     def trust_bounds(self):
         """
         The bounds of a smaller trust region possibly defined by a classifier (in
-        particular if :class:`infinities_classifer.TrustRegion` is being used.
+        particular if :class:`infinities_classifier.TrustRegion` is being used.
         Otherwise returns the original prior bounds.
         """
         # Assuming there is only one class with trust bounds.

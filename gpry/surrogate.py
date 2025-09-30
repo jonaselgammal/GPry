@@ -241,7 +241,7 @@ class SurrogateModel:
         """
         The bounds of a smaller trust region where the log-posterior is expected to be
         finite, possibly defined by a classifier (in particular if
-        :class:`infinities_classifer.TrustRegion` is being used).
+        :class:`infinities_classifier.TrustRegion` is being used).
         Otherwise returns a copy of the original prior bounds.
         """
         if self.infinities_classifier is not None:
@@ -496,7 +496,7 @@ class SurrogateModel:
         """
         self.random_state = random_state
         if self.infinities_classifier is not None:
-            self.infinities_classifer.set_random_state(random_state)
+            self.infinities_classifier.set_random_state(random_state)
 
     def _validate_noise_level(self, noise_level, n_train):
         """
@@ -675,11 +675,13 @@ class SurrogateModel:
         if validate and (
             self.gpr.kernel is None or self.gpr.kernel.requires_vector_input
         ):
-            X = check_array(X, ensure_2d=True, dtype="numeric")
-            y = check_array(y, ensure_2d=False, dtype="numeric")
+            X = check_array(X, ensure_2d=True, dtype="numeric", ensure_all_finite=False)
+            y = check_array(
+                y, ensure_2d=False, dtype="numeric", ensure_all_finite=False
+            )
         elif validate:
-            X = check_array(X, ensure_2d=False, dtype=None)
-            y = check_array(y, ensure_2d=False, dtype=None)
+            X = check_array(X, ensure_2d=False, dtype=None, ensure_all_finite=False)
+            y = check_array(y, ensure_2d=False, dtype=None, ensure_all_finite=False)
         if X.shape[0] != y.shape[0]:
             raise TypeError(
                 f"Different numbers of points in X (shape {X.shape}) and y (shape "
