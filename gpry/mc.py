@@ -440,7 +440,13 @@ def mc_sample_from_gp_ns(
     out_dir_raw = (
         tempfile.TemporaryDirectory().name + "/"
     )  # make sure it's read as a dir
+    # If Ultranest, remove chance of -inf
+    if isinstance(sampler, nsint.InterfaceUltraNest):
+        prev_min = surrogate.minus_inf_value
+        surrogate.minus_inf_value = -1e-300
     X_MC, y_MC, w_MC = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
+    if isinstance(sampler, nsint.InterfaceUltraNest):
+        surrogate.minus_inf_value = prev_min
     # Delete the "raw" output and write the unified-format one
     sampler.delete_output()
     if output is not None and mpi.is_main_process:

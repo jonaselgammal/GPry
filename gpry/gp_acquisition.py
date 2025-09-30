@@ -828,7 +828,6 @@ class NORA(GenericGPAcquisition):
         return X_MC, y_MC, None, w_MC
 
     def _do_MC_sample_ultranest(self, surrogate, bounds=None, rng=None):
-
         # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
         def logp(X):
             """
@@ -1085,11 +1084,18 @@ class NORA(GenericGPAcquisition):
             not bool(self.mc_every_i % self.mc_every) or force_resample
         )
         if mc_sample_this_time:
-            self._set_MC_sample(
-                *self.do_MC_sample(surrogate, bounds=bounds, rng=rng),
-                ensure_y_sigma_y=True,
-                surrogate=surrogate,
-            )
+            try:
+                MC_output = self.do_MC_sample(surrogate, bounds=bounds, rng=rng)
+            except Exception as excpt:
+                self.log(
+                    level=0,
+                    msg=f"Error when finding new acquisition optima with {self.sampler}: "
+                    f"{excpt}. Attempting uniform prior sampling.",
+                )
+                MC_output = self.do_MC_sample(
+                    surrogate, bounds=bounds, rng=rng, sampler="uniform"
+                )
+            self._set_MC_sample(*MC_output, ensure_y_sigma_y=True, surrogate=surrogate)
             self._X_already_proposed = np.empty(shape=(0, surrogate.d))
         else:
             self._reweight_last_MC_sample(surrogate, bounds=bounds, ensure_sigma_y=True)

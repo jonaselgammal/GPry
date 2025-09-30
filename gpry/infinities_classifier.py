@@ -642,7 +642,9 @@ class ThresholdClassifier:
         assert threshold >= 0, "Pass a positive threshold."
         assert keep_min is None or keep_min >= 0, "Pass a positive keep_min."
         if validate:
-            y = check_array(y, ensure_2d=False, dtype="numeric")
+            y = check_array(
+                y, ensure_2d=False, dtype="numeric", ensure_all_finite=False
+            )
             if np.any(np.isnan(y)):
                 raise TypeError("y cannot contain nan's,")
         if not len(y):
@@ -664,7 +666,7 @@ class ThresholdClassifier:
         if threshold == np.inf:
             return i_sorted[np.argwhere(np.isfinite(y[i_sorted])).T[0]], threshold
         if y[i_sorted[-1]] == -np.inf:
-            return []
+            return [], threshold
         min_accepted_y = y[i_sorted[-1]] - threshold
         # Let's try to avoid calling searchsorted
         if y[i_sorted[0]] > min_accepted_y:
