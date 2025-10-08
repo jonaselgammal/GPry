@@ -1134,11 +1134,6 @@ class Runner:
             mpi.share_attr(self, "has_converged")
             if mpi.is_main_process:
                 if self.verbose >= 2:
-                    last_values = "; ".join(
-                        f"{cc.__class__.__name__} [{cc.convergence_policy}]: "
-                        f"{cc.last_value:.2g} (limit {cc.limit:.2g})"
-                        for cc in self.convergence
-                    )
                     self.log(
                         f"[CONVERGENCE] ({timer_convergence.time:.2g} sec) "
                         "Evaluated convergence criterion: ",
@@ -1178,7 +1173,7 @@ class Runner:
                             "[MC+DIAGNOSIS] MC sampler done. Diagnosing...", level=4
                         )
                     diag_success = self.diagnose_last_mc_sample()
-                mpi.sync_processes()
+                    mpi.sync_processes()
                 if mpi.is_main_process:
                     self.log(
                         "[MC+DIAGNOSIS] Obtained MC sample. "
@@ -1222,29 +1217,29 @@ class Runner:
                         f"(max. {self.n_resamples_before_giveup})."
                     )
                 self.banner(lines)
-                # Run MC and diagnose if it did not converge
-                if not self.has_converged:
+            # Run MC and diagnose if it did not converge
+            if not self.has_converged:
+                if mpi.is_main_process:
+                    self.log(
+                        "[MC+DIAGNOSIS] Starting MC sampler "
+                        "(convergence not reached)...",
+                        level=4,
+                    )
+                with TimerCounter(self.surrogate, self.old_surrogate) as timer_mc:
+                    self.generate_mc_sample(sampler=self._mc_options)
                     if mpi.is_main_process:
                         self.log(
-                            "[MC+DIAGNOSIS] Starting MC sampler "
-                            "(convergence not reached)...",
+                            "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
                             level=4,
                         )
-                    with TimerCounter(self.surrogate, self.old_surrogate) as timer_mc:
-                        self.generate_mc_sample(sampler=self._mc_options)
-                        if mpi.is_main_process:
-                            self.log(
-                                "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
-                                level=3,
-                            )
-                        diag_success = self.diagnose_last_mc_sample()
-                        mpi.sync_processes()
-                        if mpi.is_main_process:
-                            self.log(
-                                "[MC+DIAGNOSIS] Obtained MC sample. "
-                                f"Diagnosis passed: *{diag_success}*",
-                                level=3,
-                            )
+                    diag_success = self.diagnose_last_mc_sample()
+                    mpi.sync_processes()
+                if mpi.is_main_process:
+                    self.log(
+                        "[MC+DIAGNOSIS] Obtained MC sample. "
+                        f"Diagnosis passed: *{diag_success}*",
+                        level=3,
+                    )
         self.has_run = True
 
     def do_initial_training(self):

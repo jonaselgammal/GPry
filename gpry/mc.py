@@ -251,7 +251,7 @@ def mc_sample_from_gp_cobaya(
         The sampler instance that has been run (or just initialised). The sampler products
         can be retrieved with the `Sampler.products()` method.
     """
-    from gpry import check_cobaya_installed
+    from gpry import check_cobaya_installed  # here to avoid circular import
 
     if not check_cobaya_installed():
         raise ModuleNotFoundError(
@@ -489,6 +489,8 @@ def process_gdsamples(gdsamples_dict):
         elif isinstance(v, (MCSamples, GaussianND)):
             return_dict[k] = v
         else:
+            from gpry import check_cobaya_installed  # here to avoid circular import
+
             if check_cobaya_installed():
                 from cobaya.collection import SampleCollection  # type: ignore
 
