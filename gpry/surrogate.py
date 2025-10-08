@@ -491,6 +491,7 @@ class SurrogateModel:
         (Re)sets the random state.
         """
         self.random_state = random_state
+        self.gpr.random_state = random_state
         if self.infinities_classifier is not None:
             self.infinities_classifier.set_random_state(random_state)
 
