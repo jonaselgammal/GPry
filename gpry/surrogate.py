@@ -207,10 +207,6 @@ class SurrogateModel:
         )
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
-        if self.verbose >= 3:
-            print("Initializing SurrogateModel with the following options:")
-            print("=======================================================")
-            print(str(self))
 
     def __str__(self):
         return (

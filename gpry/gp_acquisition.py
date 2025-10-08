@@ -1021,12 +1021,14 @@ class NORA(GenericGPAcquisition):
         """
         X, y, _, w = self.last_MC_sample(warn_reweight=warn_reweight)
         samples_dict = {"w": w, "X": X, _name_logp: y}
-        return samples_dict_to_getdist(
-            samples_dict,
-            params=params,
-            bounds=self.bounds_,
-            sampler_type="nested",
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return samples_dict_to_getdist(
+                samples_dict,
+                params=params,
+                bounds=self.bounds_,
+                sampler_type="nested",
+            )
 
     def multi_add(
         self, surrogate, n_points=1, bounds=None, rng=None, force_resample=False

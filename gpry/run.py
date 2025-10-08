@@ -343,6 +343,10 @@ class Runner:
                 surrogate = gpr
             # END OF DEPRECATION BLOCK
             self._construct_surrogate(surrogate)
+            if self.verbose >= 3 and mpi.is_main_process:
+                print("Initializing SurrogateModel with the following options:")
+                print("=======================================================")
+                print(str(self.surrogate))
             self._construct_gp_acquisition(gp_acquisition)
             self._construct_initial_proposer(initial_proposer)
             if mpi.is_main_process:
@@ -1147,7 +1151,10 @@ class Runner:
                             value_range = [0, 1]
                         else:
                             value = np.log10(cc.last_value)
-                            value_range = np.log10(cc.limit) + 4, np.log10(cc.limit)
+                            value_range = (
+                                np.log10(cc.limit) + n_log10s,
+                                np.log10(cc.limit),
+                            )
                         bar = simple_progress(value, value_range, length=25)
                         self.log(
                             f"[CONVERGENCE] {bar} {cc.__class__.__name__} "
@@ -1223,17 +1230,15 @@ class Runner:
                             "(convergence not reached)...",
                             level=4,
                         )
-                        with TimerCounter(
-                            self.surrogate, self.old_surrogate
-                        ) as timer_mc:
-                            self.generate_mc_sample(sampler=self._mc_options)
-                            if mpi.is_main_process:
-                                self.log(
-                                    "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
-                                    level=4,
-                                )
-                            diag_success = self.diagnose_last_mc_sample()
-                            mpi.sync_processes()
+                    with TimerCounter(self.surrogate, self.old_surrogate) as timer_mc:
+                        self.generate_mc_sample(sampler=self._mc_options)
+                        if mpi.is_main_process:
+                            self.log(
+                                "[MC+DIAGNOSIS] MC sampler done. Diagnosing...",
+                                level=3,
+                            )
+                        diag_success = self.diagnose_last_mc_sample()
+                        mpi.sync_processes()
                         if mpi.is_main_process:
                             self.log(
                                 "[MC+DIAGNOSIS] Obtained MC sample. "
@@ -1749,7 +1754,11 @@ class Runner:
             plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
             gpplt.plot_slices(self.truth, self.surrogate, self.acquisition)
-            plt.savefig(os.path.join(self.plots_path, f"slices.{ext}"))
+            plt.savefig(
+                os.path.join(
+                    self.plots_path, f"slices_it_{self.current_iteration:03d}.{ext}"
+                )
+            )
         if corner:
             mc_samples = {}
             filled = {}
