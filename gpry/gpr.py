@@ -11,7 +11,6 @@ and thus simply added to the kernel matrix diagonal.
 
 # Builtin
 import warnings
-from copy import deepcopy
 from operator import itemgetter
 from typing import Mapping
 
@@ -228,10 +227,6 @@ class GaussianProcessRegressor(sk_GPR):
         performing parallelized active sampling (NB: this is only possible when the GPR
         hyperparameters have been fit at least once).
 
-        An intermediate option is to perform a single GPR hyperparameter optimization run
-        (instead of the default number of restarts) from the current hyperparameter
-        values, using ``fit_hyperparameters='simple'``.
-
         If called with ``X=None, y=None``, it re-fits the model without adding new points.
 
         Parameters
@@ -249,12 +244,15 @@ class GaussianProcessRegressor(sk_GPR):
             level will be overwritten. In this case it is advisable to refit the
             hyperparameters of the kernel.
 
-        fit_hyperparameters : Bool or 'simple', dict, optional (default: True)
-            Whether the GPR :math:`\theta`-parameters are optimised (``'simple'`` for a
-            single run from last optimum; ``True`` for a more thorough search with
-            multiple restarts), or a simple kernel matrix inversion is performed
-            (``False``) with constant hyperparameters. Can also be passed a dict with
-            arguments to be passed to the `_fit_hyperparameters` method.
+        fit_hyperparameters : Bool or dict (default: True)
+            Whether the GPR :math:`\theta`-parameters should be optimised. It can be
+            passed a dict, which is always interpreted as ``True``, containing arguments
+            for the ``_fit_hyperparameters`` method, namely ``n_restarts`` of the
+            optimizer, ``start_from_current`` if the first optimizer run should start
+            from the last optimum, or different ``hyperparameters_bounds``. E.g. to
+            perform a single GPR optimization run starting at the last hyperparameter
+            optimum:
+            ``fit_hyperparameters={'start_from_current': True, 'n_restarts': 1}``.
 
         validate : bool, default: True
             If False, ``X`` and ``y`` are assumed to be correctly formatted, and no
@@ -298,11 +296,19 @@ class GaussianProcessRegressor(sk_GPR):
                         noise_level = noise_level[0]
                     else:
                         raise ValueError(
-                            "noise_level must be a scalar or an array with same number of "
-                            f"entries as y. ({noise_level.shape[0]} != {self.y_train_.shape[0]})"
+                            "noise_level must be a scalar or an array with same number of"
+                            f" entries as y. ({noise_level.shape[0]} != "
+                            f"{self.y_train_.shape[0]})"
                         )
             self.alpha = noise_level**2
-        if fit_hyperparameters is not None:
+        if fit_hyperparameters is not False:
+            if fit_hyperparameters is True:
+                fit_hyperparameters = {}
+            elif not isinstance(fit_hyperparameters, Mapping):
+                raise TypeError(
+                    "'fit_hyperparameters' kwarg must be bool|dict, but was "
+                    f"{fit_hyperparameters}"
+                )
             self.log_marginal_likelihood_value_ = self._fit_hyperparameters(
                 **fit_hyperparameters
             )
@@ -346,7 +352,6 @@ class GaussianProcessRegressor(sk_GPR):
 
     def _fit_hyperparameters(
         self,
-        simple=False,
         start_from_current=True,
         n_restarts=None,
         hyperparameter_bounds=None,
@@ -361,14 +366,9 @@ class GaussianProcessRegressor(sk_GPR):
 
         Parameters
         ----------
-        simple : bool, default: False
-            If True, runs the optimiser only from the last optimum of the hyperparameters,
-            without restarts. Shorthand for ``start_from_current=True, n_restarts=1``. (it
-            overrides them if True).
-
         start_from_current : bool, default: True
-            Starts the first optimization run from the current hyperparameters (ignored if
-            not previously fitted).
+            Starts the first optimization run from the current hyperparameters (ignored
+            if not previously fitted).
 
         n_restarts : int, default None
             Number of restarts of the optimizer. If not defined, uses the one set at
@@ -381,9 +381,6 @@ class GaussianProcessRegressor(sk_GPR):
         -------
         self
         """
-        if simple:
-            start_from_current = True
-            n_restarts = 1
         if not self._fitted:
             start_from_current = False
         if n_restarts is None:

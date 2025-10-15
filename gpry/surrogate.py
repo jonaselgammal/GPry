@@ -42,7 +42,6 @@ all the points and their properties with :meth:`SurrogateModel.training_set_as_d
 
 # Builtin
 import warnings
-from copy import deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 
@@ -605,10 +604,6 @@ class SurrogateModel:
         of information, such as when performing parallelized active sampling (NB: this is
         only possible when the GPR hyperparameters have been fit at least once).
 
-        An intermediate option is to perform a single GPR hyperparameter optimization run
-        (instead of the default number of restarts) from the current hyperparameter
-        values, using ``fit_gpr='simple'``.
-
         For an additional speed boost, the refitting of the infinities classifier (if
         present) can be disabled with ``fit_classifier=False`` (if a GPR refit is
         requested this value is overridden).
@@ -645,14 +640,16 @@ class SurrogateModel:
             level will be overwritten. In this case it is advisable to refit the
             hyperparameters of the kernel.
 
-        fit_gpr : Bool or 'simple', dict, optional (default: True)
-            Whether the GPR :math:`\theta`-parameters are optimised (``'simple'`` for a
-            single run from last optimum; ``True`` for a more thorough search with
-            multiple restarts), or a simple kernel matrix inversion is performed
-            (``False``) with constant hyperparameters. Can also be passed a dict with
-            arguments to be passed to the `fit_gpr_hyperparameters` method.
+        fit_gpr : Bool or dict (default: True)
+            Whether the GPR :math:`\theta`-parameters should be optimised. It can be
+            passed a dict, which is always interpreted as ``True``, containing arguments
+            for the ``_fit_hyperparameters`` method, namely ``n_restarts`` of the
+            optimizer, ``start_from_current`` if the first optimizer run should start
+            from the last optimum, or different ``hyperparameters_bounds``. E.g. to
+            perform a single GPR optimization run starting at the last hyperparameter
+            optimum: ``fit_gpr={'start_from_current': True, 'n_restarts': 1}``.
 
-        fit_classifier: Bool, optional (default: True)
+        fit_classifier: Bool (default: True)
             Whether the infinities classifier is refit. Overridden to ``True`` if
             ``fit_gpr`` is not ``False``.
 
@@ -686,29 +683,18 @@ class SurrogateModel:
             )
         # Ensure fit_gpr --> fit_classifier --> fit_preprocessors
         fit_preprocessors = False
-        fit_gpr_kwargs = None
-        if fit_gpr is True:
-            fit_classifier = True
-            fit_gpr_kwargs = {}
-        elif str(fit_gpr) == "simple":
-            fit_classifier = True
-            fit_gpr_kwargs = {"simple": True}
-            fit_gpr = True
-        elif isinstance(fit_gpr, Mapping):
-            fit_classifier = True
-            fit_gpr_kwargs = deepcopy(fit_gpr)
-            fit_gpr = True
-        elif fit_gpr is not False:
-            raise ValueError(
-                "`fit_gpr` needs to be bool, 'simple', or a dict of args for the "
-                f"`fit_gpr_hyperparameters` method. Got {fit_gpr}."
+        if not isinstance(fit_gpr, (bool, Mapping)):
+            raise TypeError(
+                f"'fit_gpr' kwarg must be bool|dict|'simple', but was {fit_gpr}"
             )
+        if fit_gpr is not False:
+            fit_classifier = True
         if fit_classifier:
             fit_preprocessors = True
         force_fit_gpr = False  # to avoid skipping fit if no points added if X,y = None
         if X is None and y is None:
             X, y = np.empty((0, self.d)), np.empty((0,))
-            force_fit_gpr = fit_gpr
+            force_fit_gpr = fit_gpr is not False
             if noise_level is not None:
                 raise ValueError("Cannot give a noise level if X and y are not given.")
             # self._i_iter does not change
@@ -800,7 +786,7 @@ class SurrogateModel:
                 X=self._X_[self._i_regress],
                 y=self._y_[self._i_regress],
                 noise_level=self._noise_level_[self._i_regress],
-                fit_hyperparameters=fit_gpr_kwargs,
+                fit_hyperparameters=fit_gpr,
                 validate=False,
             )
         self._fitted = True

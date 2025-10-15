@@ -1176,7 +1176,7 @@ class Runner:
                     mpi.sync_processes()
                 if mpi.is_main_process:
                     self.log(
-                        "[MC+DIAGNOSIS] Obtained MC sample. "
+                        f"[MC+DIAGNOSIS] ({timer_mc.time:.2g} sec) Obtained MC sample. "
                         f"Diagnosis passed? *{diag_success}*",
                         level=3,
                     )
@@ -1236,7 +1236,7 @@ class Runner:
                     mpi.sync_processes()
                 if mpi.is_main_process:
                     self.log(
-                        "[MC+DIAGNOSIS] Obtained MC sample. "
+                        f"[MC+DIAGNOSIS] ({timer_mc.time:.2g} sec) Obtained MC sample. "
                         f"Diagnosis passed: *{diag_success}*",
                         level=3,
                     )
@@ -1384,7 +1384,8 @@ class Runner:
                 f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
                 " points, including the surrogate model hyperparameters. "
                 f"{self.surrogate.n_last_appended_finite} finite points were added to the "
-                "GP regressor.",
+                "GP regressor. Hyperparameters were fit with "
+                f"{self.surrogate.gpr.n_restarts_optimizer} restart(s).",
                 level=3,
             )
             self.log(
@@ -1437,6 +1438,24 @@ class Runner:
         return new_y, eval_msg
 
     def _fit_surrogate_parallel(self, new_X, new_y, properties=None):
+        fit_gpr_kwargs = False
+        n_restarts_total = 0
+        n_restarts_this_process = 0
+        is_this_iter = lambda every: (
+            every is not None and self.current_iteration % every == every - 1
+        )
+        if is_this_iter(self.fit_full_every):
+            fit_gpr_kwargs = {"start_from_current": mpi.is_main_process}
+            fit_gpr_kwargs["n_restarts"] = mpi.split_number_for_parallel_processes(
+                self.surrogate.gpr.n_restarts_optimizer
+            )[mpi.RANK]
+            n_restarts_total = self.surrogate.gpr.n_restarts_optimizer
+            if fit_gpr_kwargs["n_restarts"] == 0:
+                fit_gpr_kwargs = False
+        elif is_this_iter(self.fit_simple_every):
+            if mpi.is_main_process:
+                fit_gpr_kwargs = {"start_from_current": True, "n_restarts": 1}
+            n_restarts_total = 1
         # Prepare hyperparameter fit
         hyperparams_bounds = None
         # if self.cov is not None:
@@ -1446,38 +1465,27 @@ class Runner:
         #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
         #     hyperparams_bounds = self.surrogate.kernel_.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
-        fit_gpr_kwargs = {
-            "hyperparameter_bounds": mpi.bcast(hyperparams_bounds),
-            "start_from_current": mpi.is_main_process,
-        }
-        is_this_iter = lambda every: self.current_iteration % every == every - 1
-        if self.fit_full_every and is_this_iter(self.fit_full_every):
-            fit_gpr_kwargs["n_restarts"] = mpi.split_number_for_parallel_processes(
-                self.surrogate.gpr.n_restarts_optimizer
-            )[mpi.RANK]
-        elif self.fit_simple_every and is_this_iter(self.fit_simple_every):
-            fit_gpr_kwargs["n_restarts"] = 1
-        else:
-            fit_gpr_kwargs["n_restarts"] = 0
-        # At least rank 0 must run, even if not fitting the surrogate model
-        # hyperparameters, to add the points
-        if fit_gpr_kwargs["n_restarts"] or mpi.is_main_process:
-            what_hyper = (
-                f"fit with {fit_gpr_kwargs['n_restarts']} restart(s) per MPI process."
-                if fit_gpr_kwargs["n_restarts"]
-                else "kept constant."
-            )
+        if fit_gpr_kwargs is not False:
+            fit_gpr_kwargs["hyperparameter_bounds"] = mpi.bcast(hyperparams_bounds)
+            n_restarts_this_process = fit_gpr_kwargs.get("n_restarts")
+        # At least rank 0 must run to add points, even if not fitting hyperparameters
+        will_fit_hyperparams = n_restarts_this_process > 0
+        if will_fit_hyperparams or mpi.is_main_process:
             self.log(
                 f"[{mpi.RANK}] Fitting log(p) surrogate model. "
-                "Hyperparameters will be " + what_hyper,
+                "Hyperparameters will be "
+                + (
+                    f"fit with {n_restarts_this_process} restart(s)."
+                    if will_fit_hyperparams
+                    else "kept constant."
+                ),
                 level=4,
             )
             self.surrogate.append(
                 new_X,
                 new_y,
                 fit_classifier=True,
-                # Supresses warning:
-                fit_gpr=(fit_gpr_kwargs if fit_gpr_kwargs["n_restarts"] else False),
+                fit_gpr=fit_gpr_kwargs,
                 i_iter=self.current_iteration,
                 properties=properties,
             )
@@ -1505,7 +1513,12 @@ class Runner:
             msg = (
                 f"Fitted log(p) surrogate model with {self.surrogate.n_last_appended} new"
                 f" points, of which {self.surrogate.n_last_appended} were added to the GP"
-                f" regressor. Hyperparameters were {what_hyper}."
+                f" regressor. Hyperparameters were "
+                + (
+                    f"fit with {n_restarts_total} restart(s)."
+                    if will_fit_hyperparams
+                    else "kept constant."
+                )
             )
         return msg
 
