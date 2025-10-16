@@ -1466,7 +1466,7 @@ class Runner:
         #     hyperparams_bounds = self.surrogate.kernel_.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
         if fit_gpr_kwargs is not False:
-            fit_gpr_kwargs["hyperparameter_bounds"] = mpi.bcast(hyperparams_bounds)
+            fit_gpr_kwargs["hyperparameter_bounds"] = hyperparams_bounds
             n_restarts_this_process = fit_gpr_kwargs.get("n_restarts")
         # At least rank 0 must run to add points, even if not fitting hyperparameters
         will_fit_hyperparams = n_restarts_this_process > 0
