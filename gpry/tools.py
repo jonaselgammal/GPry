@@ -428,13 +428,13 @@ def remove_0_weight_samples(weights, *arrays):
     return new_arrays
 
 
-def mean_covmat_from_samples(X, w=None):
+def mean_covmat_from_samples(X, w=None, ddof=None):
     """
-    Returns an estimation of the mean and covariance of a set ``X`` of points, using their
-    ``logp`` as weights.
+    Returns an estimation of the mean and covariance of a set ``X`` of points, using the
+    given weights.
     """
     mean = np.average(X, weights=w, axis=0)
-    cov = np.cov(X.T, aweights=w)
+    cov = np.cov(X.T, aweights=w, ddof=ddof)
     return mean, cov
 
 
@@ -445,9 +445,7 @@ def mean_covmat_from_evals(X, logp):
     """
     weights = np.exp(logp - max(logp))
     weights_, X_ = remove_0_weight_samples(weights, X)
-    mean = np.average(X_, axis=0, weights=weights_)
-    covmat = np.cov(X_.T, aweights=weights_, ddof=0)
-    return mean, covmat
+    return mean_covmat_from_samples(X_, w=weights_, ddof=0)
 
 
 def simple_progress(value, value_range, length=10, ind="|", filled="=", empty="·"):
