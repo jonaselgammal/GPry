@@ -19,6 +19,7 @@ _checkpoint_filenames = {
     "acquisition": "acq.pkl",
     "convergence": "con.pkl",
     "options": "opt.pkl",
+    "mc_options": "mco.pkl",
     "progress": "pro.pkl",
 }
 
@@ -107,14 +108,16 @@ def read_checkpoint(path, truth=None):
     with open(os.path.join(path, _checkpoint_filenames["convergence"]), "rb") as i:
         convergence = pickle.load(i) if checkpoint_files[3] else None
     with open(os.path.join(path, _checkpoint_filenames["options"]), "rb") as i:
-        options = pickle.load(i) if checkpoint_files[5] else None
+        options = pickle.load(i) if checkpoint_files[4] else None
+    with open(os.path.join(path, _checkpoint_filenames["mc_options"]), "rb") as i:
+        mc_options = pickle.load(i) if checkpoint_files[5] else None
     with open(os.path.join(path, _checkpoint_filenames["progress"]), "rb") as i:
-        progress = pickle.load(i) if checkpoint_files[4] else None
-    return truth, surrogate, acquisition, convergence, options, progress
+        progress = pickle.load(i) if checkpoint_files[6] else None
+    return truth, surrogate, acquisition, convergence, options, mc_options, progress
 
 
 def save_checkpoint(
-    path, truth, surrogate, acquisition, convergence, options, progress
+    path, truth, surrogate, acquisition, convergence, options, mc_options, progress
 ):
     """
     This function is used to save all relevant parts of the GP loop for reuse
@@ -138,6 +141,8 @@ def save_checkpoint(
 
     options : dict
 
+    mc_options : dict
+
     progress : Progress instance
     """
     if path is None:
@@ -155,6 +160,8 @@ def save_checkpoint(
             pickle.dump(convergence, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["options"]), "wb") as f:
             pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(path, _checkpoint_filenames["mc_options"]), "wb") as f:
+            pickle.dump(mc_options, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["progress"]), "wb") as f:
             pickle.dump(progress, f, pickle.HIGHEST_PROTOCOL)
     except Exception as excpt:
@@ -170,6 +177,7 @@ def ensure_surrogate(
     acquisition=None,
     convergence=None,
     options=None,
+    mc_options=None,
     progress=None,
 ):
     """
@@ -190,6 +198,8 @@ def ensure_surrogate(
 
     options : dict, optional
 
+    mc_options : dict, optional
+
     progress : Progress instance, optional
 
     Returns
@@ -204,14 +214,15 @@ def ensure_surrogate(
             "with a path to a checkpoint file."
         )
     if isinstance(surrogate, str):
-        truth_, surrogate, acq_, conv_, opt_, prog_ = read_checkpoint(
+        truth_, surrogate, acq_, conv_, opt_, mc_opt_, prog_ = read_checkpoint(
             surrogate, truth=truth
         )
     else:
-        truth_, acq_, conv_, opt_, prog_ = None, None, None, None, None
+        truth_, acq_, conv_, opt_, mc_opt_, prog_ = None, None, None, None, None, None
     truth = truth or truth_
     acquisition = acquisition or acq_
     convergence = convergence or conv_
     options = options or opt_
+    mc_options = mc_options or mc_opt_
     progress = progress or prog_
-    return (truth, surrogate, acquisition, convergence, options, progress)
+    return (truth, surrogate, acquisition, convergence, options, mc_options, progress)

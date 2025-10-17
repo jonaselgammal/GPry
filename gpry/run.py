@@ -856,6 +856,7 @@ class Runner:
             self.acquisition,
             self.convergence,
             self.options,
+            self._mc_options,
             self.progress,
         ) = read_checkpoint(self.checkpoint, truth=truth)
 
@@ -876,6 +877,7 @@ class Runner:
                 self.acquisition,
                 self.convergence,
                 self.options,
+                self._mc_options,
                 self.progress,
             )
 

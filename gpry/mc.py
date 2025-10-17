@@ -267,7 +267,7 @@ def mc_sample_from_gp_cobaya(
             "`sampler` must be a string specifying a Cobaya sampler interface."
         )
     sampler_options = sampler_options or {}
-    _, surrogate, acquisition, convergence, _, _ = ensure_surrogate(surrogate)
+    _, surrogate, acquisition, convergence, _, _, _ = ensure_surrogate(surrogate)
     if surrogate is None:
         raise ValueError("Could not load the GP regressor from checkpoint")
     if not surrogate.fitted:
@@ -386,7 +386,7 @@ def mc_sample_from_gp_ns(
                          (None if equal weights).
     """
     # Prepare surrogate model
-    _, surrogate, _, _, _, _ = ensure_surrogate(surrogate)
+    _, surrogate, _, _, _, _, _ = ensure_surrogate(surrogate)
     if surrogate is None:
         raise ValueError("Could not load the GP regressor from checkpoint")
     if not surrogate.fitted:
