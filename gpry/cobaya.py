@@ -123,34 +123,44 @@ import os
 import re
 import logging
 from copy import deepcopy
-from tempfile import gettempdir
 from inspect import cleandoc
 from typing import Union
 
+import numpy as np
 from cobaya.sampler import Sampler
-from cobaya.component import get_component_class
 from cobaya.log import LoggedError
-from cobaya.output import get_output, split_prefix, OutputReadOnly
+from cobaya.output import load_samples
 from cobaya.tools import get_external_function
 from cobaya.collection import SampleCollection
+from cobaya.conventions import OutPar, minuslogprior_names
 
 from gpry import mpi
-from gpry.run import Runner
+from gpry.run import (
+    Runner,
+    _plots_path,
+    _default_mc_sampler,
+    _default_mc_samples_filename,
+)
+from gpry.io import _checkpoint_filenames
+import gpry.mc as gprymc
 
-# TODO: resuming may not work in cases where internal gp_acq or gpr options aren't changed
+__min_cobaya_version__ = "3.6"
 
 
-# pylint: disable=no-member,access-member-before-definition
-# pylint: disable=attribute-defined-outside-init
 class CobayaWrapper(Sampler):
     """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
 
-    # Resume:
-    _at_resume_prefer_new = ["plots", "callback", "callback_is_MPI_aware", "verbose"]
+    sampler_type: str = _default_mc_sampler
+    _gpry_output_dir: str = "gpry_output"
 
-    # Other options
-    _gpry_output_dir = "gpry_output"
-    _surrogate_suffix = "gpr"
+    # Resume:
+    _at_resume_prefer_new = [
+        "plots",
+        "callback",
+        "callback_is_MPI_aware",
+        "verbose",
+        "mc_options",
+    ]
 
     def initialize(self):
         """
@@ -167,25 +177,10 @@ class CobayaWrapper(Sampler):
             else:
                 self.verbose = 2
         # Prepare output
-        self.path_checkpoint, self.surrogate_prefix = \
-            self.get_checkpoint_dir_and_surr_prefix(self.output)
-        self.mc_sampler_upd_info = None
-        self.mc_sampler_instance = None
+        self.path_checkpoint = self.get_checkpoint_dir(self.output)
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
-        # Default to Runner & Acq defaults: (recusively) remove keys with None value:
-        if self.gpr is None:
-            self.gpr = {}
-        for k, v in list(self.gpr.items()):
-            if v is None:
-                self.gpr.pop(k)
-        if self.gp_acquisition is None:
-            self.gp_acquisition = {}
-        for k, v in list(self.gp_acquisition.items()):
-            if v is None:
-                self.gp_acquisition.pop(k)
         gp_acq_input = deepcopy(self.gp_acquisition)
         gp_acq_engine = gp_acq_input.pop("engine", "BatchOptimizer")
-        # Grab the relevant acq options, merge them, and kick out the unused ones
         gp_acq_engine_options = None
         for k in list(gp_acq_input):
             if k.startswith("options_"):
@@ -196,13 +191,16 @@ class CobayaWrapper(Sampler):
         # Initialize the runner
         try:
             self.gpry_runner = Runner(
-                model=self.model,
-                gpr=self.gpr,
+                loglike=self.model,
+                surrogate=self.surrogate,
                 gp_acquisition=gp_acq_input,
                 initial_proposer=self.initial_proposer,
                 convergence_criterion=self.convergence_criterion,
+                mc=self.mc_options,
                 options=self.options,
-                callback=get_external_function(self.callback) if self.callback else None,
+                callback=(
+                    get_external_function(self.callback) if self.callback else None
+                ),
                 callback_is_MPI_aware=self.callback_is_MPI_aware,
                 checkpoint=self.path_checkpoint,
                 load_checkpoint=self.output_strategy,
@@ -212,125 +210,184 @@ class CobayaWrapper(Sampler):
             )
         except (ValueError, TypeError) as excpt:
             raise LoggedError(
+                self.log, f"Error when initializing GPry: {str(excpt)}"
+            ) from excpt
+        # Set sampler type. Update info too, so that the output gets updated.
+        self.sampler_type = list(self.gpry_runner._mc_options)[0].lower()
+        self._updated_info["sampler_type"] = self.sampler_type
+        # Where the Cobaya-compatible samples will be stored
+        self.collection = None
+        # Fiducial quantities and samples, for comparison plots
+        if self.fiducial_point is not None:
+            self.set_fiducial_point(self.fiducial_point)
+        if self.fiducial_mc is not None:
+            self.set_fiducial_mc(self.fiducial_mc)
+
+    def set_fiducial_point(self, fiducial_point):
+        """
+        Sets a fiducial point for the GPry runner.
+
+        Parameters
+        ----------
+        fiducial_point: dict
+            Dict containing the sampled parameters as keys with their fiducial values.
+            May containg ``logpost`` or ``loglike`` keys.
+        """
+        try:
+            X = [
+                fiducial_point[p] for p in self.model.parameterization.sampled_params()
+            ]
+            logpost = fiducial_point.pop("logpost", None)
+            loglike = fiducial_point.pop("loglike", None)
+            self.gpry_runner.set_fiducial_point(X, logpost=logpost, loglike=loglike)
+        except (TypeError, AttributeError, KeyError) as excpt:
+            raise LoggedError(
+                self.log, f"Error when setting fiducial point {fiducial_point}: {excpt}"
+            ) from excpt
+
+    def set_fiducial_mc(self, path_to_fiducial_mc):
+        """
+        Sets fiducial MC samples for the GPry runner.
+
+        Parameters
+        ----------
+        path_to_fiducial_mc: str
+            Path to Cobaya-loadable MC samples with a compatible model.
+        """
+        try:
+            fiducial_mc = load_samples(path_to_fiducial_mc, combined=True)
+        except FileNotFoundError as excpt:
+            raise LoggedError(
                 self.log,
-                f"Error when initializing GPry: {str(excpt)}"
+                f"Error when loading fiducial MC samples from {path_to_fiducial_mc}: "
+                f"{excpt}",
+            ) from excpt
+        try:
+            X = fiducial_mc[
+                list(self.model.parameterization.sampled_params())
+            ].to_numpy()
+            # Prefer likelihood in case priors are different
+            if "chi2" in fiducial_mc:
+                logpost = None
+                loglike = -0.5 * fiducial_mc["chi2"].to_numpy()
+            else:
+                logpost = -fiducial_mc["minuslogpost"].to_numpy()
+                loglike = None
+            weights = fiducial_mc["weight"]
+            self.gpry_runner.set_fiducial_MC(
+                X, logpost=logpost, loglike=loglike, weights=weights
+            )
+        except Exception as excpt:
+            raise LoggedError(
+                self.log, f"Error when setting fiducial MC samples: {excpt}"
             ) from excpt
 
     def run(self):
         """
-        Gets the initial training points and starts the acquistion loop.
+        Gets the initial training points and starts the acquisition loop.
         """
         if mpi.is_main_process:
-            self.log.info("Starting learning stage...")
+            self.log.info("Starting GPry learning loop...")
         try:
             self.gpry_runner.run()
         except Exception as excpt:
             raise LoggedError(
                 self.log,
-                "GPry failed during learning: %s",
-                str(excpt)
+                f"GPry failed during learning: {excpt.__class__.__name__}: {excpt}",
             ) from excpt
         if mpi.is_main_process:
             if self.gpry_runner.has_converged:
                 self.log.info("Learning stage finished successfully!")
             else:
-                self.log.info("Learning stage failed to converge! Will MC sample anyway.")
-            self.log.info("Starting MC-sampling stage...")
-        try:
-            self.do_surrogate_sample(resume=self.output.is_resuming())
-        except Exception as excpt:
-            raise LoggedError(
-                self.log,
-                "GPry failed during MC sampling of the surrogate model: %s",
-                str(excpt)
-            ) from excpt
+                self.log.info(
+                    "Learning stage failed to converge! MC sample produced anyway."
+                )
+        # Preparing Cobaya-compatible samples
         if mpi.is_main_process:
-            if self.gpry_runner.has_converged:
-                self.log.info("MC-sampling finished successfully!")
-            else:
-                self.log.info("MC-sampling finished, but model *DID NOT CONVERGE*!")
-            if self.plots:
-                self.log.info("Doing some plots...")
-                self.do_plots()
-        return self.mc_sampler_upd_info, self.mc_sampler_instance
+            self.collection = self.last_mc_samples_as_collection()
+            # Write them, if applicable
+            self.collection.out_update()
 
-    def do_surrogate_sample(
-            self,
-            sampler=None,
-            add_options=None,
-            resume=False,
-            prefix=None,
-    ):
+    def last_mc_samples_as_collection(self):
         """
-        Perform an MC sample of the surrogate model.
+        Creates a cobaya SampleCollection out of the last MC samples of GPry.
 
-        This function is called automatically at the end of a run, but it can be called by
-        hand too e.g. if the initial one did not converge.
-
-        Parameters
-        ----------
-        sampler: str
-            An anternative sampler, if different from the one specified at initialisation
-        add_options: dict
-            Configuration to be passed to the sampler.
-        resume: bool (default: False)
-            Whether to try to resume a previous run
-        prefix: str, optional
-            An alternative path where to save the sample. If not given, the sample will
-            use the default one with suffix ``(_)gpr``.
+        Fills individual likelihoods and derived parameters with nan's.
 
         Returns
         -------
-        surr_info : dict
-            The dictionary that was used to run (or initialized) the sampler,
-            corresponding to the surrogate model, and populated with the sampler input
-            specification.
-
-        sampler : Sampler instance
-            The sampler instance that has been run (or just initialised). The sampler
-            products can be retrieved with the `Sampler.products()` method.
+        SampleCollection
         """
-        if prefix is None:
-            prefix = self.surrogate_prefix
-        self.gpry_runner.generate_mc_sample(
-            sampler=self.mc_sampler if sampler is None else sampler,
-            add_options=add_options,
-            output=prefix,
-            resume=resume,
+        last_mc_samples = self.gpry_runner.last_mc_samples(copy=True)
+        if last_mc_samples is None:
+            return None
+        collection = SampleCollection(
+            self.model,
+            output=self.output,
+            name="1",
+            resuming=False,
+            sample_type=self.sampler_type,
         )
-        self.mc_sampler_upd_info = self.gpry_runner.last_mc_surr_info
-        self.mc_sampler_instance = self.gpry_runner.last_mc_sampler
-
-    @property
-    def is_mc_sampled(self):
-        """
-        Returns True if the MC sampling of the surrogate process has run and converged.
-        """
-        return bool(getattr(self.gpry_runner, "_last_mc_samples", False))
-
-    def do_plots(self, ext="png"):
-        """
-        Produces some results and diagnosis plots.
-        """
-        self.gpry_runner.plot_distance_distribution(format=format)
-        self.gpry_runner.plot_progress(ext=ext)
-        if self.is_mc_sampled:
-            self.gpry_runner.plot_mc(ext=ext)
+        # Hack -- create contents directly, since checks for individual likelihoods,
+        # etc would fail.
+        collection._data[OutPar.weight] = last_mc_samples["w"]
+        collection._data[OutPar.minuslogpost] = -last_mc_samples[gprymc._name_logp]
+        for i, param in enumerate(self.model.parameterization.sampled_params()):
+            collection._data[param] = last_mc_samples["X"][:, i]
+        # Add prior and likelihood
+        logpriors = np.array(
+            [self.model.logpriors(X_i) for X_i in last_mc_samples["X"]]
+        )
+        collection._data[minuslogprior_names(self.model.prior)] = -logpriors
+        collection._data[OutPar.minuslogprior] = -np.sum(logpriors, axis=1)
+        collection._data[OutPar.chi2] = 2 * (
+            collection._data[OutPar.minuslogpost]
+            - collection._data[OutPar.minuslogprior]
+        )
+        return collection
 
     def samples(
-            self,
-            combined: bool = False,
-            skip_samples: float = 0,
-            to_getdist: bool = False,
-    ) -> Union[SampleCollection, "MCSamples"]:
+        self,
+        combined: bool = False,
+        skip_samples: float = 0,
+        to_getdist: bool = False,
+    ) -> Union[SampleCollection, "getdist.MCSamples"]:
         """
-        Returns the last sample from the surrogate model.
+        Returns the last sample from the surrogate posterior.
+
+        Parameters
+        ----------
+        combined: bool, default: False
+            If ``True`` returns the same, single posterior for all processes. Otherwise,
+            it is only returned for the root process.
+        skip_samples: int or float, default: 0
+            Skips some amount of initial samples (if ``int``), or an initial fraction of
+            them (if ``float < 1``). If concatenating (``combined=True``), skipping is
+            applied before concatenation. Forces the return of a copy.
+            If the sampler used to draw from the surrogate model is a nested sampler,
+            this setting has no effect, and raises a warning if greater than 0.
+        to_getdist: bool, default: False
+            If ``True``, returns a single :class:`getdist.MCSamples` instance, containing
+            all samples, for all MPI processes (``combined`` is ignored).
+
+        Returns
+        -------
+        SampleCollection, getdist.MCSamples
+           The sample from the surrogate posterior.
         """
-        return self.mc_sampler_instance.samples(
-            combined=combined,
-            skip_samples=skip_samples,
-            to_getdist=to_getdist,
-        )
+        if skip_samples and self.sampler_type.lower() == "nested":
+            self.mpi_warning(
+                "Initial samples should not be skipped in nested sampling. "
+                "Ignoring 'skip_samples' keyword."
+            )
+        collection = self.collection
+        if not combined and not to_getdist:
+            return collection  # None for MPI ranks > 0
+        # In all remaining cases, we return the same for all ranks
+        if to_getdist:
+            if mpi.is_main_process:
+                collection = collection.to_getdist()
+        return mpi.bcast(collection)
 
     def products(
         self,
@@ -341,24 +398,34 @@ class CobayaWrapper(Sampler):
         """
         Returns the products of the run: an MC sample of the surrogate posterior under
         ``sample``, and the GPRy ``Runner`` object under ``runner``.
+
+        Parameters
+        ----------
+        combined: bool, default: False
+            If ``True`` returns the same, single posterior for all processes. Otherwise,
+            it is only returned for the root process.
+        skip_samples: int or float, default: 0
+            Skips some amount of initial samples (if ``int``), or an initial fraction of
+            them (if ``float < 1``). If concatenating (``combined=True``), skipping is
+            applied before concatenation. Forces the return of a copy.
+            If the sampler used to draw from the surrogate model is a nested sampler,
+            this setting has no effect, and raises a warning if greater than 0.
+        to_getdist: bool, default: False
+            If ``True``, returns a single :class:`getdist.MCSamples` instance, containing
+            all samples, for all MPI processes (``combined`` is ignored).
         """
-        products = {"runner": self.gpry_runner}
-        products.update(
-            self.mc_sampler_instance.products(
+        return {
+            "runner": self.gpry_runner,
+            "sample": self.samples(
                 combined=combined, skip_samples=skip_samples, to_getdist=to_getdist
-            )
-        )
-        return products
+            ),
+        }
 
     @classmethod
-    def get_checkpoint_dir_and_surr_prefix(cls, output=None):
+    def get_checkpoint_dir(cls, output=None):
         """
-        Folder where the checkpoint output of GPry is going to be saved, and prefix for
-        the output object of the MC sample of the surrogate model, given a Cobaya
+        Folder where the checkpoint output of GPry is going to be saved, given a Cobaya
         ``OutputReadOnly`` instance.
-
-        These two are wrapped into a single classmethod in order to use the same temp
-        folder if called with dummy output.
 
         Parameters
         ----------
@@ -370,26 +437,22 @@ class CobayaWrapper(Sampler):
         -------
         checkpoint_dir: str
             Relative folder where the GPry checkpoint will be saved.
-        surrogate_prefix: str
-            Prefix for surrogate MC chains for a Cobaya ``Output`` with relative path.
 
         Examples
         --------
-        Assuming that ``cls._gpry_output_dir = "gpry_output"`` and
-        ``cls._surrogate_suffix = "gpr"``:
+        Assuming that ``cls._gpry_output_dir = "gpry_output"``:
 
         >>> from cobaya.output import get_output
-        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output("folder/"))
-        'folder/gpry_output', 'folder/gpr'
-        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output("folder/prefix"))
-        'folder/prefix_gpry_output', 'folder/prefix_gpr'
-        >>> cls.get_checkpoint_dir_and_surr_prefix(get_output())  # dummy output
-        '[tmp_folder]/gpry_output', '[tmp_folder]/gpr'
+        >>> cls.get_checkpoint_dir(get_output("folder/"))
+        'folder/gpry_output'
+        >>> cls.get_checkpoint_dir(get_output("folder/prefix"))
+        'folder/prefix_gpry_output'
+        >>> cls.get_checkpoint_dir(get_output())  # dummy output
+        '[tmp_folder]/gpry_output'
         """
         if output:
-            return (output.add_suffix(cls._gpry_output_dir, separator="_"),
-                    output.add_suffix(cls._surrogate_suffix, separator="_"))
-        return None, None
+            return output.add_suffix(cls._gpry_output_dir, separator="_")
+        return None
 
     @classmethod
     def output_files_regexps(cls, output, info=None, minimal=False):
@@ -401,38 +464,19 @@ class CobayaWrapper(Sampler):
         when we are not resuming: GPry checkpoint products and the MC sample from the
         surrogate.
         """
-        path_checkpoint, surrogate_prefix = \
-            cls.get_checkpoint_dir_and_surr_prefix(output)
-        # GPry checkpoint files
-        regexps_tuples = [
-            (re.compile(re.escape(name + ".pkl")), path_checkpoint)
-            for name in ["acq", "con", "gpr", "mod", "opt", "pro"]
-        ] + [(None, os.path.join(path_checkpoint, "images"))]
-        # MC sample from surrogate -- more precise if we know the sampler
-        # Using OutputReadOnly and not Output here bc it can be  called just from rank 0,
-        # and it's never used except as an aux object to get correct surrogate MC prefixes
-        surr_mc_output = OutputReadOnly(prefix=surrogate_prefix)
-        surr_mc_folder, _ = split_prefix(surrogate_prefix)
-        surr_mc_sampler = (info or {}).get("mc_sampler")
-        if surr_mc_sampler:
-            sampler = get_component_class(surr_mc_sampler, kind="sampler")
-            regexps_tuples += [
-                (regexp[0], os.path.join(surr_mc_folder, regexp[1] or ""))
-                for regexp in sampler.output_files_regexps(
-                        output=surr_mc_output, minimal=minimal)
-            ]
-        else:
-            regexps_tuples += \
-                [(surr_mc_output.collection_regexp(name=None), surr_mc_folder)]
-        return regexps_tuples
+        return [
+            (None, cls.get_checkpoint_dir(output)),
+            (output.collection_regexp(name="1"), None)
+        ]
 
     @staticmethod
     def is_nora(info):
         """Returns True if NORA is being used."""
         acq_method = list((info or {}).get("gp_acquisition", {}) or {})
         return (
-            len(acq_method) > 0 and isinstance(acq_method[0], str) and
-            acq_method[0].lower() == "nora"
+            len(acq_method) > 0
+            and isinstance(acq_method[0], str)
+            and acq_method[0].lower() == "nora"
         )
 
     @classmethod

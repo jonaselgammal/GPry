@@ -69,6 +69,7 @@ from gpry.tools import (
 
 _plots_path = "images"
 _default_mc_sampler = "nested"
+_default_mc_samples_filename = "mc_samples.txt"
 
 
 class Runner:
@@ -1860,7 +1861,7 @@ class Runner:
         add_options : dict, optional
             *DEPRECATED*: pass options by specifying the ``sampler`` argument as a dict.
 
-        output: path, optional (default: ``checkpoint/chains``, if ``checkpoint != None``)
+        output: path, optional (default: ``checkpoint/``, if ``checkpoint != None``)
             The path where the resulting Monte Carlo sample shall be stored. If passed
             explicitly ``False``, produces no output.
 
@@ -1873,7 +1874,7 @@ class Runner:
                 "sample"
             )
         if output is None and self.checkpoint is not None:
-            output = os.path.join(self.checkpoint, "chains/mc_samples")
+            output = os.path.join(self.checkpoint, _default_mc_samples_filename)
         if sampler is None:
             sampler = self._mc_options
         if isinstance(sampler, str):
