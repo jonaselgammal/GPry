@@ -187,7 +187,7 @@ As explained :ref:`here <help_reference>`, we can easily compare our results to 
 .. code:: python
 
    truth_samples = rv.rvs(size=10000)
-   runner.set_fiducial_MC(truth_samples)
+   runner.set_fiducial_mc(truth_samples)
 
    runner.plot_mc()
 

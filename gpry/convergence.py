@@ -387,7 +387,7 @@ class GaussianKL(ConvergenceCriterion):
         attr_error, num_error = None, None
         if mpi.is_main_process:
             try:
-                X, _, _, w = acquisition.last_MC_sample(warn_reweight=False)
+                X, _, _, w = acquisition.last_mc_sample(warn_reweight=False)
             except AttributeError as excpt:
                 attr_error = excpt
             else:

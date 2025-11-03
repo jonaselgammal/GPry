@@ -274,7 +274,7 @@ class CobayaWrapper(Sampler):
                 logpost = -fiducial_mc["minuslogpost"].to_numpy()
                 loglike = None
             weights = fiducial_mc["weight"]
-            self.gpry_runner.set_fiducial_MC(
+            self.gpry_runner.set_fiducial_mc(
                 X, logpost=logpost, loglike=loglike, weights=weights
             )
         except Exception as excpt:

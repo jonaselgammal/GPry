@@ -51,5 +51,5 @@ runner.plot_progress()
 ## Bonus Bonus: Validation
 
 truth_samples = rv.rvs(size=10000)
-runner.set_fiducial_MC(truth_samples)
+runner.set_fiducial_mc(truth_samples)
 runner.plot_mc(output=os.path.join(runner.plots_path, "comparison_triangle.png"))

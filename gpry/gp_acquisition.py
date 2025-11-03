@@ -680,7 +680,7 @@ class NORA(GenericGPAcquisition):
         self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = None, None, None, None
         self._X_mc_reweight, self._y_mc_reweight = None, None
         self._sigma_y_mc_reweight, self._w_mc_reweight = None, None
-        self.is_last_MC_reweighted = None
+        self.is_last_mc_reweighted = None
         self.pool = None
         self._acq_mc = None
 
@@ -772,7 +772,7 @@ class NORA(GenericGPAcquisition):
             tmpdir += "/"
         return tmpdir
 
-    def do_MC_sample(self, surrogate, bounds, rng=None, sampler=None):
+    def do_mc_sample(self, surrogate, bounds, rng=None, sampler=None):
         """
 
         Returns
@@ -783,18 +783,18 @@ class NORA(GenericGPAcquisition):
         if sampler is None:
             sampler = self.sampler
         if sampler.lower() == "uniform":
-            return self._do_MC_sample_uniform(surrogate, bounds=bounds, rng=rng)
+            return self._do_mc_sample_uniform(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "polychord":
-            return self._do_MC_sample_polychord(surrogate, bounds=bounds, rng=rng)
+            return self._do_mc_sample_polychord(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "ultranest":
-            return self._do_MC_sample_ultranest(surrogate, bounds=bounds, rng=rng)
+            return self._do_mc_sample_ultranest(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "nessai":
-            return self._do_MC_sample_nessai(surrogate, bounds=bounds, rng=rng)
+            return self._do_mc_sample_nessai(surrogate, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
     # TODO: merge samples for >1 MPI processes.
-    def _do_MC_sample_uniform(self, surrogate, bounds=None, rng=None):
+    def _do_mc_sample_uniform(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
@@ -804,7 +804,7 @@ class NORA(GenericGPAcquisition):
             X[i] = proposer.get(rng=rng)
         return X, None, None, None
 
-    def _do_MC_sample_polychord(self, surrogate, bounds=None, rng=None):
+    def _do_mc_sample_polychord(self, surrogate, bounds=None, rng=None):
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
@@ -813,7 +813,7 @@ class NORA(GenericGPAcquisition):
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
-        X_MC, y_MC, w_MC = self.sampler_interface.run(
+        X_mc, y_mc, w_mc = self.sampler_interface.run(
             lambda X: surrogate.predict(
                 np.atleast_2d(X), return_std=False, validate=False
             )[0],
@@ -824,10 +824,10 @@ class NORA(GenericGPAcquisition):
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
-        y_MC = None
-        return X_MC, y_MC, None, w_MC
+        y_mc = None
+        return X_mc, y_mc, None, w_mc
 
-    def _do_MC_sample_ultranest(self, surrogate, bounds=None, rng=None):
+    def _do_mc_sample_ultranest(self, surrogate, bounds=None, rng=None):
         # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
         def logp(X):
             """
@@ -856,16 +856,16 @@ class NORA(GenericGPAcquisition):
             if mpi.is_main_process:
                 warnings.warn("Seeded runs are not supported for UltraNest.")
         # Run and get products
-        X_MC, y_MC, w_MC = self.sampler_interface.run(
+        X_mc, y_mc, w_mc = self.sampler_interface.run(
             logp, out_dir=self._get_output_folder(), keep_all=False
         )
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
-        y_MC = None
-        return X_MC, y_MC, None, w_MC
+        y_mc = None
+        return X_mc, y_mc, None, w_mc
 
-    def _do_MC_sample_nessai(self, surrogate, bounds=None, rng=None):
+    def _do_mc_sample_nessai(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
             return None, None, None, None
         if mpi.multiple_processes:
@@ -893,7 +893,7 @@ class NORA(GenericGPAcquisition):
         # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Run and get products
-        X_MC, y_MC, w_MC = self.sampler_interface.run(
+        X_mc, y_mc, w_mc = self.sampler_interface.run(
             logp,
             out_dir=self._get_output_folder(),
             keep_all=False,
@@ -902,10 +902,10 @@ class NORA(GenericGPAcquisition):
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
-        y_MC = None
-        return X_MC, y_MC, None, w_MC
+        y_mc = None
+        return X_mc, y_mc, None, w_mc
 
-    def _set_MC_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, surrogate=None):
+    def _set_mc_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, surrogate=None):
         """
         Stores the MC sample as attributes.
 
@@ -913,18 +913,18 @@ class NORA(GenericGPAcquisition):
         calculation (in parallel) with `ensure_y_sigma=True`. In that case, a
         ``surrogate`` is needed.
 
-        Use ``last_MC_sample[_getdist]`` to retrieve it.
+        Use ``last_mc_sample[_getdist]`` to retrieve it.
         """
-        self.is_last_MC_reweighted = False
+        self.is_last_mc_reweighted = False
         self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = X, y, sigma_y, w
         if ensure_y_sigma_y:
             self._y_mc, self._sigma_y_mc = mpi.compute_y_parallel(
                 surrogate, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
             )
 
-    def _reweight_last_MC_sample(self, surrogate, bounds=None, ensure_sigma_y=False):
-        """Stores the MC sample as attributes. Use ``last_MC_sample`` to retrieve it."""
-        self.is_last_MC_reweighted = True
+    def _reweight_last_mc_sample(self, surrogate, bounds=None, ensure_sigma_y=False):
+        """Stores the MC sample as attributes. Use ``last_mc_sample`` to retrieve it."""
+        self.is_last_mc_reweighted = True
         X_excpt, y_excpt = None, None
         if mpi.is_main_process and self._X_mc is None:
             X_excpt = ValueError("No samples yet!")
@@ -975,7 +975,7 @@ class NORA(GenericGPAcquisition):
                 self._sigma_y_mc_reweight,
             )
 
-    def last_MC_sample(self, copy=False, warn_reweight=True):
+    def last_mc_sample(self, copy=False, warn_reweight=True):
         """
         Returns the last MC sample as ``(X, y, sigma_y, weights)``. ``y, sigma_y``
         may be None if not computed while sampling. They can be generated with the
@@ -984,7 +984,7 @@ class NORA(GenericGPAcquisition):
 
         Prints a warning if it is a reweighted sample.
         """
-        if self.is_last_MC_reweighted:
+        if self.is_last_mc_reweighted:
             if warn_reweight:
                 warnings.warn(
                     "This is a reweighted sample! (disable with `warn_reweight=False`)"
@@ -1005,21 +1005,21 @@ class NORA(GenericGPAcquisition):
 
     @property
     def mean(self):
-        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        Xs, _, _, ws = self.last_mc_sample(copy=False, warn_reweight=False)
         return np.average(Xs.T, weights=ws, axis=-1)
 
     @property
     def cov(self):
-        Xs, _, _, ws = self.last_MC_sample(copy=False, warn_reweight=False)
+        Xs, _, _, ws = self.last_mc_sample(copy=False, warn_reweight=False)
         return np.cov(Xs.T, aweights=ws, ddof=0)
 
-    def last_MC_sample_getdist(self, params, warn_reweight=True):
+    def last_mc_sample_getdist(self, params, warn_reweight=True):
         """
         Returns the last MC sample as a ``getdist.MCSamples`` instance.
 
         Prints a warning if it is a reweighted sample.
         """
-        X, y, _, w = self.last_MC_sample(warn_reweight=warn_reweight)
+        X, y, _, w = self.last_mc_sample(warn_reweight=warn_reweight)
         samples_dict = {"w": w, "X": X, _name_logp: y}
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -1087,24 +1087,24 @@ class NORA(GenericGPAcquisition):
         )
         if mc_sample_this_time:
             try:
-                MC_output = self.do_MC_sample(surrogate, bounds=bounds, rng=rng)
+                mc_output = self.do_mc_sample(surrogate, bounds=bounds, rng=rng)
             except Exception as excpt:
                 self.log(
                     level=0,
                     msg=f"Error when finding new acquisition optima with {self.sampler}: "
                     f"{excpt}. Attempting uniform prior sampling.",
                 )
-                MC_output = self.do_MC_sample(
+                mc_output = self.do_mc_sample(
                     surrogate, bounds=bounds, rng=rng, sampler="uniform"
                 )
-            self._set_MC_sample(*MC_output, ensure_y_sigma_y=True, surrogate=surrogate)
+            self._set_mc_sample(*mc_output, ensure_y_sigma_y=True, surrogate=surrogate)
             self._X_already_proposed = np.empty(shape=(0, surrogate.d))
         else:
-            self._reweight_last_MC_sample(surrogate, bounds=bounds, ensure_sigma_y=True)
+            self._reweight_last_mc_sample(surrogate, bounds=bounds, ensure_sigma_y=True)
         self.mc_every_i += 1
-        X_mc, y_mc, sigma_y_mc, _ = self.last_MC_sample(warn_reweight=False)
+        X_mc, y_mc, sigma_y_mc, _ = self.last_mc_sample(warn_reweight=False)
         # Find indices of already used elements to exclude them.
-        # Needs to be here because _reweight_last_MC_sample changes the indices.
+        # Needs to be here because _reweight_last_mc_sample changes the indices.
         # Both the X's of the MC sample and the pool are assumed unique.
         if mpi.is_main_process and self._X_already_proposed.size > 0:
             i_already_proposed = []

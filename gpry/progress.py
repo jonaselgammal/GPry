@@ -41,6 +41,10 @@ class Progress:
             "number of evaluations of the surrogate model during refitting after adding "
             "new training points"
         ),
+        "time_mc": "time needed to obtain an MC sample",
+        "evals_mc": (
+            "number of evaluations of the surrogate model needed to obtain an MC sample"
+        ),
         "time_convergence": "time needed to compute the convergence criterion",
         "evals_convergence": (
             "number of evaluations of the surrogate model needed to compute the "
@@ -97,6 +101,11 @@ class Progress:
         self.data.iloc[-1, self.data.columns.get_loc("time_fit")] = timing
         self.data.iloc[-1, self.data.columns.get_loc("evals_fit")] = evals
 
+    def add_mc(self, timing, evals):
+        """Adds timing and #evals during surrogate model fitting."""
+        self.data.iloc[-1, self.data.columns.get_loc("time_mc")] = timing
+        self.data.iloc[-1, self.data.columns.get_loc("evals_mc")] = evals
+
     def add_convergence(self, timing, evals, crit_value):
         """
         Adds timing and #evals during convergence computation, together with the new
@@ -129,6 +138,8 @@ class Progress:
         self.bcast_sum("evals_truth")
         self.bcast_last_max("time_fit")
         self.bcast_sum("evals_fit")
+        self.bcast_last_max("time_mc")
+        self.bcast_sum("evals_mc")
         self.bcast_last_max("time_convergence")
         self.bcast_sum("evals_convergence")
         self.bcast_root("convergence_crit_value")
@@ -172,7 +183,8 @@ class Progress:
             max_value = f(all_finite_values) if len(all_finite_values) else np.nan
         self.data.iloc[-1, self.data.columns.get_loc(column)] = mpi.bcast(max_value)
 
-    def _x_ticks_for_bar_plot(self, fig, ax):
+    @staticmethod
+    def _x_ticks_for_bar_plot(fig, ax):
         fig.canvas.draw()
         xticks = ax.get_xticks()
         labels = ax.get_xticklabels()
@@ -201,12 +213,14 @@ class Progress:
             "time_acquire": "Acquisition",
             "time_truth": "Truth",
             "time_fit": "Surrogate fit",
+            "time_mc": "Surrogate MC sample",
             "time_convergence": "Convergence crit.",
         }
         cols_colors = {
             "time_acquire": "tab:blue",
             "time_truth": "tab:orange",
             "time_fit": "tab:green",
+            "time_mc": "tab:purple",
             "time_convergence": "tab:red",
         }
         if not truth:
@@ -215,10 +229,10 @@ class Progress:
             col: self.data[col].to_numpy(dtype=self._dtypes[col]).copy()
             for col in cols_labels
         }
-        # Sometimes this plot is done before the convergence criterion has run
+        # Sometimes this plot is done before the convergence criterion or the MC has run
         # (inside callback or when max evals exhausted). Prevent nan's
-        if np.isnan(cols_data["time_convergence"][-1]):
-            cols_data["time_convergence"][-1] = 0
+        for t in ["time_convergence", "time_mc"]:
+            cols_data[t][np.argwhere(np.isnan(cols_data[t]))] = 0
         cols_totals = {col: sum(data) for col, data in cols_data.items()}
         total = sum(cols_totals.values())
         for col, label in cols_labels.items():

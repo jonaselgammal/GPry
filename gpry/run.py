@@ -380,10 +380,10 @@ class Runner:
         self.fiducial_X = None
         self.fiducial_logpost = None
         self.fiducial_loglike = None
-        self.fiducial_MC_X = None
-        self.fiducial_MC_weight = None
-        self.fiducial_MC_logpost = None
-        self.fiducial_MC_loglike = None
+        self.fiducial_mc_X = None
+        self.fiducial_mc_w = None
+        self.fiducial_mc_logpost = None
+        self.fiducial_mc_loglike = None
         if mpi.is_main_process:
             self.log("Initialized GPry.", level=3)
 
@@ -1177,6 +1177,7 @@ class Runner:
                         )
                     diag_success = self.diagnose_last_mc_sample()
                     mpi.sync_processes()
+                self.progress.add_mc(timer_mc.time, timer_mc.evals)
                 if mpi.is_main_process:
                     self.log(
                         f"[MC+DIAGNOSIS] ({timer_mc.time:.2g} sec) Obtained MC sample. "
@@ -1237,6 +1238,7 @@ class Runner:
                         )
                     diag_success = self.diagnose_last_mc_sample()
                     mpi.sync_processes()
+                self.progress.add_mc(timer_mc.time, timer_mc.evals)
                 if mpi.is_main_process:
                     self.log(
                         f"[MC+DIAGNOSIS] ({timer_mc.time:.2g} sec) Obtained MC sample. "
@@ -1631,12 +1633,12 @@ class Runner:
             logprior = self.logprior(self.fiducial_X)
             self.fiducial_logpost = self.fiducial_loglike + logprior
 
-    def set_fiducial_MC(self, X, logpost=None, loglike=None, weights=None):
+    def set_fiducial_mc(self, X, logpost=None, loglike=None, weights=None):
         """
         Set a reference Monte Carlo sample of the true posterior, to be included in the
         plots and in some tests.
 
-        Recover with ``self.fiducial_MC_[X|logpost|loglike|weight]``.
+        Recover with ``self.fiducial_mc_[X|logpost|loglike|weight]``.
 
         Parameters
         ----------
@@ -1665,37 +1667,37 @@ class Runner:
                 f"`X` appears not to have the right dimension: passed {X.shape[1]} but "
                 f"expected {self.surrogate.d}."
             )
-        self.fiducial_MC_X = X
+        self.fiducial_mc_X = X
         if weights is not None:
             weights = np.atleast_1d(weights).copy()
-            if len(weights) != len(self.fiducial_MC_X):
+            if len(weights) != len(self.fiducial_mc_X):
                 raise TypeError("`weights` and `X` have different numbers of samples.")
-            self.fiducial_MC_weight = weights
+            self.fiducial_mc_w = weights
         if logpost is not None and loglike is not None:
             raise TypeError(
                 "Pass either the log-posterior or the log-likelihood, not both,"
             )
         if logpost is not None:
             logpost = np.atleast_1d(logpost).copy()
-            if len(logpost) != len(self.fiducial_MC_X):
+            if len(logpost) != len(self.fiducial_mc_X):
                 raise TypeError("`logpost` and `X` have different numbers of samples.")
-            self.fiducial_MC_logpost = logpost
-            logprior = np.array([self.logprior(x) for x in self.fiducial_MC_X])
-            self.fiducial_MC_loglike = self.fiducial_MC_logpost - logprior
+            self.fiducial_mc_logpost = logpost
+            logprior = np.array([self.logprior(x) for x in self.fiducial_mc_X])
+            self.fiducial_mc_loglike = self.fiducial_mc_logpost - logprior
         elif loglike is not None:
             loglike = np.atleast_1d(loglike).copy()
-            if len(loglike) != len(self.fiducial_MC_X):
+            if len(loglike) != len(self.fiducial_mc_X):
                 raise TypeError("`loglike` and `X` have different numbers of samples.")
-            self.fiducial_MC_loglike = loglike
-            logprior = np.array([self.logprior(x) for x in self.fiducial_MC_X])
-            self.fiducial_MC_logpost = self.fiducial_MC_loglike + logprior
+            self.fiducial_mc_loglike = loglike
+            logprior = np.array([self.logprior(x) for x in self.fiducial_mc_X])
+            self.fiducial_mc_logpost = self.fiducial_mc_loglike + logprior
 
-    def _fiducial_MC_as_getdist(self):
-        if self.fiducial_MC_X is None:
+    def _fiducial_mc_as_getdist(self):
+        if self.fiducial_mc_X is None:
             return None
-        samples_dict = {"X": self.fiducial_MC_X, "w": self.fiducial_MC_weight}
-        if self.fiducial_MC_logpost is not None:
-            samples_dict[mc._name_logp] = self.fiducial_MC_logpost
+        samples_dict = {"X": self.fiducial_mc_X, "w": self.fiducial_mc_w}
+        if self.fiducial_mc_logpost is not None:
+            samples_dict[mc._name_logp] = self.fiducial_mc_logpost
         # NB: for bounds we do not use the trust region, since this is the fiducial sample
         return mc.samples_dict_to_getdist(
             samples_dict,
@@ -1751,16 +1753,16 @@ class Runner:
         if convergence:
             fig, ax = gpplt.plot_convergence(self.convergence)
             plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
-        fid_MC = None
-        if trace or corner and self.fiducial_MC_X is not None:
-            fid_MC = self._fiducial_MC_as_getdist()
+        fid_mc = None
+        if trace or corner and self.fiducial_mc_X is not None:
+            fid_mc = self._fiducial_mc_as_getdist()
         if trace:
             gpplt.plot_trace(
                 self.truth,
                 self.surrogate,
                 self.convergence,
                 self.progress,
-                reference=fid_MC,
+                reference=fid_mc,
             )
             plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
         if slices:
@@ -1773,23 +1775,24 @@ class Runner:
         if corner:
             mc_samples = {}
             filled = {}
-            if fid_MC is not None:
-                mc_samples["Fiducial"] = fid_MC
-            # # Leave as option to plot Train Gaussian Approx -- set filled = False
-            # mean_train, covmat_train = mean_covmat_from_evals(
+            if fid_mc is not None:
+                mc_samples["Fiducial"] = fid_mc
+            # Optional: plot train set Gaussian Approx
+            # mean_train, cov_train = mean_covmat_from_evals(
             #     self.surrogate.X_regress, self.surrogate.y_regress
             # )
-            # k_train = "Gaussian from training set"
             # from getdist.gaussian_mixtures import GaussianND
+
+            # k_train = "Gauss approx train set"
             # mc_samples[k_train] = GaussianND(
-            #     mean_train, covmat_train, names=sampled_params
+            #     mean_train, cov_train, names=self.truth.params
             # )
             # filled[k_train] = False
-            if hasattr(self.acquisition, "last_MC_sample"):
-                rw = "-- reweighted " if self.acquisition.is_last_MC_reweighted else ""
+            if hasattr(self.acquisition, "last_mc_sample"):
+                rw = "-- reweighted " if self.acquisition.is_last_mc_reweighted else ""
                 acq_key = f"Acq. sample {rw}({len(self.surrogate.X)} evals.)"
                 try:
-                    mc_samples[acq_key] = self.acquisition.last_MC_sample_getdist(
+                    mc_samples[acq_key] = self.acquisition.last_mc_sample_getdist(
                         params=list(zip(self.params, self.labels)), warn_reweight=False
                     )
                 except ValueError:
@@ -1802,7 +1805,7 @@ class Runner:
             output_corner = os.path.join(
                 self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
             )
-            # Temporarily switch to Agg backend
+            # Temporarily switch to Agg backend -- solves memory leak
             prev_backend = matplotlib.get_backend()
             matplotlib.use("Agg")
             output_dpi = 200
@@ -1902,7 +1905,7 @@ class Runner:
             if "nlive" not in sampler_options:
                 sampler_options["nlive"] = 50 * self.d
             self._last_mc_sampler_type = "nested"
-            X_MC, y_MC, w_MC = mc.mc_sample_from_gp_ns(
+            X_mc, y_mc, w_mc = mc.mc_sample_from_gp_ns(
                 self.surrogate,
                 bounds=self._last_mc_bounds,
                 params=self.params,
@@ -1912,13 +1915,13 @@ class Runner:
                 verbose=self.verbose,
             )
             if mpi.is_main_process:
-                logprior_MC = np.array([self.truth.logprior(x) for x in X_MC])
+                logprior_mc = np.array([self.truth.logprior(x) for x in X_mc])
                 self._last_mc_samples = {
-                    "w": w_MC,
-                    "X": X_MC,
-                    mc._name_logp: y_MC,
-                    mc._name_logprior: logprior_MC,
-                    mc._name_loglike: y_MC - logprior_MC,
+                    "w": w_mc,
+                    "X": X_mc,
+                    mc._name_logp: y_mc,
+                    mc._name_logprior: logprior_mc,
+                    mc._name_loglike: y_mc - logprior_mc,
                 }
         else:  # assume Cobaya sampler
             (
@@ -1943,15 +1946,15 @@ class Runner:
                 skip_samples=0.33 if sampler_name.lower() == "mcmc" else 0,
             )
             if mpi.is_main_process:
-                X_MC = _last_mc_samples_cobaya[self.truth.params].to_numpy()
-                logprior_MC = np.array([self.truth.logprior(x) for x in X_MC])
-                y_MC = -_last_mc_samples_cobaya["minuslogpost"].to_numpy()
+                X_mc = _last_mc_samples_cobaya[self.truth.params].to_numpy()
+                logprior_mc = np.array([self.truth.logprior(x) for x in X_mc])
+                y_mc = -_last_mc_samples_cobaya["minuslogpost"].to_numpy()
                 self._last_mc_samples = {
                     "w": _last_mc_samples_cobaya["weight"].to_numpy(),
-                    "X": X_MC,
-                    mc._name_logp: y_MC,
-                    mc._name_logprior: logprior_MC,
-                    mc._name_loglike: y_MC - logprior_MC,
+                    "X": X_mc,
+                    mc._name_logp: y_mc,
+                    mc._name_logprior: logprior_mc,
+                    mc._name_loglike: y_mc - logprior_mc,
                 }
         mpi.share_attr(self, "_last_mc_samples")
         self.update_mean_cov(use_mc_sample=self.last_mc_samples(copy=False))
@@ -2017,10 +2020,10 @@ class Runner:
             )
             success = 0 < cred < 0.5
         success = mpi.bcast(success if mpi.is_main_process else None)
-        if not hasattr(self.acquisition, "last_MC_sample"):
+        if not hasattr(self.acquisition, "last_mc_sample"):
             return success
         if mpi.is_main_process:
-            X, _, _, w = self.acquisition.last_MC_sample(warn_reweight=False)
+            X, _, _, w = self.acquisition.last_mc_sample(warn_reweight=False)
             try:
                 mean_acq = np.average(X, weights=w, axis=0)
                 cov_acq = np.atleast_2d(np.cov(X.T, aweights=w, ddof=0))
@@ -2080,8 +2083,8 @@ class Runner:
             return
         self.ensure_paths(plots=True)
         mc_samples = {}
-        if self.fiducial_MC_X is not None:
-            mc_samples["Fiducial"] = self._fiducial_MC_as_getdist()
+        if self.fiducial_mc_X is not None:
+            mc_samples["Fiducial"] = self._fiducial_mc_as_getdist()
         base_label = f"MC samples from GP ({len(self.surrogate.X)} evals.)"
         if samples_or_samples_folder is None:
             if self._last_mc_samples is None:

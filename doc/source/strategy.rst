@@ -77,7 +77,7 @@ If you have a precise or approximate fiducial MC sample of the posterior, you ca
 .. code:: python
 
    runner = Runner([...])
-   runner.set_fiducial_MC(X, logpost=..., weights=...)
+   runner.set_fiducial_mc(X, logpost=..., weights=...)
 
 Note that you can pass instead the loglikelihood (via the ``loglike`` arg), if you are letting GPry compute the prior density.
 

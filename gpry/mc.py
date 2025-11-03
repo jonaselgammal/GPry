@@ -382,7 +382,7 @@ def mc_sample_from_gp_ns(
 
     Returns
     -------
-    (X_MC, y_MC, w_MC) : arrays of samples parameters, surrogate posteriors and weights
+    (X_mc, y_mc, w_mc) : arrays of samples parameters, surrogate posteriors and weights
                          (None if equal weights).
     """
     # Prepare surrogate model
@@ -444,7 +444,7 @@ def mc_sample_from_gp_ns(
     if isinstance(sampler, nsint.InterfaceUltraNest):
         prev_min = surrogate.minus_inf_value
         surrogate.minus_inf_value = -1e-300
-    X_MC, y_MC, w_MC = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
+    X_mc, y_mc, w_mc = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
     if isinstance(sampler, nsint.InterfaceUltraNest):
         surrogate.minus_inf_value = prev_min
     # Delete the "raw" output and write the unified-format one
@@ -464,14 +464,14 @@ def mc_sample_from_gp_ns(
         output = os.path.abspath(os.path.join(base_dir, file_root + file_ext))
         # Write file
         if params is None:
-            params = generic_params_names(X_MC.shape[1])
-        w_MC_write = w_MC if w_MC is not None else np.ones(shape=(1, len(y_MC)))
+            params = generic_params_names(X_mc.shape[1])
+        w_mc_write = w_mc if w_mc is not None else np.ones(shape=(1, len(y_mc)))
         np.savetxt(
             output,
-            np.concatenate([np.atleast_2d(w_MC_write), np.atleast_2d(-y_MC), X_MC.T]).T,
+            np.concatenate([np.atleast_2d(w_mc_write), np.atleast_2d(-y_mc), X_mc.T]).T,
             header="w minuslogp " + " ".join(params),
         )
-    return X_MC, y_MC, w_MC
+    return X_mc, y_mc, w_mc
 
 
 def process_gdsamples(gdsamples_dict):
