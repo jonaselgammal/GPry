@@ -23,10 +23,11 @@ from sklearn.gaussian_process import GaussianProcessRegressor as sk_GPR  # type:
 from sklearn.utils.validation import validate_data  # type: ignore
 
 # Local
-from gpry.kernels import RBF, Matern, ConstantKernel as C
+from gpry.kernels import RBF, Matern, WhiteKernel, ConstantKernel as C
 from gpry.tools import check_random_state
 
 GPR_CHOLESKY_LOWER = True
+EPS_SQ_NOISE = 1e-6  # diagonal term to be added when WhiteKernel used as noise
 
 
 class GaussianProcessRegressor(sk_GPR):
@@ -73,6 +74,11 @@ class GaussianProcessRegressor(sk_GPR):
         If an array is passed, it must have the same number of entries as the
         data used for fitting and is used as datapoint-dependent noise level.
         Note that this is equivalent to adding a WhiteKernel with c=noise_level.
+
+    noise_fixed : bool (default: True)
+        Whether the noise is treated as a fixed diagonal offset in the kernel matrix, or
+        an additive white noise term in the kernel. In the latter case, the value given
+        as ``noise_level`` is set as the upper bound.
 
     optimizer : str or callable, optional (default: "fmin_l_bfgs_b")
         Can either be one of the internally supported optimizers for optimizing
@@ -151,6 +157,7 @@ class GaussianProcessRegressor(sk_GPR):
         output_scale_prior=[1e-2, 1e3],
         length_scale_prior=[1e-3, 1e1],
         noise_level=1e-2,
+        noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
         random_state=None,
@@ -181,6 +188,13 @@ class GaussianProcessRegressor(sk_GPR):
             length_scale_init = np.sqrt(
                 length_scale_prior[:, 0] * length_scale_prior[:, 1]
             )
+            # Noise treatment
+            self.is_noise_in_kernel = not noise_fixed
+            if hasattr(noise_level, "__len__"):
+                raise TypeError(
+                    "If noise is passed per training point, it needs to be fixed. i.e. "
+                    "`noise_fixed=True`."
+                    )
             kernel = C(
                 output_scale_init**2,
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
@@ -189,10 +203,16 @@ class GaussianProcessRegressor(sk_GPR):
                 prior_bounds=length_scale_prior,
                 **kernel_args,
             )
+            # Use noise level as upper bound if added as additive kernel
+            if self.is_noise_in_kernel:
+                kernel += WhiteKernel(
+                    noise_level=noise_level**2,
+                    noise_level_bounds=(EPS_SQ_NOISE, noise_level**2),
+                )
         sk_GPR.__init__(
             self,
             kernel=kernel,
-            alpha=noise_level**2,
+            alpha=noise_level**2 if not self.is_noise_in_kernel else EPS_SQ_NOISE,
             optimizer=optimizer,
             n_restarts_optimizer=n_restarts_optimizer,
             normalize_y=False,
@@ -205,10 +225,30 @@ class GaussianProcessRegressor(sk_GPR):
         """
         Kernel scales as ``(output_scale, (length_scale_1, ...))``.
         """
+        if self.kernel_ is None:  # not fitted yet
+            length_kernel = self.kernel
+        else:
+            length_kernel = self.kernel_
+        if hasattr(length_kernel.k1, "k1"):  # there is a noise term
+            length_kernel = length_kernel.k1
         return (
-            np.sqrt(self.kernel_.k1.constant_value),
-            np.array(self.kernel_.k2.length_scale),
+            np.sqrt(length_kernel.k1.constant_value),
+            np.array(length_kernel.k2.length_scale),
         )
+
+    @property
+    def noise_level(self):
+        """
+        Kernel noise level (not squared).
+        """
+        if self.is_noise_in_kernel:
+            if self.kernel_ is None:  # not fitted yet
+                kernel = self.kernel
+            else:
+                kernel = self.kernel_
+            return np.sqrt(kernel.k2.noise_level)
+        else:
+            return np.sqrt(self.alpha)
 
     def fit(self, X, y, noise_level=None, fit_hyperparameters=True, validate=True):
         r"""
@@ -237,12 +277,13 @@ class GaussianProcessRegressor(sk_GPR):
         y : array-like, shape = (n_samples, [n_output_dims]), or None
             Target values to append to the data
 
-        noise_level : array-like, shape = (n_samples, [n_output_dims])
-            Uncorrelated standard deviations to add to the diagonal part of the covariance
-            matrix. Needs to have the same number of entries as y. If None, the
-            noise_level set in the instance is used. If you pass a single number the noise
-            level will be overwritten. In this case it is advisable to refit the
-            hyperparameters of the kernel.
+        noise_level : number, array-like, shape = (n_samples, [n_output_dims])
+            Uncorrelated standard deviation(s) to add to the diagonal part of the
+            covariance matrix. If an array is passed, it needs to have the same number of
+            entries as y. If None, the noise_level set in the instance is used (notice
+            that passing None is not recommended if a preprocessor for the GPR training
+            samples may have been refit after initialization). If a non-None value is
+            passed, it is advisable to refit the hyperparameters of the kernel.
 
         fit_hyperparameters : Bool or dict (default: True)
             Whether the GPR :math:`\theta`-parameters should be optimised. It can be
@@ -300,8 +341,26 @@ class GaussianProcessRegressor(sk_GPR):
                             f" entries as y. ({noise_level.shape[0]} != "
                             f"{self.y_train_.shape[0]})"
                         )
-            self.alpha = noise_level**2
+            if hasattr(noise_level, "__len__") and self.is_noise_in_kernel:
+                raise TypeError(
+                    "This GPR was initialized with a white noise kernel term. That is "
+                    "incompatible with passing noise level per training point."
+                )
+            elif self.is_noise_in_kernel:
+                self.alpha = EPS_SQ_NOISE
+            else:
+                # The following line causes sometimes noise larger than the one passed.
+                self.alpha = max(np.array(noise_level)**2, EPS_SQ_NOISE)
         if fit_hyperparameters is not False:
+            if self.is_noise_in_kernel:
+                # Used passed noise as an upper bound
+                k = self.kernel if self.kernel_ is None else self.kernel_
+                k.k2.noise_level_bounds = (
+                    min(noise_level**2, EPS_SQ_NOISE * 0.99), noise_level**2
+                )
+                # Also lower the current noise if needed, in case it's over the bound
+                # after preprocessor is refit
+                k.noise_level = min(k.k2.noise_level, noise_level**2)
             if fit_hyperparameters is True:
                 fit_hyperparameters = {}
             elif not isinstance(fit_hyperparameters, Mapping):

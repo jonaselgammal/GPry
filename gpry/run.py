@@ -1394,7 +1394,7 @@ class Runner:
                 level=3,
             )
             self.log(
-                f"Current GP regressor kernel: {self.surrogate.gpr.kernel_}", level=4
+                f"Current GP regressor kernel: {self.surrogate.gpr.kernel_}", level=3
             )
         # Broadcast results
         self._share_surrogate()

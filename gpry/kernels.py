@@ -688,6 +688,11 @@ class WhiteKernel(Kernel, sk_WhiteKernel):
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
 
+    def __repr__(self):
+        return "{0}(noise_level={1:.3g}**2)".format(
+            self.__class__.__name__, np.sqrt(self.noise_level)
+        )
+
 
 class KernelOperator:
     """

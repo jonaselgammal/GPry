@@ -42,6 +42,7 @@ all the points and their properties with :meth:`SurrogateModel.training_set_as_d
 
 # Builtin
 import warnings
+from copy import deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 
@@ -192,18 +193,14 @@ class SurrogateModel:
             )
         regressor["length_scale_prior"] = length_scale_prior
         # This is the default "noise_level" of the regressor, understood as the common
-        # sigma_y of the training samples. At this pint, it's a single number.
+        # sigma_y of the training samples.
         self._noise_level = float(regressor["noise_level"])
-        self._noise_level_ = None
-        self.gpr = GaussianProcessRegressor(
-            kernel=regressor["kernel"],
-            output_scale_prior=regressor["output_scale_prior"],
-            length_scale_prior=regressor["length_scale_prior"],
-            noise_level=self._noise_level,
-            optimizer=regressor["optimizer"],
-            n_restarts_optimizer=regressor["n_restarts_optimizer"],
-            random_state=random_state,
-        )
+        # For now, the y preprocessor is not fitted
+        self._noise_level_ = preprocessing_y.transform_scale(self._noise_level)
+        kwargs_regressor = deepcopy(regressor)
+        kwargs_regressor["noise_level"] = self._noise_level_
+        kwargs_regressor["random_state"] = random_state
+        self.gpr = GaussianProcessRegressor(**kwargs_regressor)
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
 
@@ -217,7 +214,11 @@ class SurrogateModel:
             + "    -"
             + "\n    -".join(str(h) for h in self.gpr.kernel.hyperparameters)
             + "\n"
-            + f"* Noise level: {self._noise_level}\n"
+            + (
+                f"* Noise level: {self._noise_level}\n"
+                if not self.gpr.is_noise_in_kernel
+                else ""
+            )
             + f"* Classifiers for infinities: {self.infinities_classifier}"
         )
 
@@ -397,24 +398,30 @@ class SurrogateModel:
             return self.minus_inf_value
 
     @property
-    def noise_level(self):
-        """
-        The noise level (square-root of the variance) of the uncorrelated training
-        data, un-transformed (returns a copy).
-        """
-        return np.copy(self._noise_level)
-
-    @property
     def scales(self):
         """
         GPR Kernel scales as ``(output_scale, (length_scale_1, ...))`` in non-transformed
         coordinates.
         """
         output_scale, length_scales = self.gpr.scales
-        return (
-            self.preprocessing_y.inverse_transform_scale(output_scale),
-            tuple(self.preprocessing_X.inverse_transform_scale(length_scales)),
-        )
+        if self.preprocessing_y.fitted:
+            return (
+                self.preprocessing_y.inverse_transform_scale(output_scale),
+                tuple(self.preprocessing_X.inverse_transform_scale(length_scales)),
+            )
+        else:
+            return (output_scale, length_scales)
+
+    @property
+    def noise_level(self):
+        """
+        The noise level (square-root of the variance) of the uncorrelated training
+        data, in non-transformed coordinates.
+        """
+        if self.preprocessing_y.fitted:
+            return self.preprocessing_y.inverse_transform_scale(self.gpr.noise_level)
+        else:
+            return self.gpr.noise_level
 
     @property
     def abs_finite_threshold(self):
@@ -633,12 +640,13 @@ class SurrogateModel:
         y : array-like, shape = (n_samples), or None
             Target values to append to the data
 
-        noise_level : array-like, shape = (n_samples)
-            Uncorrelated standard deviations to add to the diagonal part of the covariance
-            matrix. Needs to have the same number of entries as y. If None, the
-            noise_level set in the instance is used. If you pass a single number the noise
-            level will be overwritten. In this case it is advisable to refit the
-            hyperparameters of the kernel.
+        noise_level : number, array-like, shape = (n_samples)
+            Uncorrelated standard deviation(s) to add to the diagonal part of the
+            covariance matrix. If an array is passed, it needs to have the same number of
+            entries as y. If None, the noise_level set in the instance is used (notice
+            that passing None is not recommended if a preprocessor for the GPR training
+            samples may have been refit after initialization). If a non-None value is
+            passed, it is advisable to refit the hyperparameters of the kernel.
 
         fit_gpr : Bool or dict (default: True)
             Whether the GPR :math:`\theta`-parameters should be optimised. It can be
@@ -748,13 +756,9 @@ class SurrogateModel:
                 self.infinities_classifier.update_threshold_definition(nstd_calculator)
         self._X_ = self.preprocessing_X.transform(self._X)
         self._y_ = self.preprocessing_y.transform(self._y)
-        # The transformed noise level is always an array.
-        noise_level_array = (
-            np.full(fill_value=self._noise_level, shape=(len(self._y),))
-            if isinstance(self._noise_level, Number)
-            else self._noise_level
-        )
-        self._noise_level_ = self.preprocessing_y.transform_scale(noise_level_array)
+        # The transformed noise level is always an array if noise is not in the kernel
+        noise_level_upd = self._noise_level
+        self._noise_level_ = self.preprocessing_y.transform_scale(self._noise_level)
         # 2. Fit the classifiers: SVM in the transformed space, and trust region
         if self.infinities_classifier is None:
             i_finite_predict = np.arange(len(self._y))
@@ -781,11 +785,16 @@ class SurrogateModel:
         # 3. Re-fit the GPR in the transformed space, and maybe hyperparameters
         # If all added values are infinite there's no need to refit the GPR,
         # unless an explicit call for that with X, y = None was made
+        noise_level_passed = (
+            self._noise_level_
+            if (self.gpr.is_noise_in_kernel or not np.iterable(self._noise_level_))
+            else self._noise_level_[self._i_regress]
+        )
         if self.n_last_appended_finite != 0 or force_fit_gpr:
             self.gpr.fit(
                 X=self._X_[self._i_regress],
                 y=self._y_[self._i_regress],
-                noise_level=self._noise_level_[self._i_regress],
+                noise_level=noise_level_passed,
                 fit_hyperparameters=fit_gpr,
                 validate=False,
             )
