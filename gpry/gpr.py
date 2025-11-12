@@ -501,9 +501,15 @@ class GaussianProcessRegressor(sk_GPR):
                 theta_initial = self.kernel_.theta
             else:
                 # Additional runs are performed from log-uniform chosen initial theta
-                theta_initial = self._rng.uniform(
-                    hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
-                )
+                k = 1
+                while k < 1e6:  # if not, just give up silently
+                    k += 1
+                    theta_initial = self._rng.uniform(
+                        hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+                    )
+                    eval_value = obj_func(theta_initial, eval_gradient=False)
+                    if np.isfinite(eval_value):
+                        break
             # Run the optimizer!
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
