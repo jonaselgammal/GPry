@@ -804,7 +804,7 @@ class NORA(GenericGPAcquisition):
         if not mpi.is_main_process:
             return None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
-        n_total = 1000 * surrogate.d
+        n_total = 1000 * surrogate.d**2
         X = np.empty(shape=(n_total, surrogate.d))
         for i in range(n_total):
             X[i] = proposer.get(rng=rng)
