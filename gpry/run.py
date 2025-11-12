@@ -48,7 +48,7 @@ from gpry.proposal import (
     MeanCovProposer,
 )
 from gpry.surrogate import SurrogateModel
-from gpry.gp_acquisition import GenericGPAcquisition
+from gpry.gp_acquisition import GenericGPAcquisition, GPAcquisitionError
 import gpry.gp_acquisition as gprygpacqs
 import gpry.acquisition_functions as gpryacqfuncs
 from gpry.preprocessing import NormalizeBounds, NormalizeY
@@ -985,13 +985,19 @@ class Runner:
             mpi.sync_processes()  # to sync the timer
             with TimerCounter(self.surrogate) as timer_acq:
                 force_resample = self.resamples > 0
-                new_X, y_pred, acq_vals = self.acquisition.multi_add(
-                    self.surrogate,
-                    n_points=self.n_points_per_acq,
-                    bounds=self.surrogate.trust_bounds,
-                    rng=self.rng,
-                    force_resample=force_resample,
-                )
+                try:
+                    new_X, y_pred, acq_vals = self.acquisition.multi_add(
+                        self.surrogate,
+                        n_points=self.n_points_per_acq,
+                        bounds=self.surrogate.trust_bounds,
+                        rng=self.rng,
+                        force_resample=force_resample,
+                    )
+                except Exception as excpt:
+                    raise GPAcquisitionError(
+                        f"Acquisition engine {self.acquisition.__class__.__name__} failed"
+                        f" while finding proposals: {excpt.__class__.__name__}: {excpt}"
+                    ) from excpt
                 # Check whether any of the points in new_X are either already in the
                 # training set or exit multiple times in new_X
                 if len(y_pred) > 0:

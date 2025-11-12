@@ -49,6 +49,12 @@ def builtin_names():
     return list_names
 
 
+class GPAcquisitionError(Exception):
+    """
+    Exception to be raised whenever there is an error finding new acquisition optima.
+    """
+
+
 class GenericGPAcquisition:
     """Generic class for acquisition objects."""
 
