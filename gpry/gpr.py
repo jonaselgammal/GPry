@@ -194,7 +194,7 @@ class GaussianProcessRegressor(sk_GPR):
                 raise TypeError(
                     "If noise is passed per training point, it needs to be fixed. i.e. "
                     "`noise_fixed=True`."
-                    )
+                )
             kernel = C(
                 output_scale_init**2,
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
@@ -350,13 +350,14 @@ class GaussianProcessRegressor(sk_GPR):
                 self.alpha = EPS_SQ_NOISE
             else:
                 # The following line causes sometimes noise larger than the one passed.
-                self.alpha = max(np.array(noise_level)**2, EPS_SQ_NOISE)
+                self.alpha = max(np.array(noise_level) ** 2, EPS_SQ_NOISE)
         if fit_hyperparameters is not False:
             if self.is_noise_in_kernel:
                 # Used passed noise as an upper bound
                 k = self.kernel if self.kernel_ is None else self.kernel_
                 k.k2.noise_level_bounds = (
-                    min(noise_level**2, EPS_SQ_NOISE * 0.99), noise_level**2
+                    min(noise_level**2, EPS_SQ_NOISE * 0.99),
+                    noise_level**2,
                 )
                 # Also lower the current noise if needed, in case it's over the bound
                 # after preprocessor is refit

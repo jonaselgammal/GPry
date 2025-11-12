@@ -12,6 +12,7 @@ def check_cobaya_installed():
     if importlib.util.find_spec("cobaya") is not None:
         from cobaya import __version__
         from gpry.cobaya import __min_cobaya_version__
+
         if Version(__version__) < Version(__min_cobaya_version__):
             raise ValueError(
                 f"Needs min Cobaya version {__min_cobaya_version__}, "
