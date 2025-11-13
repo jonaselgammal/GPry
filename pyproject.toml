@@ -44,9 +44,6 @@ docs = ["sphinx", "sphinx_book_theme", "sphinx-favicon"]
 [tool.setuptools.dynamic]
 version = { attr = "gpry.__version__" }
 
-[tool.setuptools.package-data]
-"*" = ["*.yaml"]
-
 [tool.setuptools.packages.find]
 exclude = ["docs", "tests", "examples"]
 

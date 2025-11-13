@@ -1228,7 +1228,8 @@ class Runner:
                     )
                 self.banner(lines)
             # Run MC and diagnose if it did not converge
-            if not self.has_converged:
+            did_at_least_1_iter = self.old_surrogate is not None
+            if not self.has_converged and did_at_least_1_iter:
                 if mpi.is_main_process:
                     self.log(
                         "[MC+DIAGNOSIS] Starting MC sampler "
@@ -1704,6 +1705,8 @@ class Runner:
         samples_dict = {"X": self.fiducial_mc_X, "w": self.fiducial_mc_w}
         if self.fiducial_mc_logpost is not None:
             samples_dict[mc._name_logp] = self.fiducial_mc_logpost
+        if self.fiducial_mc_loglike is not None:
+            samples_dict[mc._name_loglike] = self.fiducial_mc_loglike
         # NB: for bounds we do not use the trust region, since this is the fiducial sample
         return mc.samples_dict_to_getdist(
             samples_dict,
@@ -1719,6 +1722,7 @@ class Runner:
         trace=True,
         slices=False,
         corner=False,
+        corner_final=None,
     ):
         """
         Creates some progress plots and saves them at path (assumes path exists).
@@ -1743,13 +1747,17 @@ class Runner:
             Slow -- use for diagnosis only.
 
         corner : bool (default: False)
-            Creates a corner plot (contours for current GP shown only if using NORA).
-            Slow -- use for diagnosis only.
+            Creates a corner plot per iteration (contours for current GP shown only if
+            using NORA). Slow -- use for diagnosis only.
+
+        corner_final : bool, optional (default: None)
+            Whether the final corner plot is created. Needs a surrogate mc sample.
+            If undefined, it is created only if the run has converged.
         """
         if not mpi.is_main_process:
             return
         self.ensure_paths(plots=True)
-        import matplotlib
+        output_dpi_corner = 200
         import matplotlib.pyplot as plt
 
         if timing:
@@ -1781,8 +1789,13 @@ class Runner:
         if corner:
             mc_samples = {}
             filled = {}
+            add_logp, add_loglike = True, False
             if fid_mc is not None:
                 mc_samples["Fiducial"] = fid_mc
+                # If fiducial present and it has loglikelihood, use it instead of logp,
+                # since the prior normalization of the fiducial may be different
+                if mc._name_loglike in fid_mc.getParamNames().getDerivedNames():
+                    add_logp, add_loglike = False, True
             # Optional: plot train set Gaussian Approx
             # mean_train, cov_train = mean_covmat_from_evals(
             #     self.surrogate.X_regress, self.surrogate.y_regress
@@ -1799,7 +1812,9 @@ class Runner:
                 acq_key = f"Acq. sample {rw}({len(self.surrogate.X)} evals.)"
                 try:
                     mc_samples[acq_key] = self.acquisition.last_mc_sample_getdist(
-                        params=list(zip(self.params, self.labels)), warn_reweight=False
+                        params=list(zip(self.params, self.labels)),
+                        warn_reweight=False,
+                        logprior_func=self.logprior,
                     )
                 except ValueError:
                     warnings.warn("Aquisition sample could not be loaded.")
@@ -1811,35 +1826,37 @@ class Runner:
             output_corner = os.path.join(
                 self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
             )
-            # Temporarily switch to Agg backend -- solves memory leak
-            prev_backend = matplotlib.get_backend()
-            matplotlib.use("Agg")
-            output_dpi = 200
             try:
                 if len(mc_samples) > 0:
                     gpplt.plot_corner_getdist(
                         mc_samples,
-                        params=list(self.params) + [mc._name_logp],
+                        params=self.params,
                         # bounds=self.prior_bounds,
                         filled=filled,
                         training={tuple(self.params): self.surrogate},
                         training_highlight_last=True,
+                        add_logp=add_logp,
+                        add_loglike=add_loglike,
                         markers=markers,
                         output=output_corner,
-                        output_dpi=output_dpi,
+                        output_dpi=output_dpi_corner,
                     )
                 else:
                     warnings.warn(
                         "No acquisition or fiducial sample to do the corner plot."
                     )
                 if self.has_converged:
-                    self.plot_mc(output_dpi=output_dpi, ext=ext)
+                    self.plot_mc(output_dpi=output_dpi_corner, ext=ext)
             except Exception as excpt:
                 # Usually fails with reweighted Acquisition samples
-                warnings.warn(str(excpt))
-            finally:
-                # Switch back to prev backend
-                matplotlib.use(prev_backend)
+                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
+        if corner_final is None:
+            corner_final = self.has_converged
+        if corner_final:
+            try:
+                self.plot_mc(output_dpi=output_dpi_corner, ext=ext)
+            except Exception as excpt:
+                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
         plt.close("all")
 
     def generate_mc_sample(
@@ -2112,12 +2129,11 @@ class Runner:
             markers = dict(zip(self.params, self.fiducial_X))
             if self.fiducial_logpost is not None:
                 markers[mc._name_logp] = self.fiducial_logpost
-        plot_params = list(self.params) + [mc._name_logp]
         if output is None:
             output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
         gdplot = gpplt.plot_corner_getdist(
             mc_samples,
-            params=plot_params,
+            params=self.params,
             training={base_label: self.surrogate} if add_training else None,
             training_highlight_last=False,
             markers=markers,

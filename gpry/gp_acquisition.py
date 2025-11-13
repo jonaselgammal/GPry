@@ -31,7 +31,7 @@ from gpry.tools import (
     is_in_bounds,
 )
 import gpry.ns_interfaces as nsint
-from gpry.mc import samples_dict_to_getdist, _name_logp
+from gpry.mc import samples_dict_to_getdist, _name_logp, _name_loglike, _name_logprior
 
 
 def builtin_names():
@@ -1019,14 +1019,20 @@ class NORA(GenericGPAcquisition):
         Xs, _, _, ws = self.last_mc_sample(copy=False, warn_reweight=False)
         return np.cov(Xs.T, aweights=ws, ddof=0)
 
-    def last_mc_sample_getdist(self, params, warn_reweight=True):
+    def last_mc_sample_getdist(self, params, warn_reweight=True, logprior_func=None):
         """
         Returns the last MC sample as a ``getdist.MCSamples`` instance.
+
+        If ``logprior_func`` is passed, includes log-prior and log-likelihood in the
+        sample as derived paramters.
 
         Prints a warning if it is a reweighted sample.
         """
         X, y, _, w = self.last_mc_sample(warn_reweight=warn_reweight)
         samples_dict = {"w": w, "X": X, _name_logp: y}
+        if logprior_func:
+            samples_dict[_name_logprior] = np.array([logprior_func(x) for x in X])
+            samples_dict[_name_loglike] = y - samples_dict[_name_logprior]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return samples_dict_to_getdist(

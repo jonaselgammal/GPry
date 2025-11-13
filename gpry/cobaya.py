@@ -119,32 +119,150 @@ Same as for other Cobaya samplers, ``gpry`` can be customised setting its option
 
 """
 
-import os
-import re
 import logging
 from copy import deepcopy
 from inspect import cleandoc
 from typing import Union
 
+import getdist  # type: ignore
 import numpy as np
-from cobaya.sampler import Sampler
-from cobaya.log import LoggedError
-from cobaya.output import load_samples
-from cobaya.tools import get_external_function
-from cobaya.collection import SampleCollection
-from cobaya.conventions import OutPar, minuslogprior_names
+from cobaya.sampler import Sampler  # type: ignore
+from cobaya.log import LoggedError  # type: ignore
+from cobaya.output import load_samples  # type: ignore
+from cobaya.tools import get_external_function, recursive_update  # type: ignore
+from cobaya.collection import SampleCollection  # type: ignore
+from cobaya.conventions import OutPar, minuslogprior_names  # type: ignore
 
 from gpry import mpi
-from gpry.run import (
-    Runner,
-    _plots_path,
-    _default_mc_sampler,
-    _default_mc_samples_filename,
-)
-from gpry.io import _checkpoint_filenames
+from gpry.run import Runner, _default_mc_sampler
 import gpry.mc as gprymc
 
 __min_cobaya_version__ = "3.6"
+
+yaml_info = """
+# Options regarding the Bayesian optimization loop.
+# NB: 'd' after a number means the dimensionality of the sampling space,
+#     and a number following 'd' means the power of the dimensionality factor.
+
+# General options for the main loop
+options:
+  # Number of finite initial truth evaluations before starting the learning loop
+  n_initial: 3d
+  # Maximum number of truth evaluations at initialization. If it is reached before
+  # `n_initial` finite points have been found, the run will fail. To avoid that, try
+  # decreasing the prior volume.
+  max_initial: 30d1.5
+  # Maximum number of truth evaluations before the run stops. This is useful for e.g.
+  # restricting the maximum computation resources.
+  max_total: 70d1.5
+  # Maximum number of sampling points accepted into the GP training set before the run
+  # stops. If this limit is frequently saturated, try decreasing the prior volume.
+  max_finite:  # default (undefined) = max_total
+  # Number of points which are acquired with Kriging believer for every acquisition step.
+  # Gets adjusted (with 20% tol.) to match a multiple of the num. of parallel processes.
+  n_points_per_acq: d
+  # Number of iterations between full GP hyperparameters fits, including several
+  # restarts of the optimizer. Pass 'np.inf' or a large number to never refit with restarts.
+  fit_full_every: 2d0.5
+  # Similar to `fit_full_every`, but with a single optimizer run from the last optimum.
+  # Overridden by `fit_full_every` if it applies. Pass np.inf or a large number to never
+  # refit from last optimum (hyperparameters kept constant in that iteration).
+  fit_simple_every: 1  # every iteration
+
+# The surrogate GP regressor used for interpolating the posterior
+surrogate:
+  regressor:
+    # Spatial correlation kernel and params, e.g. RBF, Matern, {Matern: {nu: 2.5}}, ...
+    kernel: RBF
+    # Priors for the output and length scale, in normalised logp units
+    output_scale_prior: [1e-2, 1e3]
+    length_scale_prior: [1e-3, 1e1]
+    # Noise level in logp units; increase for numerically noisy likelihoods
+    noise_level: 1e-1
+    # Hyperparameter fitting: optimizer (from scipy) and number of restarts for full fits
+    optimizer: fmin_l_bfgs_b
+# TODOOOO: n_restarts optimizer!!!!
+    n_restarts_optimizer: 2d
+  # Treatment of infinities and large negative values; False for no classifier
+  infinities_classifier:
+    svm:
+      # Difference in standard deviations ('s') for considering a value as -infinity
+      threshold: 20s
+#    trust_region:
+#      # Difference in standard deviations ('s') for considering a value as -infinity
+#      threshold: 30s
+#      # Factor by which to multiply the sides of the hyperrectangular trust region
+#      factor: 2  # none for 1
+  # Factor used to clip the GPR from above, to avoid overshoots (undefined to disable)
+  clip_factor: 1.1  # none: no clipping
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+
+# The acquisition class, function and their options
+gp_acquisition:
+  # Acquisition function and its arguments (if passed as dict)
+  acq_func:
+    LogExp:  # add default zeta_scaling!!!! -- make sure that it is kept!!!!
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+  # Acquisition engine: NORA or BatchOptimizer
+  engine: NORA
+  # Options for the engine
+  options_NORA:
+    # nested sampler used for acquisition
+    sampler:  # undefined: in order, of available: polychord > ultranest > nessai
+    mc_every: d  # number of iterations between full NS runs
+    nlive_per_training: 3  # number of live points per training sample
+    nlive_max: 25d  # cap for the number of live points
+    num_repeats: 5d  # number of steps of slice chains (polychord only)
+    precision_criterion_target: 0.01  # precision criterion for the NS
+    nprior_per_nlive: 10  # number of prior points in the initial sample, times nlive
+    max_ncalls:  # maximum number of calls to the GPR model during NS (none: infinite)
+  options_BatchOptimizer:
+    proposer:  # default (undefined): a mixture of uniform and centroids
+    acq_optimizer: fmin_l_bfgs_b  # scipy optimiser to use
+    n_restarts_optimizer: 5d  # number of restarts during hyperparameter fitting
+    n_repeats_propose: 10  # number of starting points drawn from the proposer
+
+# Proposer used for drawing the initial training samples before running
+# the acquisition loop. One of [reference, prior, uniform].
+# Can be specified as dict with args, e.g. {reference: {max_tries: 1000}}
+initial_proposer: reference
+
+# Convergence criterion.
+# (add or replace by DontConverge to run until evaluation budget exhausted)
+# `policy` can be [n]ecessary (default), [s]ufficient, both ([ns]), or [m]onitoring
+convergence_criterion:
+  CorrectCounter: {policy: s}
+  GaussianKL: {policy: s}  # ignored if NORA not used
+  TrainAlignment: {policy: n}  # ignored if NORA not used
+
+# Sampler used to generate intermediate and final samples from the surrogate model
+mc_options: nested  # pass as a dict for options
+
+# Produce progress plots (inside the gpry_output dir).
+# One can specify options detailing which plots will be made, and in which format, e.g.:
+# {timing: True, convergence: True, trace: False, slices: False, format: svg}
+# (Adds significant overhead for fast likelihoods.)
+plots: False
+
+# Fiducial point and/or MC samples
+fiducial_point: # dict of {parameters: values}; can use keys 'logpost' and 'loglike'.
+fiducial_mc: # path to MC samples in Cobaya-compatible format
+
+# Function run each iteration after adapting the recently acquired points and
+# the computation of the convergence criterion. See docs for implementation.
+callback:
+
+# Whether the callback function handles MPI-parallelization internally
+# Otherwise run only by the rank-0 process
+callback_is_MPI_aware:
+
+# Change to increase or reduce verbosity. If None, it is handled by Cobaya.
+# '3' produces general progress output (default for Cobaya if None),
+# and '4' debug-level output
+verbose:
+"""
 
 
 class CobayaWrapper(Sampler):
@@ -161,6 +279,13 @@ class CobayaWrapper(Sampler):
         "verbose",
         "mc_options",
     ]
+
+    @classmethod
+    def get_class_options(cls, **kwargs):
+        # NB: yaml is available if we got here: Cobaya requisite
+        import yaml  # type: ignore
+
+        return yaml.safe_load(yaml_info)
 
     def initialize(self):
         """
@@ -179,6 +304,12 @@ class CobayaWrapper(Sampler):
         # Prepare output
         self.path_checkpoint = self.get_checkpoint_dir(self.output)
         self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
+        # Do a manual recursive update, since the depth of some settings here is >2:
+        defaults = self.get_class_options()
+        for attr in ["surrogate", "gp_acquisition"]:
+            upd_values = recursive_update(defaults[attr], getattr(self, attr, {}))
+            setattr(self, attr, upd_values)
+        # Grab the relevant acq options, merge them, and kick out the unused ones
         gp_acq_input = deepcopy(self.gp_acquisition)
         gp_acq_engine = gp_acq_input.pop("engine", "BatchOptimizer")
         gp_acq_engine_options = None
@@ -235,7 +366,8 @@ class CobayaWrapper(Sampler):
         """
         try:
             X = [
-                fiducial_point[p] for p in self.model.parameterization.sampled_params()
+                fiducial_point.get(p)
+                for p in self.model.parameterization.sampled_params()
             ]
             logpost = fiducial_point.pop("logpost", None)
             loglike = fiducial_point.pop("loglike", None)
@@ -267,7 +399,7 @@ class CobayaWrapper(Sampler):
                 list(self.model.parameterization.sampled_params())
             ].to_numpy()
             # Prefer likelihood in case priors are different
-            if "chi2" in fiducial_mc:
+            if "chi2" in fiducial_mc.columns:
                 logpost = None
                 loglike = -0.5 * fiducial_mc["chi2"].to_numpy()
             else:
@@ -302,11 +434,22 @@ class CobayaWrapper(Sampler):
                 self.log.info(
                     "Learning stage failed to converge! MC sample produced anyway."
                 )
+                # Plot surrogate triangle anyway
+                plot_mc_kwargs = {"output_dpi": 200}
+                if "ext" in self.plots:
+                    plot_mc_kwargs["ext"] = self.plot["ext"]
+                try:
+                    self.gpry_runner.plot_mc(**plot_mc_kwargs)
+                except Exception as excpt:
+                    self.mpi_warning(
+                        f"Could not do final corner plot for unconverged run: {excpt}"
+                    )
         # Preparing Cobaya-compatible samples
         if mpi.is_main_process:
             self.collection = self.last_mc_samples_as_collection()
             # Write them, if applicable
-            self.collection.out_update()
+            if self.collection is not None:
+                self.collection.out_update()
 
     def last_mc_samples_as_collection(self):
         """
@@ -435,8 +578,8 @@ class CobayaWrapper(Sampler):
 
         Returns
         -------
-        checkpoint_dir: str
-            Relative folder where the GPry checkpoint will be saved.
+        checkpoint_dir: str|None
+            Relative folder where the GPry checkpoint will be saved (None if dummy output)
 
         Examples
         --------
@@ -448,7 +591,7 @@ class CobayaWrapper(Sampler):
         >>> cls.get_checkpoint_dir(get_output("folder/prefix"))
         'folder/prefix_gpry_output'
         >>> cls.get_checkpoint_dir(get_output())  # dummy output
-        '[tmp_folder]/gpry_output'
+        None
         """
         if output:
             return output.add_suffix(cls._gpry_output_dir, separator="_")
@@ -466,7 +609,7 @@ class CobayaWrapper(Sampler):
         """
         return [
             (None, cls.get_checkpoint_dir(output)),
-            (output.collection_regexp(name="1"), None)
+            (output.collection_regexp(name="1"), None),
         ]
 
     @staticmethod

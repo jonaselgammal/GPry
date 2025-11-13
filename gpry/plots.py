@@ -19,7 +19,7 @@ from matplotlib import cm
 from tqdm import tqdm  # type: ignore
 
 from gpry.surrogate import SurrogateModel
-from gpry.mc import process_gdsamples
+from gpry.mc import process_gdsamples, _name_loglike, _name_logp
 from gpry.tools import (
     credibility_of_nstd,
     nstd_of_1d_nstd,
@@ -437,6 +437,26 @@ def plot_slices_reference(truth, surrogate, X, plot_truth=True, reference=None):
                 axes[i].axvline(bounds[2], c="tab:blue", alpha=0.3, ls="--")
 
 
+def force_agg_backend(func):
+    """
+    Temporarily switch to Agg backend -- solves getdist/matplotlib mem leak.
+    """
+
+    def wrapper(*args, **kwargs):
+        prev_backend = matplotlib.get_backend()
+        matplotlib.use("Agg")
+        try:
+            return func(*args, **kwargs)
+        except Exception as excpt:
+            raise excpt
+        finally:
+            # Switch back to prev backend
+            matplotlib.use(prev_backend)
+
+    return wrapper
+
+
+@force_agg_backend
 def plot_corner_getdist(
     mc_samples,
     params=None,
@@ -444,6 +464,8 @@ def plot_corner_getdist(
     filled=None,
     training=None,
     training_highlight_last=False,
+    add_logp=False,
+    add_loglike=False,
     markers=None,
     output=None,
     output_dpi=200,
@@ -478,7 +500,7 @@ def plot_corner_getdist(
         List of parameter names to be plotted, by default all of the ones in the first
         MC sample, included derived ones like probability densities.
 
-    bounds :array-like, shape = (len(params), 2), list(array-like, shape = (2))
+    bounds : array-like, shape = (len(params), 2), list(array-like, shape = (2))
         Dict or list (sorted as ``params``) of parameter bounds.
 
     filled : dict(str, bool), list
@@ -496,6 +518,17 @@ def plot_corner_getdist(
         it will used the parameter names from the MC sample with that label; if the key is
         a tuple of strings, they will be used as parameters
 
+    training_highlight_last : bool (default: False)
+        If ``training`` is True, whether the last-added training points are highlighted.
+
+    add_logp : bool (default: False)
+        Whether to add a row with the log-posterior as a parameter (if available as a
+        derived parameter of the last input samples. Incompatible with ``add_loglike``.
+
+    add_loglike : bool (default: False)
+        Whether to add a row with the log-likelihood as a parameter (if available as a
+        derived parameter of the last input samples. Incompatible with ``add_logp``.
+
     subplot_size : float, default = 2
         Size of each subplot in the corner plot.
 
@@ -510,7 +543,13 @@ def plot_corner_getdist(
     -------
     getdist.plots.GetDistPlotter object containing the figure.
     """
-    # TODO: manage whether to plot log-post/like, add kwarg opt
+    if add_logp and add_loglike:
+        raise ValueError("Only one of add_logp/add_loglike can be True.")
+    if _name_logp in params or _name_loglike in params:
+        raise ValueError(
+            "To plot log-posterior or log-likelihood, do not add them as parameters; "
+            "use add_logp|add_loglike instead."
+        )
     if not isinstance(mc_samples, Mapping):
         raise TypeError(
             "The first argument must be a list of MC samples with the sample legend "
@@ -548,9 +587,14 @@ def plot_corner_getdist(
     triang_args = [list(gdsamples_dict.values())]
     if params is not None:
         # GetDist failsafe: can only plot the params of the last sample in the input
-        at_most_params = (
-            list(gdsamples_dict.values())[-1].getParamNames().getRunningNames()
+        last_samples = list(gdsamples_dict.values())[-1]
+        at_most_params = set(last_samples.getParamNames().getRunningNames()).union(
+            set(last_samples.getParamNames().getDerivedNames())
         )
+        if add_logp:
+            params = list(params) + [_name_logp]
+        elif add_loglike:
+            params = list(params) + [_name_loglike]
         params = [p for p in params if p in at_most_params]
         triang_args.append(params)
     if isinstance(bounds, Mapping):
