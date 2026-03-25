@@ -97,7 +97,7 @@ class Runner:
 
     ref_bounds : List of [min, max], or Dict {name: [min, max],...}
         List or dictionary of "reference" parameter bounds, i.e. bounds from within
-        which to raw the initial set of training samples.
+        which to draw the initial set of training samples.
 
     params : list of str, dict {str: str}, optional
         List of names for the parameters. Alternatively, a dictionary ``{name: label}``,

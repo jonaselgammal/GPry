@@ -208,10 +208,6 @@ def mc_sample_from_gp_cobaya(
     params : List of parameter strings, optional
         By default it uses some dummy strings.
 
-    true_model : Cobaya Model, optional
-        If passed, it uses it to get bounds and parameter names (unless overriden by
-        the corresponding kwargs).
-
     sampler : string (default `"mcmc"`). or dict
         Cobaya sampler to be used.
 
@@ -233,13 +229,13 @@ def mc_sample_from_gp_cobaya(
     run: bool, default: True
         Whether to run the sampler. If ``False``, returns just an initialised sampler.
 
+    resume: bool, optional (default=False)
+        Whether to resume from existing output files (True) or force overwrite (False)
+
     verbose: int (default 3)
         Verbosity level, similarly valued to that of the Runner, e.g. 3 indicates cobaya's
         'info' level, 4 the 'debug' level, and lower-than-three values print only warnings
         and errors.
-
-    resume: bool, optional (default=False)
-        Whether to resume from existing output files (True) or force overwrite (False)
 
     Returns
     -------
