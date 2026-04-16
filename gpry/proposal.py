@@ -447,3 +447,57 @@ class SmallChainProposer(Proposer):
         self.sampler = sampler
         self.parnames = list(surr_info["params"])
         self.surrogate = surrogate
+
+
+class SobolProposer(Proposer, InitialPointProposer):
+    """
+    Generates proposals from a Sobol quasi-random sequence mapped to the given bounds.
+    Provides much better space-filling coverage than uniform random sampling, especially
+    in moderate-to-high dimensions.
+
+    Parameters
+    ----------
+    bounds : array-like, shape=(n_dims, 2)
+        Array of bounds [lower, upper] along each dimension.
+
+    seed : int, optional
+        Seed for the Sobol sequence scrambling. If None, uses an unseeded (deterministic)
+        Sobol sequence.
+
+    batch_size : int, optional (default=64)
+        Number of points to pre-generate internally per batch. Must be a power of 2 for
+        optimal Sobol properties (rounded up automatically).
+    """
+
+    def __init__(self, bounds, seed=None, batch_size=64):
+        self.update_bounds(bounds)
+        self.seed = seed
+        self.batch_size = batch_size
+        self._queue = []
+        self._reset_sampler()
+
+    def _reset_sampler(self):
+        from scipy.stats.qmc import Sobol
+        d = len(self.bounds)
+        self._sampler = Sobol(d=d, scramble=self.seed is not None, seed=self.seed)
+        self._queue = []
+
+    def _fill_queue(self):
+        """Generate a batch of Sobol points in [0,1]^d and map to bounds."""
+        unit_points = self._sampler.random(self.batch_size)
+        lower = self.bounds[:, 0]
+        scale = self.bounds[:, 1] - self.bounds[:, 0]
+        mapped = lower + unit_points * scale
+        self._queue = list(mapped)
+
+    def update_bounds(self, bounds):
+        super().update_bounds(bounds)
+        # Reset the sampler when bounds change so points map to the new region
+        if hasattr(self, '_sampler'):
+            self._reset_sampler()
+
+    # Within bounds by construction: no need to decorate it.
+    def get(self, rng=None):
+        if not self._queue:
+            self._fill_queue()
+        return self._queue.pop(0)

@@ -51,7 +51,9 @@ GPry introduces some innovations with respect to previous similar approaches:
 
 - Complementing the GP model, it implements an SVM classifier that learns the shape of uninteresting regions, where proposal are discarded, wherever the value of the likelihood is very-low (for increased efficiency) or undefined (for increased robustness).
 
-At the moment, GPry utilizes a modification of the CPU-based `scikit-learn GP implementation <https://scikit-learn.org/stable/modules/gaussian_process.html>`_.
+At the moment, GPry uses a modified `scikit-learn GP implementation <https://scikit-learn.org/stable/modules/gaussian_process.html>`_ with optional JAX acceleration for repeated GP operations. When JAX is available, GP prediction, parts of fitting, and the BlackJAX NORA path can avoid much of the Python/NumPy overhead while preserving the standard GPry API.
+
+The current development baseline keeps the conservative GP defaults that have proven most stable in transformed parameter space: a fixed GP noise level of ``0.01`` and kernel length-scale bounds ``[0.01, 100]``. NORA remains the recommended acquisition engine; PolyChord is still a useful reference backend when available, while BlackJAX is the preferred portable backend for the JAX-accelerated path.
 
   
 What kinds of likelihoods/posteriors should work with GPry?
@@ -68,6 +70,8 @@ What may not work so well:
 - Highly multimodal posteriors, especially if the separation between modes is large.
 
 - Highly non-Gaussian posteriors, that would not be well modelled by orthogonal constant correlation lengths.
+
+- Very high-dimensional problems with cheap likelihoods, where the active-learning overhead and GP fitting cost can dominate the true likelihood cost.
 
 **GPry is under active developing, in order to mitigate some of those issues, so look out for new versions!**
 

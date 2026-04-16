@@ -254,7 +254,7 @@ class RBF(Kernel, sk_RBF):
         self.length_scale = length_scale
         self.length_scale_bounds = length_scale_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_bounds, str) and length_scale_bounds == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RBF kernel "
@@ -332,7 +332,7 @@ class Matern(Kernel, sk_Matern):
         self.length_scale_bounds = length_scale_bounds
         self.nu = nu
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_bounds, str) and length_scale_bounds == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the Matern kernel "
@@ -497,7 +497,7 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         self.length_scale_bounds = length_scale_bounds
         self.alpha_bounds = alpha_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_bounds, str) and length_scale_bounds == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RQ kernel "
@@ -585,7 +585,7 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         self.length_scale_bounds = length_scale_bounds
         self.periodicity_bounds = periodicity_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_bounds, str) and length_scale_bounds == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RQ kernel "

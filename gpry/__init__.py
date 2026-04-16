@@ -14,7 +14,7 @@ def check_cobaya_installed():
         from gpry.cobaya import __min_cobaya_version__
 
         if Version(__version__) < Version(__min_cobaya_version__):
-            raise ValueError(
+            warn(
                 f"Needs min Cobaya version {__min_cobaya_version__}, "
                 f"but installed one is {__version__}"
             )

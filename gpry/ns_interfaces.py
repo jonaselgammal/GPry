@@ -7,8 +7,10 @@ import sys
 import glob
 import shutil
 import tempfile
+import importlib.abc
 from warnings import warn
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -24,6 +26,51 @@ from gpry.tools import (
 
 # Helper for PolyChord, that needs a scalar-returning likelihood
 ensure_scalar = lambda x: x[0] if hasattr(x, "__len__") else x
+_SERIAL_MPI_ENV = "GPRY_DISABLE_MPI"
+
+
+class _BlockedModuleFinder(importlib.abc.MetaPathFinder):
+    """Forces ImportError for selected top-level modules."""
+
+    def __init__(self, blocked_names):
+        self.blocked_names = tuple(blocked_names)
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in self.blocked_names or fullname.startswith(
+            tuple(f"{name}." for name in self.blocked_names)
+        ):
+            raise ImportError(f"{fullname} import blocked for serial execution")
+        return None
+
+
+@contextmanager
+def _serial_mpi_import_block():
+    """
+    Temporarily prevents mpi4py from importing so PolyChord runs in true serial mode.
+    """
+    if os.environ.get(_SERIAL_MPI_ENV, "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        yield
+        return
+    removed = {}
+    blocked = ("mpi4py",)
+    for name in list(sys.modules):
+        if name in blocked or any(name.startswith(f"{prefix}.") for prefix in blocked):
+            removed[name] = sys.modules.pop(name)
+    finder = _BlockedModuleFinder(blocked)
+    sys.meta_path.insert(0, finder)
+    try:
+        yield
+    finally:
+        try:
+            sys.meta_path.remove(finder)
+        except ValueError:
+            pass
+        sys.modules.update(removed)
 
 
 class NestedSamplerNotInstalledError(Exception):
@@ -213,13 +260,14 @@ class InterfacePolyChord(NSInterface):
         # Flush stdout, since PolyChord can step over it if async (py not called with -u)
         sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
-            self.last_polychord_result = self.globals["run_polychord"](
-                lambda X: (ensure_scalar(logp_func_wrapped(X)), []),
-                nDims=self.dim,
-                nDerived=0,
-                settings=self.polychord_settings,
-                prior=self.prior,
-            )
+            with _serial_mpi_import_block():
+                self.last_polychord_result = self.globals["run_polychord"](
+                    lambda X: (ensure_scalar(logp_func_wrapped(X)), []),
+                    nDims=self.dim,
+                    nDerived=0,
+                    settings=self.polychord_settings,
+                    prior=self.prior,
+                )
         # Process results
         if keep_all:
             all_X_all = mpi.gather(self.X_all)
@@ -537,9 +585,307 @@ class InterfaceUltraNest(NSInterface):
         shutil.rmtree(self.output)
 
 
+class InterfaceBlackJAX(NSInterface):
+    """
+    Interface for the BlackJAX nested sampler (Handley-lab fork with NS support).
+
+    Uses Nested Slice Sampling (NSS) with Hit-and-Run Slice Sampling as the
+    inner kernel. Fully JAX-native, JIT-compilable, and GPU-compatible.
+
+    See https://github.com/handley-lab/blackjax
+    """
+
+    def __init__(self, bounds, verbosity=3):
+        try:
+            from blackjax.ns.nss import as_top_level_api as _nss_api
+            from blackjax.ns import utils as ns_utils
+
+            self.globals = {"nss_api": _nss_api, "ns_utils": ns_utils}
+        except (ModuleNotFoundError, ImportError, AttributeError) as excpt:
+            raise NestedSamplerNotInstalledError(
+                "BlackJAX nested sampler (handley-lab fork) cannot be imported. "
+                "Install it with: pip install git+https://github.com/handley-lab/blackjax.git "
+                "(or select an alternative nested sampler, e.g. UltraNest)."
+            ) from excpt
+        bounds = check_and_return_bounds(bounds)
+        self.dim = len(bounds)
+        self.bounds = bounds
+        self.precision_settings = {
+            # Match GPry's standard NORA cap used with PolyChord by default.
+            "nlive": 25 * self.dim,
+            "max_steps": 5000,
+            "num_inner_steps": 5 * self.dim,
+            "precision_criterion": 0.01,
+        }
+        self.set_verbosity(verbosity)
+        # Storage
+        self.X_MC = None
+        self.y_MC = None
+        self.w_MC = None
+        self._compiled_runtime_cache = {}
+
+    def set_verbosity(self, verbose):
+        """Sets the verbosity of the sampler at run time."""
+        self.verbose = verbose
+
+    def set_prior(self, bounds):
+        """Sets the prior used by the nested sampler."""
+        self.bounds = check_and_return_bounds(bounds)
+
+    def set_precision(
+        self,
+        nlive=None,
+        max_steps=None,
+        num_inner_steps=None,
+        precision_criterion=None,
+        num_repeats=None,
+        max_ncalls=None,
+        nprior=None,
+        **kwargs,
+    ):
+        """Sets precision parameters for the nested sampler."""
+        if nlive is not None:
+            self.precision_settings["nlive"] = get_Xnumber(
+                nlive, "d", self.dim, int, "nlive"
+            )
+        if num_inner_steps is None and num_repeats is not None:
+            num_inner_steps = num_repeats
+        if num_inner_steps is not None:
+            self.precision_settings["num_inner_steps"] = get_Xnumber(
+                num_inner_steps, "d", self.dim, int, "num_inner_steps"
+            )
+        if max_steps is None and max_ncalls is not None:
+            # One NSS outer step entails at least one deleted particle and a constrained
+            # MCMC update with multiple inner steps. This lower-bound mapping is still
+            # imperfect, but is materially closer to a likelihood-call budget than
+            # equating max_ncalls with the number of outer iterations.
+            inner_steps = max(1, self.precision_settings["num_inner_steps"])
+            max_steps = max(1, int(max_ncalls) // inner_steps)
+        if max_steps is not None:
+            self.precision_settings["max_steps"] = int(max_steps)
+        if precision_criterion is not None:
+            self.precision_settings["precision_criterion"] = float(
+                precision_criterion
+            )
+        if nprior is not None:
+            # Kept for compatibility with the PolyChord precision contract.
+            self.precision_settings["nprior"] = int(nprior)
+        if kwargs:
+            warn(f"Some precision parameters not recognized; ignored: {kwargs}")
+
+    @staticmethod
+    def _logdiffexp(log_a, log_b):
+        """Returns log(exp(log_a) - exp(log_b)) for log_a > log_b."""
+        return log_a + np.log1p(-np.exp(log_b - log_a))
+
+    def _stop_by_remaining_evidence(
+        self,
+        dead_logls,
+        dead_count,
+        live_logl,
+        nlive,
+        precision_criterion,
+    ):
+        if precision_criterion is None or precision_criterion <= 0 or dead_count <= 0:
+            return False, None
+        logx_prev = 0.0
+        logz_dead = -np.inf
+        for idx, dead_logl in enumerate(dead_logls, start=1):
+            logx_curr = -idx / float(nlive)
+            logdx = self._logdiffexp(logx_prev, logx_curr)
+            logz_dead = np.logaddexp(logz_dead, float(dead_logl) + logdx)
+            logx_prev = logx_curr
+        logz_live_upper = float(np.max(live_logl)) + logx_prev
+        logz_total_upper = np.logaddexp(logz_dead, logz_live_upper)
+        frac_remain = float(np.exp(logz_live_upper - logz_total_upper))
+        return frac_remain < precision_criterion, frac_remain
+
+    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
+        """
+        Runs the BlackJAX nested sampler.
+
+        Parameters
+        ----------
+        logp_func : callable
+            Log-likelihood function. Takes array X of shape (d,) or (n, d)
+            and returns scalar or array.
+        param_names : list, optional
+            Parameter names.
+        out_dir : str, optional
+            Not used (BlackJAX is in-memory), but kept for interface compatibility.
+        keep_all : bool
+            Not supported for BlackJAX.
+        seed : int, optional
+            Random seed.
+
+        Returns
+        -------
+        (X_MC, y_MC, w_MC) : arrays of samples, log-likelihoods, and normalized weights.
+        """
+        import jax
+        import jax.numpy as jnp
+        from blackjax.ns import utils as ns_utils
+
+        if keep_all:
+            raise NotImplementedError("keep_all=True not supported for BlackJAX.")
+
+        nlive = self.precision_settings["nlive"]
+        max_steps = self.precision_settings["max_steps"]
+        num_inner_steps = self.precision_settings["num_inner_steps"]
+        precision_criterion = self.precision_settings.get("precision_criterion")
+
+        if seed is None:
+            seed = np.random.randint(0, 2**31)
+        rng_key = jax.random.PRNGKey(seed)
+
+        # Build parameter bounds dict for BlackJAX
+        if param_names is None:
+            param_names_list = generic_params_names(self.dim)
+        elif isinstance(param_names[0], (list, tuple)):
+            param_names_list = [p[0] for p in param_names]
+        else:
+            param_names_list = list(param_names)
+
+        bounds_dict = {
+            name: (float(self.bounds[i, 0]), float(self.bounds[i, 1]))
+            for i, name in enumerate(param_names_list)
+        }
+
+        # Generate initial particles from uniform prior
+        rng_key, init_key = jax.random.split(rng_key)
+        particles, logprior_fn = ns_utils.uniform_prior(init_key, nlive, bounds_dict)
+
+        # Build log-likelihood that takes a dict of params -> scalar.
+        # Prefer an end-to-end JAX path when GPry provides one; otherwise fall back
+        # to pure_callback around the numpy likelihood.
+        jax_loglikelihood_builder = getattr(
+            logp_func, "_jax_loglikelihood_builder", None
+        )
+        jax_accel = getattr(logp_func, "_jax_accel", None)
+        if jax_loglikelihood_builder is not None:
+            loglikelihood_fn = jax_loglikelihood_builder(param_names_list)
+            jax_path = True
+        elif jax_accel is not None and jax_accel.ready:
+            def loglikelihood_fn(params):
+                x = jnp.array([params[name] for name in param_names_list])
+                return jax_accel.predict_mean_single_jax(x)
+            jax_path = True
+        else:
+            def loglikelihood_fn(params):
+                x = jnp.array([params[name] for name in param_names_list])
+
+                def _numpy_logp(x_np):
+                    return np.float64(logp_func(np.asarray(x_np)))
+
+                result = jax.pure_callback(
+                    _numpy_logp, jax.ShapeDtypeStruct((), jnp.float64), x,
+                    vmap_method="sequential",
+                )
+                return result
+            jax_path = False
+
+        # Build the NSS algorithm
+        nss_api = self.globals["nss_api"]
+        runtime_key = None
+        if jax_path:
+            runtime_key = (
+                tuple(param_names_list),
+                tuple(map(tuple, np.asarray(self.bounds))),
+                int(nlive),
+                int(num_inner_steps),
+                "builder" if jax_loglikelihood_builder is not None else "jax_accel",
+                id(jax_loglikelihood_builder)
+                if jax_loglikelihood_builder is not None
+                else id(jax_accel),
+            )
+        cached_runtime = self._compiled_runtime_cache.get(runtime_key)
+        if cached_runtime is None:
+            algorithm = nss_api(
+                logprior_fn=logprior_fn,
+                loglikelihood_fn=loglikelihood_fn,
+                num_inner_steps=num_inner_steps,
+            )
+            if jax_path:
+                init_fn = jax.jit(algorithm.init)
+                step_fn = jax.jit(algorithm.step)
+                self._compiled_runtime_cache[runtime_key] = (init_fn, step_fn)
+            else:
+                init_fn = algorithm.init
+                step_fn = algorithm.step
+        else:
+            init_fn, step_fn = cached_runtime
+
+        # Initialize
+        rng_key, init_key = jax.random.split(rng_key)
+        state = init_fn(particles, rng_key=init_key)
+
+        # Run the NS loop, collecting dead particles
+        dead_list = []
+        dead_logls = []
+
+        for i in range(max_steps):
+            rng_key, step_key = jax.random.split(rng_key)
+            state, info = step_fn(step_key, state)
+            dead_list.append(info)
+            dead_logls.extend(np.sort(np.asarray(info.particles.loglikelihood).ravel()))
+
+            if precision_criterion is not None and precision_criterion > 0 and i > 0:
+                should_check = ((i + 1) % max(1, nlive) == 0)
+                if should_check:
+                    should_stop, frac_remain = self._stop_by_remaining_evidence(
+                        dead_logls=dead_logls,
+                        dead_count=len(dead_logls),
+                        live_logl=np.asarray(state.particles.loglikelihood),
+                        nlive=nlive,
+                        precision_criterion=precision_criterion,
+                    )
+                    if should_stop:
+                        if self.verbose > 3:
+                            print(
+                                f"BlackJAX NS converged at step {i + 1}, "
+                                f"remaining evidence fraction = {frac_remain:.4g}"
+                            )
+                        break
+
+        # Finalise: combine dead particles with final live points
+        dead_info = ns_utils.finalise(state, dead_list, update_info=False)
+
+        # Return dead particles with importance weights (not resampled posterior).
+        # Dead particles span the full prior volume, giving NORA diverse
+        # proposals for ranking. Resampled posterior would concentrate all
+        # samples at the mode, where training points already exist.
+        rng_key, weight_key = jax.random.split(rng_key)
+        logw = ns_utils.log_weights(weight_key, dead_info).mean(axis=-1)
+        logw = np.array(logw)
+
+        particles = dead_info.particles
+        n_particles = len(particles.loglikelihood)
+
+        X_mc = np.array([
+            np.array([float(particles.position[name][j])
+                       for name in param_names_list])
+            for j in range(n_particles)
+        ])
+        y_mc = np.array(particles.loglikelihood)
+
+        # Convert log-weights to normalized importance weights.
+        w_mc = np.exp(logw - np.max(logw))
+        w_mc = w_mc / np.sum(w_mc)
+
+        self.X_MC = X_mc
+        self.y_MC = y_mc
+        self.w_MC = w_mc
+        return self.X_MC, self.y_MC, self.w_MC
+
+    def delete_output(self, out_dir=None):
+        """BlackJAX is in-memory, nothing to delete."""
+        pass
+
+
 # Implemented interfaces as a dict, for convenience.
 _ns_interfaces = {
     "polychord": InterfacePolyChord,
     "ultranest": InterfaceUltraNest,
     "nessai": InterfaceNessai,
+    "blackjax": InterfaceBlackJAX,
 }

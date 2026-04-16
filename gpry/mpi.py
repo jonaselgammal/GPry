@@ -6,12 +6,22 @@ the :class:`run.Runner` class to run GPry.
 """
 
 # Defining some helpers for parallelisation.
+import os
 import dill  # type:  ignore
 import numpy as np
 from warnings import warn
 from numpy.random import SeedSequence, default_rng, Generator
 
+_SERIAL_MPI_ENV = "GPRY_DISABLE_MPI"
+
 try:
+    if os.environ.get(_SERIAL_MPI_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        raise ImportError(f"{_SERIAL_MPI_ENV} requested serial execution")
     from mpi4py import MPI
 
     # Use dill pickler (can seriealize more stuff, e.g. lambdas)
@@ -24,7 +34,7 @@ try:
     multiple_processes = SIZE > 1
 except ImportError:
     warn(
-        "mpi4py could not be imported. "
+        "mpi4py could not be imported or was disabled. "
         "It is optional but recommended for faster running in parallel."
     )
     # Define dummy interfaces

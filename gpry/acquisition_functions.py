@@ -950,6 +950,21 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
 
     zeta_scaling: double, default=0.85
         the scaling power of the zeta with dimension, if auto-scaled
+
+    zeta_schedule : None, ``"ramp"``, or callable, default=None
+        Schedule for dynamically adjusting zeta during acquisition.
+
+        - ``None``: static zeta (current default behavior).
+        - ``"ramp"``: linear ramp from 0 to ``zeta`` over ``n_explore``
+          acquisitions after the initial training set.
+        - callable ``f(iteration, n_train, d) -> zeta_effective``: custom
+          schedule. ``iteration`` is the number of points acquired after
+          the initial set.
+
+    n_explore : int or str, default="3d"
+        Number of acquisitions over which to ramp zeta (only used when
+        ``zeta_schedule="ramp"``). If a string of the form ``"Nd"``
+        (e.g. ``"3d"``), it is interpreted as N * dimensionality.
     """
 
     def __init__(
@@ -960,7 +975,10 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         dimension=None,
         zeta_scaling=0.85,
         linear=True,
+        zeta_schedule=None,
+        n_explore="3d",
     ):
+        self._dimension = dimension
         if zeta is None:
             if dimension is None:
                 raise ValueError(
@@ -973,6 +991,9 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         self.sigma_n = sigma_n
         self.fixed = fixed
         self.hasgradient = True
+        self.zeta_schedule = zeta_schedule
+        self._n_explore_raw = n_explore
+        self._n_explore = self._parse_n_explore(n_explore, dimension)
 
     @abstractmethod
     def f(mu, std, zeta):
@@ -988,6 +1009,57 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
 
     def auto_zeta(self, dimension, scaling=0.85):
         return dimension ** (-scaling)
+
+    @staticmethod
+    def _parse_n_explore(n_explore, dimension):
+        """Parse ``n_explore`` into an integer."""
+        if isinstance(n_explore, str):
+            if n_explore.endswith("d"):
+                if dimension is None:
+                    return None  # will be resolved later
+                return int(n_explore[:-1]) * int(dimension)
+            raise ValueError(
+                "n_explore string must be of the form 'Nd', e.g. '3d'. "
+                f"Got: {n_explore!r}"
+            )
+        return int(n_explore)
+
+    def effective_zeta(self, n_train, d):
+        """Compute the effective zeta given the current training set size.
+
+        Parameters
+        ----------
+        n_train : int
+            Total number of training points in the GP.
+        d : int
+            Dimensionality of the parameter space.
+
+        Returns
+        -------
+        zeta_eff : float
+            The effective zeta value for the current iteration.
+        """
+        if self.zeta_schedule is None:
+            return self.zeta
+        # Number of initial points: 2*d (the typical GPry default)
+        n_initial = 2 * d
+        # How many points have been acquired after the initial set
+        n_acquired = max(0, n_train - n_initial)
+        if self.zeta_schedule == "ramp":
+            n_explore = self._n_explore
+            if n_explore is None:
+                n_explore = self._parse_n_explore(self._n_explore_raw, d)
+            if n_explore <= 0:
+                return self.zeta
+            frac = min(n_acquired / n_explore, 1.0)
+            return frac * self.zeta
+        elif callable(self.zeta_schedule):
+            return self.zeta_schedule(n_acquired, n_train, d)
+        else:
+            raise ValueError(
+                f"Unknown zeta_schedule: {self.zeta_schedule!r}. "
+                "Use None, 'ramp', or a callable."
+            )
 
     def __call__(self, X, gp, eval_gradient=False, validate=True):
         """Return the Value of the AF at x (``A_f(X, gp)``) and optionally
@@ -1039,7 +1111,12 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
                 noise_var = sigma_n
         else:
             noise_var = self.sigma_n
-        zeta = self.zeta
+        if self.zeta_schedule is not None and hasattr(gp, "X_train_"):
+            n_train = gp.X_train_.shape[0]
+            d = gp.X_train_.shape[1]
+            zeta = self.effective_zeta(n_train, d)
+        else:
+            zeta = self.zeta
         var = std**2 - noise_var**2.0
         mask = (var > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
@@ -1051,19 +1128,21 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         if np.any(~mask):
             values[~mask] = -np.inf
         if eval_gradient:
+            # Use the scalar noise estimate for gradient computation
+            sigma_n_scalar = noise_var
             if np.array(std_grad).ndim > 1:
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
                     grad[mask] = (
-                        np.array(std_grad)[mask] / (std[mask] - sigma_n)
+                        np.array(std_grad)[mask] / (std[mask] - sigma_n_scalar)
                         + 2 * zeta * np.array(mu_grad)[mask]
                     )
                 if np.any(~mask):
                     grad[~mask] = np.ones_like(std_grad[~mask]) * np.inf
             else:
                 std = std[0]
-                if std > sigma_n:
-                    grad = std_grad / (std - sigma_n) + 2 * zeta * mu_grad
+                if std > sigma_n_scalar:
+                    grad = std_grad / (std - sigma_n_scalar) + 2 * zeta * mu_grad
                 else:
                     grad = np.ones_like(std_grad) * np.inf
             return values, grad
@@ -1130,8 +1209,12 @@ class LogExp(BaseLogExp):
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
         """Linearized exponentiated log-error bar."""
+        # Floor epistemic variance to prevent -inf acquisition near training
+        # points, which causes NORA's ranked pool to deplete completely.
+        min_epistemic_std = max(noise_level * 0.01, 1e-6)
         return 2 * zeta * (mu - baseline) + np.log(
-            np.sqrt(np.clip(std**2.0 - noise_level**2.0, 0.0, None))
+            np.sqrt(np.clip(std**2.0 - noise_level**2.0,
+                            min_epistemic_std**2, None))
         )
 
 

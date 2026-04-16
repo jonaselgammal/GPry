@@ -462,6 +462,8 @@ def plot_corner_getdist(
     params=None,
     bounds=None,
     filled=None,
+    contour_colors=None,
+    line_args=None,
     training=None,
     training_highlight_last=False,
     add_logp=False,
@@ -507,6 +509,14 @@ def plot_corner_getdist(
         Dictionary with labels as keys specifying the `filled` property of the contours.
         Contours are filled by default when unspecified (including key missing for a
         passed sample). If it is a list, the same order as in ``mc_samples`` is assumed.
+
+    contour_colors : dict(str, str), list(str), optional
+        Explicit colors for the contour sets. If a dict, uses sample labels as keys. If
+        a list, assumes the same order as in ``mc_samples``.
+
+    line_args : dict(str, dict), list(dict), optional
+        Explicit GetDist line/contour styling per sample. If a dict, uses sample labels
+        as keys. If a list, assumes the same order as in ``mc_samples``.
 
     training : SurrogateModel, dict(str or tuple, SurrogateModel), optional
         If a surrogate model is passed, it plots the training samples (including the
@@ -609,12 +619,28 @@ def plot_corner_getdist(
             name: (filled[i] if i < len(filled) else True)
             for i, name in enumerate(gdsamples_dict)
         }
+    if isinstance(contour_colors, Sequence) and not isinstance(contour_colors, str):
+        contour_colors = {
+            name: (contour_colors[i] if i < len(contour_colors) else None)
+            for i, name in enumerate(gdsamples_dict)
+        }
+    if isinstance(line_args, Sequence) and not isinstance(line_args, Mapping):
+        line_args = {
+            name: (line_args[i] if i < len(line_args) else {})
+            for i, name in enumerate(gdsamples_dict)
+        }
     triang_kwargs = {
         "legend_labels": list(gdsamples_dict),
         "filled": [(filled or {}).get(k, True) for k in gdsamples_dict],
         "param_limits": bounds or {},
         "markers": markers,
     }
+    if contour_colors is not None:
+        triang_kwargs["contour_colors"] = [
+            (contour_colors or {}).get(k) for k in gdsamples_dict
+        ]
+    if line_args is not None:
+        triang_kwargs["line_args"] = [(line_args or {}).get(k, {}) for k in gdsamples_dict]
     try:
         gdplot.triangle_plot(*triang_args, **triang_kwargs)
     except Exception as excpt:

@@ -56,10 +56,27 @@ Installing Nested Samplers
 
 In order to use the highly parallelizable and more exploratory NORA acquisition engine [TODO: add reference], you will need to install one of the following nested samplers:
 
-- `PolyChord <https://github.com/PolyChord/PolyChordLite>`_: it is the preferred option, since in combination with MPI it is very fast. To install it, follow the instructions at `https://github.com/PolyChord/PolyChordLite <https://github.com/PolyChord/PolyChordLite>`_. Try the MPI example mentioned there to make sure it works.
+- `BlackJAX <https://github.com/handley-lab/blackjax>`_: this is the preferred portable backend for the JAX-accelerated NORA path. Install the Handley-lab version that includes nested sampling support. BlackJAX is optional: GPry should still import without it, but ``sampler="blackjax"`` requires both ``jax`` and ``blackjax`` to be importable.
 
-- `UltraNest <https://ultranest.readthedocs.io>`_: it is the default of PolyChord is not present. It is slower but easier to install: simply ``pip install ultranest``. It does take advantage of MPI parallelization.
+- `PolyChord <https://github.com/PolyChord/PolyChordLite>`_: this remains an important reference backend and can be very fast, especially with a clean MPI installation. To install it, follow the instructions at `https://github.com/PolyChord/PolyChordLite <https://github.com/PolyChord/PolyChordLite>`_. Try the MPI example mentioned there to make sure it works.
+
+- `UltraNest <https://ultranest.readthedocs.io>`_: it is slower in the NORA acquisition tests performed so far, but it is easy to install: simply ``pip install ultranest``. It does take advantage of MPI parallelization.
 
 - `nessai <https://nessai.readthedocs.io>`_: [EXPERIMENTAL SUPPORT] this sampler uses ML to increase efficiency in posteriors with non-linear degeneracies, but cannot take advantage of MPI parallelisation. To install it, follow the instructions at `https://nessai.readthedocs.io/en/latest/installation.html <https://nessai.readthedocs.io/en/latest/installation.html>`_.
 
-To check that any of the three have been correctly installed, check that the following command does not throw an error: ``$ python -c "import SAMPLER"``, replacing ``SAMPLER`` with ``pypolychord``, ``ultranest``, ``nessai``.
+To check that any of the samplers have been correctly installed, check that the following command does not throw an error: ``$ python -c "import SAMPLER"``, replacing ``SAMPLER`` with ``blackjax``, ``pypolychord``, ``ultranest`` or ``nessai``.
+
+
+Optional JAX acceleration
+-------------------------
+
+GPry can use JAX to accelerate repeated GP operations and the BlackJAX NORA backend. JAX is optional: if it is not installed, the standard NumPy/scikit-learn path is used.
+
+For local development, install JAX and, if needed, JAXopt/BlackJAX in the same environment as GPry:
+
+.. code:: bash
+
+   $ python -m pip install jax jaxlib jaxopt
+   $ python -m pip install git+https://github.com/handley-lab/blackjax.git
+
+JAX support is most useful once the GP has enough training points for prediction and fitting overhead to matter. Very small problems may not benefit because compilation overhead can dominate.

@@ -147,3 +147,13 @@ tests/files/*
 
 # profiling
 *.prof
+
+# local experiment products
+experiments/
+files/
+doc/gpry_jax_summary.*
+
+# Claude Code session files (local only)
+CLAUDE_PROMPTS.md
+CLAUDE_INSIGHTS.md
+CLAUDE_CHECKPOINT.md

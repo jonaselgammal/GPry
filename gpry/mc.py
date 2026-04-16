@@ -434,6 +434,11 @@ def mc_sample_from_gp_ns(
         else:
             raise excpt
     sampler.set_precision(**(sampler_options or {}))
+    # For BlackJAX: attach JAX accelerator to logp for fully-JAX pipeline
+    if isinstance(sampler, nsint.InterfaceBlackJAX):
+        jax_accel = getattr(surrogate.gpr, '_jax_accel', None)
+        if jax_accel is not None and jax_accel.ready:
+            logp._jax_accel = jax_accel
     if not run:
         return sampler
     # Run sampler

@@ -926,3 +926,168 @@ class CorrectCounter(ConvergenceCriterion):
     def limit(self):
         """Limit for the criterion value (changes along iterations for this criterion)."""
         return self.thres[-1]
+
+
+class RobustConvergence(ConvergenceCriterion):
+    r"""
+    A more robust convergence criterion that prevents premature convergence by
+    combining a minimum evaluation floor with rolling-window prediction accuracy.
+
+    Unlike :class:`CorrectCounter`, which resets on any single misprediction and can
+    converge after as few as 4 consecutive correct predictions, this criterion:
+
+    1. Requires a minimum number of training points before convergence is possible.
+    2. Uses a rolling window of recent predictions and checks the fraction that are
+       correct, making it resistant to single-outlier resets.
+    3. Requires the accuracy to remain above threshold for multiple consecutive
+       batches (sustained convergence).
+
+    The correctness check for individual predictions is the same as CorrectCounter:
+
+    .. math::
+
+        |f(x)-\overline{f}_{\mathrm{GP}}(x)| < (f_{\mathrm{max}} - f(x)) \cdot r + a
+
+    Parameters
+    ----------
+    prior_bounds : list
+        List of prior bounds.
+
+    params : dict
+        Dict with the following keys:
+
+        * ``"min_evals"``: Minimum number of training points before convergence
+          is possible (default ``3 * d + 10``).
+        * ``"window"``: Size of the rolling prediction window (default ``max(8, 2*d)``).
+        * ``"accuracy_threshold"``: Fraction of predictions in the window that must
+          be correct (default ``0.8``).
+        * ``"n_sustained"``: Number of consecutive batches where accuracy must
+          exceed the threshold (default ``3``).
+        * ``"reltol"``: Relative tolerance for prediction correctness
+          (default ``0.01``). Supports ``"l"``/``"s"``/``"r"`` suffixes.
+        * ``"abstol"``: Absolute tolerance for prediction correctness
+          (default ``"0.01s"``). Supports ``"l"``/``"s"``/``"r"`` suffixes.
+        * ``"verbose"``: Verbosity level (default ``0``).
+    """
+
+    def __init__(self, prior_bounds, params):
+        d = len(prior_bounds)
+        self.min_evals = params.get("min_evals", 3 * d + 10)
+        self.window = int(params.get("window", max(8, 2 * d)))
+        self.accuracy_threshold = params.get("accuracy_threshold", 0.8)
+        self.n_sustained = params.get("n_sustained", 3)
+        # Parse reltol/abstol (same logic as CorrectCounter)
+        reltol = params.get("reltol", 0.01)
+        if isinstance(reltol, str):
+            try:
+                assert reltol[-1] in ("l", "s", "r")
+                scale = nstd_of_1d_nstd(1, d)
+                if reltol[-1] == "l":
+                    reltol = float(reltol[:-1]) * scale
+                elif reltol[-1] == "s":
+                    reltol = float(reltol[:-1]) * scale ** 2.0
+                elif reltol[-1] == "r":
+                    reltol = float(reltol[:-1]) * np.sqrt(scale)
+            except Exception as excpt:
+                raise ValueError(
+                    "The 'reltol' parameter can either be a number "
+                    f"or a string with a number followed by 'l', 's', or 'r'. Got {reltol}"
+                ) from excpt
+        self.reltol = reltol
+        abstol = params.get("abstol", "0.01s")
+        if isinstance(abstol, str):
+            try:
+                assert abstol[-1] in ("l", "s", "r")
+                scale = nstd_of_1d_nstd(1, d)
+                if abstol[-1] == "l":
+                    abstol = float(abstol[:-1]) * scale
+                elif abstol[-1] == "s":
+                    abstol = float(abstol[:-1]) * scale ** 2.0
+                elif abstol[-1] == "r":
+                    abstol = float(abstol[:-1]) * np.sqrt(scale)
+            except Exception as excpt:
+                raise ValueError(
+                    "The 'abstol' parameter can either be a number "
+                    f"or a string with a number followed by 'l', 's', or 'r'. Got {abstol}"
+                ) from excpt
+        self.abstol = abstol
+        self.verbose = params.get("verbose", 0)
+        self._set_convergence_policy(params)
+        self.values = []
+        self.n_posterior_evals = []
+        self.n_accepted_evals = []
+        self.thres = []
+        # Rolling window of correctness results (True/False per prediction)
+        self._correctness_history = []
+        # Count of consecutive batches where rolling accuracy >= threshold
+        self._sustained_count = 0
+
+    def is_converged(
+        self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+    ):
+        self.criterion_value(surr, new_X=new_X, new_y=new_y, pred_y=pred_y)
+        # Gate 1: minimum number of training points
+        if surr.n_regress < self.min_evals:
+            if self.verbose > 0:
+                print(
+                    f"RobustConvergence: {surr.n_regress} training points "
+                    f"< min_evals={self.min_evals}, not converged."
+                )
+            self._sustained_count = 0
+            return False
+        # Gate 2: need enough predictions in window
+        if len(self._correctness_history) < self.window:
+            if self.verbose > 0:
+                print(
+                    f"RobustConvergence: {len(self._correctness_history)} predictions "
+                    f"< window={self.window}, not converged."
+                )
+            self._sustained_count = 0
+            return False
+        # Gate 3: rolling accuracy check
+        recent = self._correctness_history[-self.window:]
+        accuracy = sum(recent) / len(recent)
+        if accuracy >= self.accuracy_threshold:
+            self._sustained_count += 1
+            if self.verbose > 0:
+                print(
+                    f"RobustConvergence: accuracy={accuracy:.2f} >= "
+                    f"{self.accuracy_threshold:.2f}, sustained={self._sustained_count}"
+                    f"/{self.n_sustained}"
+                )
+        else:
+            self._sustained_count = 0
+            if self.verbose > 0:
+                print(
+                    f"RobustConvergence: accuracy={accuracy:.2f} < "
+                    f"{self.accuracy_threshold:.2f}, resetting sustained count."
+                )
+        return self._sustained_count >= self.n_sustained
+
+    def criterion_value(self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None):
+        n_new = len(new_y)
+        assert n_new == len(pred_y)
+        max_val = 0
+        max_diff = 0
+        max_thres = 0
+        for yn, yl in zip(new_y, pred_y):
+            if yn == -np.inf:
+                continue
+            diff = np.abs(yl - yn)
+            thres = np.abs(yn - surr.y_max) * self.reltol + self.abstol
+            if diff / thres > max_val:
+                max_val = diff / thres
+                max_diff = diff
+                max_thres = thres
+            is_correct = diff < thres
+            self._correctness_history.append(is_correct)
+        self.values.append(max_diff if n_new > 0 else (self.values[-1] if self.values else 0))
+        self.thres.append(max_thres if n_new > 0 else (self.thres[-1] if self.thres else 0))
+        self.n_posterior_evals.append(surr.n_total)
+        self.n_accepted_evals.append(surr.n_regress)
+        return max_val if n_new > 0 else (self.values[-1] if self.values else 0)
+
+    @property
+    def limit(self):
+        """Limit for the criterion value."""
+        return self.thres[-1] if self.thres else 0

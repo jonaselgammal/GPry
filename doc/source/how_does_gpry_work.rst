@@ -47,6 +47,8 @@ It is implied above that the acquisition step of active learning involves a dire
 
 GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquistion). In it, the optimization of the acquisition function is swapped by a Nested Sampling exploration of the mean of the GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list. For more detail, see :class:`gp_acquisition.NORA`.
 
+In the JAX development path, this nested-sampling step can be performed with BlackJAX using an end-to-end JAX likelihood for the GP surrogate. PolyChord remains a useful reference implementation when available. The acquisition internals operate in transformed parameter space and convert back to the user's original coordinates only at the API and output boundaries.
+
 This approach has a number of advantages:
 
 - NS is extremely efficiently parallelizable, and the raking of the NS sample too (but less efficiently). This greatly helps with the increase in dimensionality.
@@ -59,7 +61,7 @@ This approach to parallelising the acquisition process itself is another of GPry
    :width: 850
    :align: center
 
-This figure demonstrates the NORA acquisition approach with 4 kriging-believer steps. The top row shows from left to right: The true function to be emulated, the current GP mean prediction (not very close to the truth, since this is an early iteration), its standard deviation, and, rightmost, the nested samples (dead points) from PolyChord. The bottom row shows the acquisition function for the unconditioned GP on the left, and for the conditioned GPs in the three right panels (each conditioned to all samples added to its left). Blue circles are current training samples, pink circles are samples that have been accepted into the ranked pool (top), and red circles are each respective optimal sample for the conditioned GP (bottom) selected from among the nested samples. It is visible that even with very coarse sampling the locations of the nested samples still cover the regions of high acquisition function well, and the maxima found are close enough to the true maxima (green) at every step.
+This figure demonstrates the NORA acquisition approach with 4 kriging-believer steps. The top row shows from left to right: The true function to be emulated, the current GP mean prediction (not very close to the truth, since this is an early iteration), its standard deviation, and, rightmost, the nested samples (dead points) from the nested sampler. The bottom row shows the acquisition function for the unconditioned GP on the left, and for the conditioned GPs in the three right panels (each conditioned to all samples added to its left). Blue circles are current training samples, pink circles are samples that have been accepted into the ranked pool (top), and red circles are each respective optimal sample for the conditioned GP (bottom) selected from among the nested samples. It is visible that even with very coarse sampling the locations of the nested samples still cover the regions of high acquisition function well, and the maxima found are close enough to the true maxima (green) at every step.
 
 
 Fitting the surrogate model
@@ -72,6 +74,8 @@ Updating the surrogate model with the new evaluations entails two distinct opera
 - Choosing the optimal hyperparameters for the kernel given the new information.
 
 Both operations entail a matrix inversion that scales as :math:`N^3`, where :math:`N` is the number of training samples. But in the first case, where hyperparameters stay constant, the inversion can be performed in a block-wise way, reducing the scaling down to :math:`N^2`. Because of the large scaling in the case in which kernel hyperparameters are optimised, and also because we do not expect the addition of new training samples to dramatically change the value of the optimal hyperparameters, we do not perform this operation at every iteration (or we may decide doing a mild version of it, such as only optimizing once from the optimum of the last iteration, instead of re-running the optimizer from different points in hyperparameter space).
+
+The current development baseline keeps the GP fit conservative: the fixed noise level defaults to ``0.01`` and kernel length scales are bounded to ``[0.01, 100]`` in transformed parameter space. Hyperparameter optimization also uses cheap data-driven initial guesses in addition to the previous optimum, which has proven important for avoiding bad local optima in the GP marginal likelihood.
 
 .. note::
 

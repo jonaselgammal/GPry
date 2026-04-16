@@ -21,11 +21,20 @@ from warnings import warn
 
 import numpy as np
 from sklearn.svm import SVC  # type: ignore
-from sklearn.utils.validation import check_array  # type: ignore
+from sklearn.utils.validation import check_array as _sk_check_array  # type: ignore
 
 from gpry.tools import check_random_state, get_Xnumber, shrink_bounds, is_in_bounds
 
 k_trust, k_svm = "trust_region", "svm"
+
+
+def check_array(*args, **kwargs):
+    if "ensure_all_finite" in kwargs:
+        try:
+            return _sk_check_array(*args, **kwargs)
+        except TypeError:
+            kwargs["force_all_finite"] = kwargs.pop("ensure_all_finite")
+    return _sk_check_array(*args, **kwargs)
 
 
 class InfinitiesClassifiers:

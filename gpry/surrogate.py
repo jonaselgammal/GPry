@@ -49,13 +49,22 @@ from numbers import Number
 # External
 import numpy as np
 import pandas as pd  # type: ignore
-from sklearn.utils.validation import check_array  # type: ignore
+from sklearn.utils.validation import check_array as _sk_check_array  # type: ignore
 
 # Local
 from gpry.gpr import GaussianProcessRegressor
 from gpry.preprocessing import DummyPreprocessor
 from gpry.tools import delta_logp_of_1d_nstd, generic_params_names
 from gpry.infinities_classifier import InfinitiesClassifiers
+
+
+def check_array(*args, **kwargs):
+    if "ensure_all_finite" in kwargs:
+        try:
+            return _sk_check_array(*args, **kwargs)
+        except TypeError:
+            kwargs["force_all_finite"] = kwargs.pop("ensure_all_finite")
+    return _sk_check_array(*args, **kwargs)
 
 
 class SurrogateModel:
@@ -111,6 +120,11 @@ class SurrogateModel:
         regressor=None,
         infinities_classifier=None,
         clip_factor=1.1,
+        adaptive_noise=None,
+        noise_floor=None,
+        max_training_points=None,
+        fallback=None,
+        turbo=None,
         random_state=None,
         verbose=1,
     ):
@@ -140,6 +154,7 @@ class SurrogateModel:
         # Trackers for last-appended points
         self.n_last_appended = 0
         self.n_last_appended_finite = 0
+        self._i_last_appended_regress = np.empty((0,), dtype=int)
         # Dealing with infinities: upper and lower caps, and classifier(s)
         self.inf_value = np.inf
         self.minus_inf_value = -np.inf
@@ -200,19 +215,302 @@ class SurrogateModel:
         kwargs_regressor = deepcopy(regressor)
         kwargs_regressor["noise_level"] = self._noise_level_
         kwargs_regressor["random_state"] = random_state
-        self.gpr = GaussianProcessRegressor(**kwargs_regressor)
+        backend = kwargs_regressor.pop("backend", "standard")
+        # Non-standard backends handle optimization internally; strip
+        # kwargs that only the standard GPR understands.
+        if backend != "standard":
+            for _std_only_key in ("optimizer", "copy_X_train", "use_jax"):
+                kwargs_regressor.pop(_std_only_key, None)
+        if backend == "standard":
+            self.gpr = GaussianProcessRegressor(**kwargs_regressor)
+        elif backend == "random_features":
+            from gpry.experimental_random_feature_gp import RandomFeatureGP
+            self.gpr = RandomFeatureGP(**kwargs_regressor)
+        elif backend == "gibbs":
+            from gpry.experimental_gibbs_gpr import GibbsGPR
+            self.gpr = GibbsGPR(**kwargs_regressor)
+        elif backend == "learned_features":
+            from gpry.experimental_learned_feature_gp import LearnedFeatureGP
+            self.gpr = LearnedFeatureGP(**kwargs_regressor)
+        else:
+            raise ValueError(
+                f"Unknown GP backend '{backend}'. Supported: "
+                "'standard', 'random_features', 'gibbs', 'learned_features'"
+            )
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
+        # Adaptive noise: scale noise per-sample based on distance from mode
+        self._adaptive_noise = self._parse_adaptive_noise(adaptive_noise)
+        self._base_noise_level = float(self._noise_level)  # original scalar
+        # Noise floor: estimate minimum noise from k-NN local variance
+        self._noise_floor = self._parse_noise_floor(noise_floor)
+        # Max training points: limit GP training set size to avoid O(n³) bottleneck
+        self._max_training_points = max_training_points
+        # Ensemble fallback: train a simpler model alongside the GP for robustness
+        self._fallback = self._parse_fallback(fallback)
+        self._using_fallback = False  # True when GP fit failed and fallback is active
+        # TuRBO: trust region Bayesian optimization
+        self._turbo = self._parse_turbo(turbo)
+        # Store regressor config for backend switching
+        self._regressor_config = deepcopy(regressor)
+        self._backend = backend
+
+    def switch_backend(self, new_backend, **extra_kwargs):
+        """Switch the GP backend (e.g. from 'standard' to 'gibbs').
+
+        Creates a new GPR instance and retrains it on the current training data.
+        The surrogate model state (training points, preprocessors, classifiers) is
+        preserved.
+
+        Parameters
+        ----------
+        new_backend : str
+            One of 'standard', 'random_features', 'gibbs', or
+            'learned_features'. Non-standard backends are experimental and
+            implemented in ``gpry.experimental_*`` modules.
+        **extra_kwargs
+            Additional keyword arguments passed to the new GPR constructor,
+            overriding the stored regressor config.
+        """
+        if new_backend == self._backend:
+            return  # already on this backend
+        # Build constructor kwargs from stored config
+        kwargs = deepcopy(self._regressor_config)
+        kwargs["noise_level"] = self._noise_level_
+        kwargs["random_state"] = None  # will be set from surrogate
+        kwargs.pop("backend", None)
+        kwargs.update(extra_kwargs)
+        if new_backend != "standard":
+            for _std_only_key in ("optimizer", "copy_X_train", "use_jax"):
+                kwargs.pop(_std_only_key, None)
+        if new_backend == "standard":
+            self.gpr = GaussianProcessRegressor(**kwargs)
+        elif new_backend == "random_features":
+            from gpry.experimental_random_feature_gp import RandomFeatureGP
+            self.gpr = RandomFeatureGP(**kwargs)
+        elif new_backend == "gibbs":
+            from gpry.experimental_gibbs_gpr import GibbsGPR
+            self.gpr = GibbsGPR(**kwargs)
+        elif new_backend == "learned_features":
+            from gpry.experimental_learned_feature_gp import LearnedFeatureGP
+            self.gpr = LearnedFeatureGP(**kwargs)
+        else:
+            raise ValueError(
+                f"Unknown GP backend '{new_backend}'. Supported: "
+                "'standard', 'random_features', 'gibbs', 'learned_features'"
+            )
+        old_backend = self._backend
+        self._backend = new_backend
+        # Retrain on existing data
+        if self.n_regress > 0:
+            i_gpr = np.where(self._i_regress)[0]
+            if self._adaptive_noise is not None and not self.gpr.is_noise_in_kernel:
+                noise_level_adaptive = self._compute_adaptive_noise(self._y_)
+                noise_level_passed = noise_level_adaptive[i_gpr]
+            elif self.gpr.is_noise_in_kernel or not np.iterable(self._noise_level_):
+                noise_level_passed = self._noise_level_
+            else:
+                noise_level_passed = self._noise_level_[i_gpr]
+            if self._noise_floor is not None and not self.gpr.is_noise_in_kernel:
+                floor = self._estimate_noise_floor(
+                    self._X_[i_gpr], self._y_[i_gpr], k=self._noise_floor["k"]
+                )
+                if floor > 0:
+                    noise_level_passed = np.maximum(noise_level_passed, floor)
+            self.gpr.fit(
+                X=self._X_[i_gpr],
+                y=self._y_[i_gpr],
+                noise_level=noise_level_passed,
+                fit_hyperparameters=True,
+                validate=False,
+            )
+        return old_backend
+
+    @staticmethod
+    def _parse_adaptive_noise(adaptive_noise):
+        """Parse adaptive_noise configuration.
+
+        Returns None if disabled, or a dict with keys:
+            amplification: max factor by which noise grows away from mode (default: 10)
+            scale: logp units at which noise reaches ~63% of max amplification (default: 5)
+        """
+        if adaptive_noise is None or adaptive_noise is False:
+            return None
+        if adaptive_noise is True:
+            adaptive_noise = {}
+        if not isinstance(adaptive_noise, dict):
+            raise TypeError(
+                "'adaptive_noise' must be None, True/False, or a dict. "
+                f"Got {type(adaptive_noise)}"
+            )
+        return {
+            "amplification": adaptive_noise.get("amplification", 10.0),
+            "scale": adaptive_noise.get("scale", 5.0),
+        }
+
+    @staticmethod
+    def _parse_fallback(fallback):
+        """Parse fallback configuration.
+
+        Returns None if disabled, or an experimental RandomForestFallback instance.
+
+        Parameters
+        ----------
+        fallback : None, bool, dict, or RandomForestFallback instance
+            - None or False: no fallback
+            - True: enable with defaults
+            - dict: enable with custom RandomForestFallback kwargs
+            - RandomForestFallback instance: use directly
+        """
+        if fallback is None or fallback is False:
+            return None
+        from gpry.experimental_fallback import RandomForestFallback
+        if isinstance(fallback, RandomForestFallback):
+            return fallback
+        if fallback is True:
+            fallback = {}
+        if not isinstance(fallback, dict):
+            raise TypeError(
+                "'fallback' must be None, True/False, a dict, or a "
+                f"RandomForestFallback instance. Got {type(fallback)}"
+            )
+        return RandomForestFallback(**fallback)
+
+    @staticmethod
+    def _parse_noise_floor(noise_floor):
+        """Parse noise_floor configuration.
+
+        Returns None if disabled, or a dict with configuration.
+
+        Parameters
+        ----------
+        noise_floor : None, bool, dict
+            - None or False: no noise floor estimation
+            - True: enable with defaults (k=5 nearest neighbors)
+            - dict: with optional 'k' key (number of neighbors)
+        """
+        if noise_floor is None or noise_floor is False:
+            return None
+        if noise_floor is True:
+            noise_floor = {}
+        if not isinstance(noise_floor, dict):
+            raise TypeError(
+                f"'noise_floor' must be None, True/False, or a dict. "
+                f"Got {type(noise_floor)}"
+            )
+        return {"k": noise_floor.get("k", 5)}
+
+    def _parse_turbo(self, turbo):
+        """Parse turbo (TuRBO trust region) configuration.
+
+        Returns None if disabled, or an experimental TuRBOManager instance.
+
+        Parameters
+        ----------
+        turbo : None, bool, dict, or TuRBOManager instance
+            - None or False: no TuRBO
+            - True: enable with defaults
+            - dict: enable with custom TuRBOManager kwargs
+              (L_init, n_regions, n_success, n_failure)
+            - TuRBOManager instance: use directly
+        """
+        if turbo is None or turbo is False:
+            return None
+        from gpry.experimental_turbo import TuRBOManager
+        if isinstance(turbo, TuRBOManager):
+            return turbo
+        if turbo is True:
+            turbo = {}
+        if not isinstance(turbo, dict):
+            raise TypeError(
+                "'turbo' must be None, True/False, a dict, or a "
+                f"TuRBOManager instance. Got {type(turbo)}"
+            )
+        return TuRBOManager(bounds=self._bounds, **turbo)
+
+    @staticmethod
+    def _estimate_noise_floor(X, y, k=5):
+        """Estimate minimum noise level from k-nearest-neighbor variance.
+
+        For each training point, computes the variance of y among its k nearest
+        neighbors. The median of these local variances provides a robust
+        estimate of the noise floor.
+
+        Parameters
+        ----------
+        X : array, shape (n_samples, n_features)
+        y : array, shape (n_samples,)
+        k : int, default=5
+
+        Returns
+        -------
+        noise_floor : float
+            Estimated noise standard deviation.
+        """
+        from sklearn.neighbors import NearestNeighbors
+        n = len(y)
+        if n <= k:
+            return 0.0
+        finite = np.isfinite(y)
+        X_f, y_f = X[finite], y[finite]
+        if len(y_f) <= k:
+            return 0.0
+        nn = NearestNeighbors(n_neighbors=min(k + 1, len(y_f)))
+        nn.fit(X_f)
+        _, indices = nn.kneighbors(X_f)
+        # Local variance for each point (exclude self, which is index 0)
+        local_vars = np.array([np.var(y_f[idx[1:]]) for idx in indices])
+        # Median is robust to outliers
+        return float(np.sqrt(np.median(local_vars)))
+
+    def _compute_adaptive_noise(self, y):
+        """Compute per-sample noise levels based on distance from mode.
+
+        Points near the mode get the base noise level; points far from it get
+        up to ``base_noise * (1 + amplification)``.
+
+        Parameters
+        ----------
+        y : array, shape (n_samples,)
+            Log-likelihood values (in transformed space).
+
+        Returns
+        -------
+        noise : array, shape (n_samples,)
+            Per-sample noise levels (in transformed space).
+        """
+        if self._adaptive_noise is None:
+            return self._noise_level_
+        amp = self._adaptive_noise["amplification"]
+        scale = self._adaptive_noise["scale"]
+        # Always use the original scalar base noise, transformed to y-space
+        base = self.preprocessing_y.transform_scale(self._base_noise_level)
+        y_finite = y[np.isfinite(y)]
+        if len(y_finite) == 0:
+            return np.full(len(y), base)
+        y_max = np.max(y_finite)
+        # Distance from mode (always >= 0)
+        delta = np.where(np.isfinite(y), y_max - y, y_max - np.min(y_finite))
+        # Noise increases exponentially with distance, saturating at amplification
+        noise = base * (1.0 + amp * (1.0 - np.exp(-delta / max(scale, 1e-10))))
+        return noise
 
     def __str__(self):
+        kernel = self.gpr.kernel
+        if kernel is not None and hasattr(kernel, 'hyperparameters'):
+            kernel_str = (
+                f"   {str(kernel)}\n"
+                + "  with hyperparameters (in transformed scale):\n"
+                + "    -"
+                + "\n    -".join(str(h) for h in kernel.hyperparameters)
+            )
+        else:
+            kernel_str = f"   {str(kernel)}"
         return (
             f"* X-preprocessor: {self.preprocessing_X.__class__.__name__}\n"
             + f"* y-preprocessor: {self.preprocessing_y.__class__.__name__}\n"
             + "* GPR kernel:\n"
-            + f"   {str(self.gpr.kernel)}\n"
-            + "  with hyperparameters (in transformed scale):\n"
-            + "    -"
-            + "\n    -".join(str(h) for h in self.gpr.kernel.hyperparameters)
+            + kernel_str
             + "\n"
             + (
                 f"* Noise level: {self._noise_level}\n"
@@ -237,14 +535,25 @@ class SurrogateModel:
         """
         The bounds of a smaller trust region where the log-posterior is expected to be
         finite, possibly defined by a classifier (in particular if
-        :class:`infinities_classifier.TrustRegion` is being used).
+        :class:`infinities_classifier.TrustRegion` is being used) and/or by TuRBO.
+
+        When both a classifier trust region and TuRBO are active, returns the
+        intersection (tightest bounds).
+
         Otherwise returns a copy of the original prior bounds.
         """
         if self.infinities_classifier is not None:
-            return self.preprocessing_X.inverse_transform_bounds(
+            bounds = self.preprocessing_X.inverse_transform_bounds(
                 self.infinities_classifier.trust_bounds
             )
-        return np.copy(self._bounds)
+        else:
+            bounds = np.copy(self._bounds)
+        if self._turbo is not None:
+            turbo_bounds = self._turbo.get_trust_bounds()
+            # Intersect: take the tighter of the two
+            bounds[:, 0] = np.maximum(bounds[:, 0], turbo_bounds[:, 0])
+            bounds[:, 1] = np.minimum(bounds[:, 1], turbo_bounds[:, 1])
+        return bounds
 
     @property
     def fitted(self):
@@ -343,7 +652,7 @@ class SurrogateModel:
         Coordinates of the training points added to the GP Regressor in the last call
         to :meth:`Surrogate.append` (returns a copy).
         """
-        return np.copy(self._X[self._i_regress][-self.n_last_appended_finite :])
+        return np.copy(self._X[self._i_last_appended_regress])
 
     @property
     def y_last_appended_regress(self):
@@ -351,7 +660,26 @@ class SurrogateModel:
         Log-posterior of the training points added to the GP Regressor in the last call
         to :meth:`Surrogate.append` (returns a copy).
         """
-        return np.copy(self._y[self._i_regress][-self.n_last_appended_finite :])
+        return np.copy(self._y[self._i_last_appended_regress])
+
+    def _indices_added_to_gpr_on_last_append(self, i_gpr):
+        """
+        Return newly appended indices that are included in the actual GP fit.
+
+        Classifier output is not guaranteed to be sorted by training-set index. For
+        example, threshold-based classifiers often return finite points in y-sorted
+        order. Therefore this must be a set-membership check, not a ``searchsorted``
+        computation. Using ``searchsorted`` here can incorrectly report zero newly
+        finite points and skip the GP refit, leaving the surrogate stale.
+        """
+        if self.n_last_appended == 0:
+            return np.empty((0,), dtype=int)
+        first_new = self.n_total - self.n_last_appended
+        new_indices = np.arange(first_new, self.n_total, dtype=int)
+        if len(new_indices) == 0:
+            return new_indices
+        in_gpr = np.isin(new_indices, np.asarray(i_gpr, dtype=int), assume_unique=False)
+        return new_indices[in_gpr]
 
     @property
     def _i_finite_y(self):
@@ -756,6 +1084,14 @@ class SurrogateModel:
                 self.infinities_classifier.update_threshold_definition(nstd_calculator)
         self._X_ = self.preprocessing_X.transform(self._X)
         self._y_ = self.preprocessing_y.transform(self._y)
+        # Recompute sorted indices after transformation (needed for non-linear y-preprocessors)
+        if not getattr(self.preprocessing_y, 'is_linear', True):
+            self._i_y_sorted = np.argsort(self._y_)
+            # Recompute _i_regress with transformed values for consistency
+            if self.infinities_classifier is not None:
+                self._i_regress = self.infinities_classifier._i_finite_y_prefit(
+                    self._y_, i_sorted=self._i_y_sorted, validate=False
+                )
         # The transformed noise level is always an array if noise is not in the kernel
         noise_level_upd = self._noise_level
         self._noise_level_ = self.preprocessing_y.transform_scale(self._noise_level)
@@ -775,30 +1111,74 @@ class SurrogateModel:
                 i_finite_predict = self.infinities_classifier.i_finite_y(
                     self._y_, i_sorted=self._i_y_sorted, validate=False
                 )
-            assert set(self._i_regress) == set(i_finite_predict), (
-                "Infinities classifier miss-classified at least 1 point."
-            )
-        # Get number of newly added finite points -- not trivial
-        self.n_last_appended_finite = len(self._i_regress) - np.searchsorted(
-            i_finite_predict, self.n_total - self.n_last_appended
-        )
+            # For non-linear y-preprocessors, the pre-fit classification may differ
+            # from the post-fit one because the transform changed. Use the post-fit
+            # classification in that case.
+            if not getattr(self.preprocessing_y, 'is_linear', True):
+                self._i_regress = i_finite_predict
+            else:
+                assert set(self._i_regress) == set(i_finite_predict), (
+                    "Infinities classifier miss-classified at least 1 point."
+                )
         # 3. Re-fit the GPR in the transformed space, and maybe hyperparameters
         # If all added values are infinite there's no need to refit the GPR,
         # unless an explicit call for that with X, y = None was made
-        noise_level_passed = (
-            self._noise_level_
-            if (self.gpr.is_noise_in_kernel or not np.iterable(self._noise_level_))
-            else self._noise_level_[self._i_regress]
-        )
-        if self.n_last_appended_finite != 0 or force_fit_gpr:
-            self.gpr.fit(
-                X=self._X_[self._i_regress],
-                y=self._y_[self._i_regress],
-                noise_level=noise_level_passed,
-                fit_hyperparameters=fit_gpr,
-                validate=False,
+        # Determine which finite points to use for GP training
+        i_gpr = self._i_regress
+        # Apply max_training_points limit: keep highest-y points for GP accuracy
+        if (self._max_training_points is not None
+                and len(i_gpr) > self._max_training_points):
+            # Select the top-m points by transformed y value (highest = near mode)
+            y_at_regress = self._y_[i_gpr]
+            top_m = np.argsort(y_at_regress)[-self._max_training_points:]
+            i_gpr = i_gpr[np.sort(top_m)]  # maintain original ordering
+        self._i_last_appended_regress = self._indices_added_to_gpr_on_last_append(i_gpr)
+        self.n_last_appended_finite = len(self._i_last_appended_regress)
+        # Apply adaptive noise if configured (per-sample noise based on y distance)
+        if self._adaptive_noise is not None and not self.gpr.is_noise_in_kernel:
+            noise_level_adaptive = self._compute_adaptive_noise(self._y_)
+            noise_level_passed = noise_level_adaptive[i_gpr]
+        elif self.gpr.is_noise_in_kernel or not np.iterable(self._noise_level_):
+            noise_level_passed = self._noise_level_
+        else:
+            noise_level_passed = self._noise_level_[i_gpr]
+        # Apply noise floor: estimate minimum noise from k-NN local variance
+        # Computed in transformed space (where the GP trains)
+        if self._noise_floor is not None and not self.gpr.is_noise_in_kernel:
+            floor = self._estimate_noise_floor(
+                self._X_[i_gpr], self._y_[i_gpr], k=self._noise_floor["k"]
             )
+            if floor > 0:
+                noise_level_passed = np.maximum(noise_level_passed, floor)
+        if self.n_last_appended_finite != 0 or force_fit_gpr:
+            gpr_failed = False
+            try:
+                self.gpr.fit(
+                    X=self._X_[i_gpr],
+                    y=self._y_[i_gpr],
+                    noise_level=noise_level_passed,
+                    fit_hyperparameters=fit_gpr,
+                    validate=False,
+                )
+            except Exception as e:
+                if self._fallback is not None:
+                    gpr_failed = True
+                    warnings.warn(
+                        f"GP fit failed ({type(e).__name__}: {e}). "
+                        "Falling back to RandomForest."
+                    )
+                else:
+                    raise
+            # Train fallback alongside GP (or as replacement if GP failed)
+            if self._fallback is not None:
+                self._fallback.fit(self._X_[i_gpr], self._y_[i_gpr])
+                self._using_fallback = gpr_failed
         self._fitted = True
+        # Update TuRBO trust regions if active
+        if self._turbo is not None and self.n_last_appended > 0:
+            new_X = self._X[-self.n_last_appended:]
+            new_y = self._y[-self.n_last_appended:]
+            self._turbo.update(new_X, new_y, all_X=self._X, all_y=self._y)
         return self
 
     def predict(
@@ -876,6 +1256,28 @@ class SurrogateModel:
             )
         if X.shape[0] != 1 and (return_mean_grad or return_std_grad):
             raise ValueError("Mean grad and std grad not implemented for n_samples > 1")
+        # JAX fast path: skip classifier, dict wrapping, and np.copy when
+        # the GP has a ready JAX accelerator and no gradients are requested.
+        # The classifier is skipped because the acquisition optimizer already
+        # respects bounds, and classifier overhead is significant.
+        jax_accel = getattr(self.gpr, '_jax_accel', None)
+        if (not validate
+                and not return_mean_grad and not return_std_grad
+                and not (self._using_fallback and self._fallback is not None)
+                and self.clipper.trivial
+                and jax_accel is not None and jax_accel.ready):
+            X_ = self.preprocessing_X.transform(X)
+            if return_std:
+                y_mean_j, y_std_j = jax_accel.predict_mean_std_jax(X_)
+                y_mean = self.preprocessing_y.inverse_transform(
+                    np.asarray(y_mean_j))
+                y_std = self.preprocessing_y.inverse_transform_scale(
+                    np.asarray(y_std_j))
+                return [y_mean, y_std]
+            else:
+                y_mean_j = jax_accel.predict_mean_jax(X_)
+                return self.preprocessing_y.inverse_transform(
+                    np.asarray(y_mean_j))
         if validate:
             if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
                 X = check_array(X, ensure_2d=True, dtype="numeric")
@@ -904,14 +1306,24 @@ class SurrogateModel:
             if len(return_dict) == 1:
                 return return_dict["mean"]
             return list(return_dict.values())
-        # else: at least some finite points --> GPR predict for them only
-        return_gpr_ = self.gpr.predict(
-            X_[finite],
-            return_std=return_std,
-            return_mean_grad=return_mean_grad,
-            return_std_grad=return_std_grad,
-            validate=validate,
-        )
+        # else: at least some finite points --> regressor predict for them only
+        # Use fallback if GP fit failed and fallback is available
+        if self._using_fallback and self._fallback is not None:
+            return_gpr_ = self._fallback.predict(
+                X_[finite],
+                return_std=return_std,
+                return_mean_grad=return_mean_grad,
+                return_std_grad=return_std_grad,
+                validate=validate,
+            )
+        else:
+            return_gpr_ = self.gpr.predict(
+                X_[finite],
+                return_std=return_std,
+                return_mean_grad=return_mean_grad,
+                return_std_grad=return_std_grad,
+                validate=validate,
+            )
         return_gpr_ = self._regressor_output_to_dict(
             return_gpr_, return_std, return_mean_grad, return_std_grad
         )
@@ -927,8 +1339,102 @@ class SurrogateModel:
                     return_dict["std_grad"][finite]
                 )
             )
+        # Chain rule correction for nonlinear X-preprocessors (e.g. InputWarping).
+        # GPR gradients are w.r.t. warped x; we need gradients w.r.t. original x.
+        # d(f)/d(x_orig) = d(f)/d(x_warped) * d(x_warped)/d(x_orig)
+        if (return_mean_grad or return_std_grad) and hasattr(
+            self.preprocessing_X, 'has_nonlinear'
+        ) and self.preprocessing_X.has_nonlinear:
+            # Jacobian at the pre-warped (NormalizeBounds-transformed) query points
+            jac = self.preprocessing_X.jacobian_diagonal(X[finite])
+            if "mean_grad" in return_dict:
+                return_dict["mean_grad"][finite] *= jac
+            if "std_grad" in return_dict:
+                return_dict["std_grad"][finite] *= jac
         # Upper clipping to avoid overshoots
         # The 'trivial' check avoids wasting computation in finding the y extremes
+        if not self.clipper.trivial:
+            return_dict["mean"] = self.clipper(
+                return_dict["mean"],
+                self._y[self._i_regress].min(),
+                self._y[self._i_regress].max(),
+            )
+        if len(return_dict) == 1:
+            return return_dict["mean"]
+        return list(return_dict.values())
+
+    def predict_transformed(
+        self,
+        X_,
+        return_std=False,
+        return_mean_grad=False,
+        return_std_grad=False,
+        validate=True,
+        ignore_classifier=None,
+    ):
+        """
+        Predict output for inputs that are already in the surrogate's transformed X-space.
+        """
+        X_ = np.atleast_2d(X_)
+        self.n_eval += len(X_)
+        if return_std_grad and not (return_std and return_mean_grad):
+            raise ValueError(
+                "Not returning std_gradient without returning "
+                "the std and the mean grad."
+            )
+        if X_.shape[0] != 1 and (return_mean_grad or return_std_grad):
+            raise ValueError("Mean grad and std grad not implemented for n_samples > 1")
+        if validate:
+            if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
+                X_ = check_array(X_, ensure_2d=True, dtype="numeric")
+            else:
+                X_ = check_array(X_, ensure_2d=False, dtype=None)
+        else:
+            X_ = np.asarray(X_)
+        return_dict = {"mean": np.full(X_.shape[0], self.minus_inf_value)}
+        if return_std:
+            return_dict["std"] = np.zeros(X_.shape[0])
+        if return_mean_grad:
+            return_dict["mean_grad"] = np.full((X_.shape[0], self.d), self.inf_value)
+        if return_std_grad:
+            return_dict["std_grad"] = np.zeros((X_.shape[0], self.d))
+        finite = self.infinities_classifier.is_finite_X(
+            X_, ignore=ignore_classifier, validate=validate
+        )
+        if np.all(~finite):
+            if len(return_dict) == 1:
+                return return_dict["mean"]
+            return list(return_dict.values())
+        if self._using_fallback and self._fallback is not None:
+            return_gpr_ = self._fallback.predict(
+                X_[finite],
+                return_std=return_std,
+                return_mean_grad=return_mean_grad,
+                return_std_grad=return_std_grad,
+                validate=validate,
+            )
+        else:
+            return_gpr_ = self.gpr.predict(
+                X_[finite],
+                return_std=return_std,
+                return_mean_grad=return_mean_grad,
+                return_std_grad=return_std_grad,
+                validate=validate,
+            )
+        return_gpr_ = self._regressor_output_to_dict(
+            return_gpr_, return_std, return_mean_grad, return_std_grad
+        )
+        for k, v in return_gpr_.items():
+            if k == "mean":
+                return_dict[k][finite] = self.preprocessing_y.inverse_transform(v)
+            else:
+                return_dict[k][finite] = self.preprocessing_y.inverse_transform_scale(v)
+        if "std_grad" in return_dict:
+            return_dict["std_grad"][finite] = (
+                self.preprocessing_y.inverse_transform_scale(
+                    return_dict["std_grad"][finite]
+                )
+            )
         if not self.clipper.trivial:
             return_dict["mean"] = self.clipper(
                 return_dict["mean"],
@@ -1043,8 +1549,37 @@ class SurrogateModel:
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
             return std
-        # else: at least some finite points --> GPR predict for them only
-        std_ = self.gpr.predict_std(X_[finite], validate=validate)
+        # else: at least some finite points --> regressor predict for them only
+        if self._using_fallback and self._fallback is not None:
+            std_ = self._fallback.predict_std(X_[finite], validate=validate)
+        else:
+            std_ = self.gpr.predict_std(X_[finite], validate=validate)
+        std[finite] = self.preprocessing_y.inverse_transform_scale(std_)
+        return std
+
+    def predict_std_transformed(self, X_, ignore_classifier=None, validate=True):
+        """
+        Predict output standard deviation for inputs already in transformed X-space.
+        """
+        X_ = np.atleast_2d(X_)
+        self.n_eval += len(X_)
+        if validate:
+            if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
+                X_ = check_array(X_, ensure_2d=True, dtype="numeric")
+            else:
+                X_ = check_array(X_, ensure_2d=False, dtype=None)
+        else:
+            X_ = np.asarray(X_)
+        std = np.zeros(X_.shape[0])
+        finite = self.infinities_classifier.is_finite_X(
+            X_, ignore=ignore_classifier, validate=validate
+        )
+        if np.all(~finite):
+            return std
+        if self._using_fallback and self._fallback is not None:
+            std_ = self._fallback.predict_std(X_[finite], validate=validate)
+        else:
+            std_ = self.gpr.predict_std(X_[finite], validate=validate)
         std[finite] = self.preprocessing_y.inverse_transform_scale(std_)
         return std
 

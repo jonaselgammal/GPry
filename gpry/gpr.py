@@ -11,16 +11,20 @@ and thus simply added to the kernel matrix diagonal.
 
 # Builtin
 import warnings
-from operator import itemgetter
 from typing import Mapping
 
 # External
 import numpy as np
 from scipy.linalg import cholesky, solve_triangular, cho_solve  # type: ignore
 from scipy.linalg.blas import dtrmm as tri_mul  # type: ignore
+from scipy.stats import qmc  # type: ignore
 from sklearn.base import clone  # type: ignore
 from sklearn.gaussian_process import GaussianProcessRegressor as sk_GPR  # type: ignore
-from sklearn.utils.validation import validate_data  # type: ignore
+try:
+    from sklearn.utils.validation import validate_data  # type: ignore
+except ImportError:
+    def validate_data(estimator, *args, **kwargs):  # type: ignore
+        return estimator._validate_data(*args, **kwargs)
 
 # Local
 from gpry.kernels import RBF, Matern, WhiteKernel, ConstantKernel as C
@@ -28,6 +32,13 @@ from gpry.tools import check_random_state
 
 GPR_CHOLESKY_LOWER = True
 EPS_SQ_NOISE = 1e-6  # diagonal term to be added when WhiteKernel used as noise
+
+# Try to import JAX accelerator
+try:
+    from gpry.jax_accel import JaxGPAccelerator
+    _JAX_AVAILABLE = True
+except ImportError:
+    _JAX_AVAILABLE = False
 
 
 class GaussianProcessRegressor(sk_GPR):
@@ -155,17 +166,23 @@ class GaussianProcessRegressor(sk_GPR):
         self,
         kernel="RBF",
         output_scale_prior=[1e-2, 1e3],
-        length_scale_prior=[1e-3, 1e1],
+        length_scale_prior=[1e-2, 1e2],
         noise_level=1e-2,
         noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
         random_state=None,
+        use_jax=True,
     ):
         self.n_eval = 0
         self.n_eval_loglike = 0
         self._fitted = False
         self.kernel_ = None
+        self.last_hyperopt_num_starts = None
+        self.last_hyperopt_requested_restarts = None
+        # JAX acceleration for predict operations
+        self.use_jax = use_jax and _JAX_AVAILABLE
+        self._jax_accel = JaxGPAccelerator() if self.use_jax else None
         # Auto-construct inbuilt kernels
         if isinstance(kernel, str):
             kernel = {kernel: {}}
@@ -195,6 +212,8 @@ class GaussianProcessRegressor(sk_GPR):
                     "If noise is passed per training point, it needs to be fixed. i.e. "
                     "`noise_fixed=True`."
                 )
+            kernel_args = dict(kernel_args)
+            kernel_args.setdefault("length_scale_bounds", length_scale_prior)
             kernel = C(
                 output_scale_init**2,
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
@@ -306,7 +325,8 @@ class GaussianProcessRegressor(sk_GPR):
             GaussianProcessRegressor class instance.
         """
         if validate:
-            if self.kernel_.requires_vector_input:
+            kernel_for_validation = self.kernel_ if self.kernel_ is not None else self.kernel
+            if kernel_for_validation is None or kernel_for_validation.requires_vector_input:
                 dtype, ensure_2d = "numeric", True
             else:
                 dtype, ensure_2d = None, False
@@ -350,7 +370,7 @@ class GaussianProcessRegressor(sk_GPR):
                 self.alpha = EPS_SQ_NOISE
             else:
                 # The following line causes sometimes noise larger than the one passed.
-                self.alpha = max(np.array(noise_level) ** 2, EPS_SQ_NOISE)
+                self.alpha = np.maximum(np.array(noise_level) ** 2, EPS_SQ_NOISE)
         if fit_hyperparameters is not False:
             if self.is_noise_in_kernel:
                 # Used passed noise as an upper bound
@@ -369,6 +389,21 @@ class GaussianProcessRegressor(sk_GPR):
                     "'fit_hyperparameters' kwarg must be bool|dict, but was "
                     f"{fit_hyperparameters}"
                 )
+            # Update JAX cached training data BEFORE hyperparameter optimization,
+            # so the JAX LML uses the current data (not stale data from previous fit)
+            if self._jax_accel is not None and self._jax_accel.ready:
+                import jax.numpy as jnp
+                self._jax_accel._X_train = jnp.array(
+                    self.X_train_, dtype=jnp.float64)
+                self._jax_accel._y_train = jnp.array(
+                    self.y_train_, dtype=jnp.float64)
+                alpha_val = float(np.atleast_1d(self.alpha).item()) \
+                    if np.ndim(self.alpha) == 0 else self.alpha
+                if isinstance(alpha_val, float):
+                    self._jax_accel._alpha_noise = alpha_val
+                else:
+                    self._jax_accel._alpha_noise = jnp.array(
+                        alpha_val, dtype=jnp.float64)
             self.log_marginal_likelihood_value_ = self._fit_hyperparameters(
                 **fit_hyperparameters
             )
@@ -380,41 +415,102 @@ class GaussianProcessRegressor(sk_GPR):
         # of actual query points
         # Alg. 2.1, page 19, line 2 -> L = cholesky(K + sigma^2 I)
         # NB: if we got here before returning, we *need* to do this.
-        K = self.kernel_(self.X_train_)
-        K[np.diag_indices_from(K)] += self.alpha
-        try:
-            self.L_ = cholesky(K, lower=GPR_CHOLESKY_LOWER, check_finite=False)
-            self.V_ = solve_triangular(self.L_, np.eye(self.L_.shape[0]), lower=True)
-        except np.linalg.LinAlgError as exc:
-            exc.args = (
-                (
-                    f"The kernel, {self.kernel_}, is not returning a positive "
-                    "definite matrix. Try gradually increasing the 'alpha' "
-                    "parameter of your GaussianProcessRegressor estimator."
-                ),
-            ) + exc.args
-            raise
-        # Alg 2.1, page 19, line 3 -> alpha = L^T \ (L \ y)
-        self.alpha_ = cho_solve(
-            (self.L_, GPR_CHOLESKY_LOWER),
-            self.y_train_,
-            check_finite=False,
-        )
+        jax_fit_ok = False
+        if self._jax_accel is not None and self._jax_accel.ready:
+            # Pure JAX path: compute L, V, alpha_ via JIT-compiled Cholesky
+            try:
+                # Extract current kernel parameters and update accelerator
+                kernel = self.kernel_
+                wn = 0.0
+                if hasattr(kernel, 'k1') and hasattr(kernel.k1, 'k1'):
+                    product_kernel = kernel.k1
+                    if hasattr(kernel.k2, 'noise_level'):
+                        wn = float(kernel.k2.noise_level)
+                else:
+                    product_kernel = kernel
+                osc = product_kernel.k1.constant_value
+                ls = np.atleast_1d(product_kernel.k2.length_scale)
+                alpha_val = (float(np.atleast_1d(self.alpha).item())
+                             if np.ndim(self.alpha) == 0 else self.alpha)
+                self._jax_accel.update_params(
+                    ls, osc, wn, alpha_val,
+                    X_train=self.X_train_, y_train=self.y_train_)
+                L_jax, V_jax, alpha_jax = self._jax_accel.fit_precompute()
+                # Store numpy copies for backward compatibility
+                self.L_ = np.asarray(L_jax)
+                self.V_ = np.asarray(V_jax)
+                self.alpha_ = np.asarray(alpha_jax)
+                self._jax_accel._ready = True
+                jax_fit_ok = True
+            except Exception:
+                pass  # Fall back to numpy Cholesky below
+        if not jax_fit_ok:
+            K = self.kernel_(self.X_train_)
+            K[np.diag_indices_from(K)] += self.alpha
+            try:
+                self.L_ = cholesky(K, lower=GPR_CHOLESKY_LOWER,
+                                   check_finite=False)
+                self.V_ = solve_triangular(
+                    self.L_, np.eye(self.L_.shape[0]), lower=True)
+            except np.linalg.LinAlgError as exc:
+                exc.args = (
+                    (
+                        f"The kernel, {self.kernel_}, is not returning a "
+                        "positive definite matrix. Try gradually increasing "
+                        "the 'alpha' parameter of your "
+                        "GaussianProcessRegressor estimator."
+                    ),
+                ) + exc.args
+                raise
+            # Alg 2.1, page 19, line 3 -> alpha = L^T \ (L \ y)
+            self.alpha_ = cho_solve(
+                (self.L_, GPR_CHOLESKY_LOWER),
+                self.y_train_,
+                check_finite=False,
+            )
+            # Update JAX accelerator with new fit state
+            if self._jax_accel is not None:
+                try:
+                    self._jax_accel.update_from_gpr(self)
+                except Exception:
+                    pass  # Silently fall back to numpy if JAX update fails
         return self
 
     # Wrapper around log_marginal_likelihood to count the number of evaluations
-    def log_marginal_likelihood(self, *args, **kwargs):
+    def log_marginal_likelihood(
+        self, theta=None, eval_gradient=False, clone_kernel=True
+    ):
         """
         Log-marginal likelihood of the kernel hyperparameters given the training data.
+
+        Uses JAX automatic differentiation for gradient computation when available,
+        falling back to sklearn's analytical gradients otherwise.
         """
         self.n_eval_loglike += 1
-        return super().log_marginal_likelihood(*args, **kwargs)
+        # JAX fast path for gradient computation
+        if (eval_gradient
+                and theta is not None
+                and self._jax_accel is not None
+                and self._jax_accel.ready
+                and hasattr(self, "X_train_")):
+            try:
+                # Set theta on kernel so it's consistent
+                if not clone_kernel:
+                    self.kernel_.theta = theta
+                lml, grad = self._jax_accel.log_marginal_likelihood_with_grad(
+                    theta)
+                return lml, grad
+            except Exception:
+                pass  # Fall back to sklearn
+        return super().log_marginal_likelihood(
+            theta, eval_gradient=eval_gradient, clone_kernel=clone_kernel)
 
     def _fit_hyperparameters(
         self,
         start_from_current=True,
         n_restarts=None,
         hyperparameter_bounds=None,
+        **kwargs,
     ):
         r"""Optimizes the hyperparameters :math:`\theta` for the current training data.
         The algorithm used to perform the optimization is very similar to the one provided
@@ -445,6 +541,7 @@ class GaussianProcessRegressor(sk_GPR):
             start_from_current = False
         if n_restarts is None:
             n_restarts = self.n_restarts_optimizer
+        self.last_hyperopt_requested_restarts = int(n_restarts)
         no_optimizer = self.optimizer is None
         no_hyperparams = self.kernel.n_dims == 0
         no_restarts = n_restarts <= 0
@@ -494,23 +591,233 @@ class GaussianProcessRegressor(sk_GPR):
                     "all bounds are finite. You can pass some finite bounds manually "
                     "using ``hyperparameter_bounds``."
                 )
-        optima = []
         self._rng = check_random_state(self.random_state)
-        for iteration in range(n_restarts):
-            if iteration == 0 and start_from_current:
-                # self.kernel_ guaranteed to exist because self.fitted checked above
-                theta_initial = self.kernel_.theta
+
+        def _kernel_structure():
+            kernel_ref = self.kernel_ if self.kernel_ is not None else self.kernel
+            noise_kernel = None
+            product_kernel = kernel_ref
+            if hasattr(kernel_ref, "k1") and hasattr(kernel_ref, "k2"):
+                if hasattr(kernel_ref.k2, "noise_level"):
+                    noise_kernel = kernel_ref.k2
+                    product_kernel = kernel_ref.k1
+            if not (hasattr(product_kernel, "k1") and hasattr(product_kernel, "k2")):
+                return None, None, noise_kernel
+            return product_kernel.k1, product_kernel.k2, noise_kernel
+
+        def _top_training_subset():
+            if not hasattr(self, "X_train_") or self.X_train_ is None:
+                return None, None
+            n_train = len(self.X_train_)
+            d_train = self.X_train_.shape[1]
+            if n_train < max(6, d_train + 1):
+                return None, None
+            y_train = np.asarray(self.y_train_).reshape(-1)
+            n_keep = min(
+                n_train,
+                max(3 * d_train, 12),
+                max(6, int(np.ceil(0.35 * n_train))),
+            )
+            idx = np.argsort(y_train)[-n_keep:]
+            return np.asarray(self.X_train_[idx], dtype=float), y_train[idx]
+
+        def _build_theta_guess(length_scales=None, output_scale=None):
+            constant_kernel, length_kernel, _ = _kernel_structure()
+            if constant_kernel is None or length_kernel is None:
+                return None
+            theta_actual = []
+            actual_bounds = []
+            if output_scale is None:
+                output_scale_sq = float(constant_kernel.constant_value)
             else:
-                # Additional runs are performed from log-uniform chosen initial theta
-                k = 1
-                while k < 1e6:  # if not, just give up silently
-                    k += 1
-                    theta_initial = self._rng.uniform(
-                        hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+                output_scale_sq = float(output_scale) ** 2
+            output_bounds = np.exp(np.asarray(constant_kernel.bounds, dtype=float))
+            output_scale_sq = float(np.clip(output_scale_sq, output_bounds[0, 0], output_bounds[0, 1]))
+            theta_actual.append(output_scale_sq)
+            actual_bounds.append(output_bounds[0])
+
+            ls_bounds = np.exp(np.asarray(length_kernel.bounds, dtype=float))
+            ls_current = np.atleast_1d(length_kernel.length_scale).astype(float)
+            if length_scales is None:
+                ls_guess = ls_current
+            else:
+                ls_guess = np.atleast_1d(length_scales).astype(float)
+            if ls_guess.shape[0] != ls_current.shape[0]:
+                return None
+            ls_guess = np.clip(ls_guess, ls_bounds[:, 0], ls_bounds[:, 1])
+            theta_actual.extend(ls_guess.tolist())
+            actual_bounds.extend(ls_bounds.tolist())
+            theta = np.log(np.asarray(theta_actual, dtype=float))
+            theta = np.clip(theta, hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1])
+            return theta
+
+        def _estimate_output_scale(y_subset):
+            if y_subset is None or len(y_subset) == 0:
+                return None
+            y_scale = float(np.std(y_subset))
+            if not np.isfinite(y_scale) or y_scale <= 0:
+                y_scale = float(np.std(np.asarray(self.y_train_).reshape(-1)))
+            if not np.isfinite(y_scale) or y_scale <= 0:
+                y_scale = 1.0
+            return max(y_scale, 1e-3)
+
+        def _theta_guess_from_local_cov():
+            X_subset, y_subset = _top_training_subset()
+            if X_subset is None or len(X_subset) < 3:
+                return None
+            if len(X_subset) == 1:
+                diag_scales = np.full(X_subset.shape[1], 0.1)
+            else:
+                cov = np.cov(X_subset.T, ddof=0)
+                cov = np.atleast_2d(cov)
+                diag_scales = np.sqrt(np.maximum(np.diag(cov), 1e-6))
+            diag_scales = np.maximum(diag_scales, 1e-3)
+            return _build_theta_guess(
+                length_scales=diag_scales,
+                output_scale=_estimate_output_scale(y_subset),
+            )
+
+        def _theta_guess_from_local_quadratic():
+            X_subset, y_subset = _top_training_subset()
+            if X_subset is None:
+                return None
+            d = X_subset.shape[1]
+            n_subset = len(X_subset)
+            min_points = max(2 * d + 3, d + 4)
+            if n_subset < min_points:
+                return None
+            x0 = X_subset[np.argmax(y_subset)]
+            dx = X_subset - x0
+            columns = [np.ones(n_subset)]
+            columns.extend(dx[:, i] for i in range(d))
+            quad_terms = []
+            for i in range(d):
+                for j in range(i, d):
+                    quad_terms.append((i, j))
+                    columns.append(dx[:, i] * dx[:, j])
+            design = np.column_stack(columns)
+            ridge = 1e-6 * np.eye(design.shape[1])
+            ridge[0, 0] = 0.0
+            try:
+                beta = np.linalg.solve(design.T @ design + ridge, design.T @ y_subset)
+            except np.linalg.LinAlgError:
+                return None
+            hessian = np.zeros((d, d), dtype=float)
+            coeffs = beta[1 + d:]
+            for coeff, (i, j) in zip(coeffs, quad_terms):
+                if i == j:
+                    hessian[i, i] = -2.0 * coeff
+                else:
+                    value = -coeff
+                    hessian[i, j] = value
+                    hessian[j, i] = value
+            curvature = np.maximum(np.diag(hessian), 1e-6)
+            output_scale = _estimate_output_scale(y_subset)
+            length_scales = np.sqrt(max(output_scale, 1e-6) / curvature)
+            return _build_theta_guess(
+                length_scales=length_scales,
+                output_scale=output_scale,
+            )
+
+        def _rng_uint32():
+            if isinstance(self._rng, np.random.Generator):
+                return int(self._rng.integers(0, 2**32 - 1))
+            return int(self._rng.randint(0, 2**32 - 1))
+
+        def _sample_restart_pool(n_samples):
+            if n_samples <= 0:
+                return []
+            sampler = qmc.LatinHypercube(
+                d=hyperparameter_bounds.shape[0],
+                seed=_rng_uint32(),
+            )
+            unit = sampler.random(n=n_samples)
+            return qmc.scale(
+                unit, hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+            )
+
+        def _boundary_penalty(theta):
+            bounds_span = np.maximum(
+                hyperparameter_bounds[:, 1] - hyperparameter_bounds[:, 0], 1e-12
+            )
+            lower_margin = (theta - hyperparameter_bounds[:, 0]) / bounds_span
+            upper_margin = (hyperparameter_bounds[:, 1] - theta) / bounds_span
+            margin = np.minimum(lower_margin, upper_margin)
+            clipped = np.clip(0.02 - margin, 0.0, None)
+            return float(np.sum(clipped / 0.02))
+
+        def _is_pathological(theta):
+            bounds_span = np.maximum(
+                hyperparameter_bounds[:, 1] - hyperparameter_bounds[:, 0], 1e-12
+            )
+            lower_margin = (theta - hyperparameter_bounds[:, 0]) / bounds_span
+            upper_margin = (hyperparameter_bounds[:, 1] - theta) / bounds_span
+            margin = np.minimum(lower_margin, upper_margin)
+            close_to_bounds = margin < 0.01
+            return int(np.sum(close_to_bounds)) >= max(2, int(np.ceil(len(theta) / 2)))
+
+        n_prior_candidates = max(
+            n_restarts - int(start_from_current),
+            min(max(4 * max(n_restarts, 1), 8), 24),
+        )
+        theta_candidates = []
+        if start_from_current:
+            theta_candidates.append(np.array(self.kernel_.theta, copy=True))
+        for deterministic_guess in (
+            _theta_guess_from_local_cov(),
+            _theta_guess_from_local_quadratic(),
+        ):
+            if deterministic_guess is not None:
+                theta_candidates.append(np.asarray(deterministic_guess, dtype=float))
+        for theta_initial in _sample_restart_pool(n_prior_candidates):
+            theta_candidates.append(np.asarray(theta_initial, dtype=float))
+
+        scored_candidates = []
+        for theta_initial in theta_candidates:
+            try:
+                eval_value = float(obj_func(theta_initial, eval_gradient=False))
+            except Exception:
+                continue
+            if np.isfinite(eval_value):
+                scored_candidates.append((eval_value, np.asarray(theta_initial)))
+
+        if not scored_candidates:
+            raise RuntimeError("Failed to produce any finite hyperparameter start.")
+
+        scored_candidates.sort(
+            key=lambda item: (item[0], _boundary_penalty(item[1]))
+        )
+        selected_starts = []
+        seen = set()
+        for _, theta_initial in scored_candidates:
+            key = tuple(np.round(theta_initial, decimals=12))
+            if key in seen:
+                continue
+            seen.add(key)
+            selected_starts.append(theta_initial)
+            target_runs = max(n_restarts, int(start_from_current)) + 2
+            if len(selected_starts) >= target_runs:
+                break
+        self.last_hyperopt_num_starts = len(selected_starts)
+
+        # JAX hyperopt path: use jaxopt.LBFGSB with autodiff gradients
+        if (self._jax_accel is not None and self._jax_accel.ready):
+            try:
+                theta_opt, neg_lml = \
+                    self._jax_accel.optimize_hyperparameters(
+                        bounds=hyperparameter_bounds,
+                        theta_candidates=selected_starts,
+                        rng=self._rng,
                     )
-                    eval_value = obj_func(theta_initial, eval_gradient=False)
-                    if np.isfinite(eval_value):
-                        break
+                self.kernel_.theta = theta_opt
+                self._fitted = True
+                self.L_, self.V_, self.alpha_ = None, None, None
+                return -neg_lml
+            except Exception:
+                pass  # Fall back to scipy path below
+        # Scipy path (original)
+        optima = []
+        for theta_initial in selected_starts:
             # Run the optimizer!
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -520,12 +827,24 @@ class GaussianProcessRegressor(sk_GPR):
                     )
                 )
         # Select result from run with minimal (negative) log-marginal likelihood.
-        lml_values = list(map(itemgetter(1), optima))
-        self.kernel_.theta = optima[np.argmin(lml_values)][0]
+        valid_optima = [
+            (theta, value)
+            for theta, value in optima
+            if not _is_pathological(np.asarray(theta))
+        ]
+        selected_optima = valid_optima if valid_optima else optima
+        selected_idx = min(
+            range(len(selected_optima)),
+            key=lambda idx: (
+                selected_optima[idx][1],
+                _boundary_penalty(np.asarray(selected_optima[idx][0])),
+            ),
+        )
+        self.kernel_.theta = selected_optima[selected_idx][0]
         self._fitted = True
         # Reset pre-computed matrices
         self.L_, self.V_, self.alpha_ = None, None, None
-        return -np.min(lml_values)
+        return -selected_optima[selected_idx][1]
 
     def predict(
         self,
@@ -598,6 +917,30 @@ class GaussianProcessRegressor(sk_GPR):
                 "Mean grad and std grad not implemented \
                 for n_samples > 1"
             )
+        # JAX fast path: already fitted, accelerator ready
+        if (self._jax_accel is not None
+                and self._jax_accel.ready
+                and hasattr(self, "X_train_")):
+            if return_mean_grad:
+                # JAX auto-diff for predict gradients (single point only)
+                x = X[0]
+                mean, std, grad_mean, grad_std = \
+                    self._jax_accel.predict_with_grads(x)
+                y_mean = np.array([mean])
+                return_values = [y_mean]
+                if return_std:
+                    y_std = np.array([std])
+                    return_values.append(y_std)
+                return_values.append(grad_mean)
+                if return_std_grad:
+                    return_values.append(grad_std)
+                return return_values
+            elif return_std:
+                y_mean_j, y_std_j = self._jax_accel.predict_mean_std_jax(X)
+                return [np.asarray(y_mean_j), np.asarray(y_std_j)]
+            else:
+                y_mean_j = self._jax_accel.predict_mean_jax(X)
+                return [np.asarray(y_mean_j)]
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
                 dtype, ensure_2d = "numeric", True
@@ -652,11 +995,9 @@ class GaussianProcessRegressor(sk_GPR):
             grad_mean = np.dot(grad.T, self.alpha_)
             return_values.append(grad_mean)
             if return_std_grad:
-                if np.any(y_std):  # do not compute if all stds null
+                if not np.any(y_std):  # do not compute if all stds null
                     grad_std = np.zeros(X.shape[1])
                 else:
-                    # TODO: This can be made much more efficient,
-                    #       but I don't think it's used currently
                     grad_std = (
                         -np.dot(K_trans, np.dot(self.V_.T.dot(self.V_), grad))[0]
                         / y_std
@@ -685,6 +1026,11 @@ class GaussianProcessRegressor(sk_GPR):
             Only returned when return_std is True.
         """
         self.n_eval += len(X)
+        # JAX fast path
+        if (self._jax_accel is not None
+                and self._jax_accel.ready
+                and hasattr(self, "X_train_")):
+            return self._jax_accel.predict_std(X)
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
                 dtype, ensure_2d = "numeric", True

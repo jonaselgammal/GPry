@@ -9,6 +9,8 @@ If GPry does not converge for your problem with the default settings, or does no
 
    In general, if there are problems, it is recommended to use the :class:`NORA acquisition engine <gp_acquisition.NORA>`, since it allows for better diagnosis tools.
 
+   In the JAX development baseline, the most robust default recipe so far is NORA with the standard GP backend, optional JAX acceleration, fixed GP noise ``noise_level=0.01``, and transformed-space kernel length-scale bounds ``[0.01, 100]``. BlackJAX is the preferred portable NORA backend when available; PolyChord remains a useful reference backend.
+
 
 .. _help_healthy:
 
@@ -113,3 +115,22 @@ As expected, turning on the `precision paramters` of the algorithm can make it m
 - If using :class:`gp_acquisition.NORA`, decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
 
 - You can increase the frequency with which hyperparameters are fit with the ``fit_full_every`` option of the runner. This will make it more likely that the best GPR configuration is reached as soon as possible, but at a very high computational cost for dimensions larger than 10.
+
+
+VI. Check the GP fit before changing acquisition strategy
+--------------------------------------------------------
+
+Several apparent acquisition failures can actually come from a bad or stale GP fit. Before adding more exploration pressure, check:
+
+- The GP noise is not unintentionally changed from the stable default ``0.01``.
+- Kernel length scales are bounded in transformed space, with the current robust default ``[0.01, 100]``.
+- Hyperparameters are being optimized from both the previous best fit and the data-driven starts.
+- Newly acquired finite points are actually entering the GP regressor after classifier filtering.
+
+If a run collapses into an unsupported region, compare the GP nested-sampling contours to a raw-likelihood nested-sampling reference on a lower-dimensional or cheaper version of the problem. This is often more informative than the convergence flag alone.
+
+
+Experimental options
+--------------------
+
+The codebase contains several experimental robustness and speed ideas, including alternative GP backends, TuRBO-style trust regions, fallback models, adaptive noise, hyperparameter scheduling, explicit high-uncertainty exploration points, clustered candidate selection, and optimistic surrogate sampling. Experimental helper modules use the ``gpry.experimental_*`` naming convention. These features should be tested one at a time and are not part of the conservative baseline unless explicitly enabled.
