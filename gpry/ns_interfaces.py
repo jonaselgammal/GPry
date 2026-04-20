@@ -771,6 +771,12 @@ class InterfaceBlackJAX(NSInterface):
                 return jax_accel.predict_mean_single_jax(x)
             jax_path = True
         else:
+            pure_callback_kwargs = (
+                {"vmap_method": "sequential"}
+                if "vmap_method" in jax.pure_callback.__code__.co_varnames
+                else {"vectorized": False}
+            )
+
             def loglikelihood_fn(params):
                 x = jnp.array([params[name] for name in param_names_list])
 
@@ -779,7 +785,7 @@ class InterfaceBlackJAX(NSInterface):
 
                 result = jax.pure_callback(
                     _numpy_logp, jax.ShapeDtypeStruct((), jnp.float64), x,
-                    vmap_method="sequential",
+                    **pure_callback_kwargs,
                 )
                 return result
             jax_path = False
