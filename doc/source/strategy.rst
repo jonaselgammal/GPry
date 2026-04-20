@@ -128,9 +128,3 @@ Several apparent acquisition failures can actually come from a bad or stale GP f
 - Newly acquired finite points are actually entering the GP regressor after classifier filtering.
 
 If a run collapses into an unsupported region, compare the GP nested-sampling contours to a raw-likelihood nested-sampling reference on a lower-dimensional or cheaper version of the problem. This is often more informative than the convergence flag alone.
-
-
-Experimental options
---------------------
-
-The codebase contains several experimental robustness and speed ideas, including alternative GP backends, TuRBO-style trust regions, fallback models, adaptive noise, hyperparameter scheduling, explicit high-uncertainty exploration points, clustered candidate selection, and optimistic surrogate sampling. Experimental helper modules use the ``gpry.experimental_*`` naming convention. These features should be tested one at a time and are not part of the conservative baseline unless explicitly enabled.

@@ -54,7 +54,6 @@ import gpry.acquisition_functions as gpryacqfuncs
 from gpry.preprocessing import NormalizeBounds, NormalizeY, InputWarping, PipelineX
 import gpry.convergence as gpryconv
 from gpry.progress import Progress, Timer, TimerCounter
-from gpry.experimental_hyperopt_scheduler import HyperparameterScheduler
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry import mc
 import gpry.plots as gpplt
@@ -196,13 +195,7 @@ class Runner:
               optimiser run from the last optimum hyperparameters. Overridden by
               ``fit_full_every`` where it matches its periodicity. Pass np.inf or a large
               number to never refit from last optimum (default : 1, i.e. every iteration).
-            * hyperopt_scheduler : ``True`` or dict of kwargs for
-              :class:`~experimental_hyperopt_scheduler.HyperparameterScheduler`. Enables adaptive
-              scheduling that skips re-optimization when LML is stable and decays restarts
-              over time. Pass ``True`` for defaults or a dict to customize (e.g.
-              ``{"lml_tol": 0.5, "restart_decay": 0.8}``). Default: ``None`` (disabled).
-
-    callback : callable, optional (default=None)
+            callback : callable, optional (default=None)
         Function run each iteration after adapting the recently acquired points and
         the computation of the convergence criterion. This function should take the
         runner as argument: ``callback(runner_instance)``.
@@ -645,42 +638,6 @@ class Runner:
         self.n_points_per_acq = _get_opt("n_points_per_acq", self.d)
         self.fit_full_every = int(max(_get_opt("fit_full_every", 2 * np.sqrt(self.d)), 1))
         self.fit_simple_every = int(max(_get_opt("fit_simple_every", 1), 1))
-        # Adaptive hyperparameter scheduling
-        hyperopt_scheduler_cfg = options.get("hyperopt_scheduler", None)
-        if hyperopt_scheduler_cfg is True:
-            hyperopt_scheduler_cfg = {}
-        if isinstance(hyperopt_scheduler_cfg, Mapping):
-            # Default: less frequent simple fits than the base schedule,
-            # since the scheduler adds LML-stability-based skipping on top.
-            sched_defaults = {
-                "fit_full_every": self.fit_full_every,
-                "fit_simple_every": max(self.fit_simple_every, 2),
-                "n_restarts_base": self.surrogate.gpr.n_restarts_optimizer,
-            }
-            sched_defaults.update(hyperopt_scheduler_cfg)
-            self.hyperopt_scheduler = HyperparameterScheduler(**sched_defaults)
-        else:
-            self.hyperopt_scheduler = None
-        # Backend fallback: switch to a more expressive GP when progress stalls
-        backend_fallback_cfg = options.get("backend_fallback", None)
-        if backend_fallback_cfg is True:
-            backend_fallback_cfg = {}
-        if isinstance(backend_fallback_cfg, Mapping):
-            self._backend_fallback = {
-                "target": backend_fallback_cfg.get("target", "gibbs"),
-                "stall_iterations": backend_fallback_cfg.get("stall_iterations", 8),
-                "min_evals_before_switch": backend_fallback_cfg.get(
-                    "min_evals_before_switch", max(20, 5 * self.d)
-                ),
-            }
-            self._backend_fallback_state = {
-                "switched": False,
-                "y_max_history": [],
-                "stall_count": 0,
-            }
-        else:
-            self._backend_fallback = None
-            self._backend_fallback_state = None
         # TODO: undocumented option (under testing):
         self.n_resamples_before_giveup = _get_opt("n_resamples_before_giveup", 2)
         self.resamples = 0
@@ -1241,14 +1198,6 @@ class Runner:
                             level=2,
                         )
             mpi.sync_processes()
-            # Check for backend fallback (switch to more expressive GP on stall)
-            if (
-                mpi.is_main_process
-                and self._backend_fallback is not None
-                and not self._backend_fallback_state["switched"]
-                and not self.has_converged
-            ):
-                self._check_backend_fallback()
             self.update_mean_cov()
             # Run the final MC sampler and perform a diagnosis
             if self.has_converged:
@@ -1556,62 +1505,23 @@ class Runner:
         fit_gpr_kwargs = False
         n_restarts_total = 0
         n_restarts_this_process = 0
-        n_points = self.surrogate.n_total if hasattr(self.surrogate, 'n_total') else 0
-        if self.hyperopt_scheduler is not None:
-            sched_result = self.hyperopt_scheduler.should_fit(
-                self.current_iteration, n_points
+        is_this_iter = lambda every: (
+            every is not None and self.current_iteration % every == every - 1
+        )
+        if is_this_iter(self.fit_full_every):
+            fit_gpr_kwargs = {"start_from_current": mpi.is_main_process}
+            fit_gpr_kwargs["n_restarts"] = (
+                mpi.split_number_for_parallel_processes(
+                    self.surrogate.gpr.n_restarts_optimizer
+                )[mpi.RANK]
             )
-            if sched_result is False:
-                self.log(
-                    f"[{mpi.RANK}] Scheduler: skipping hyperparameter fit "
-                    f"(skipped {self.hyperopt_scheduler._n_skipped} total)",
-                    level=4,
-                )
-            if sched_result is not False:
-                n_restarts_total = sched_result["n_restarts"]
-                sched_maxiter = sched_result.get("maxiter")
-                if n_restarts_total > 1:
-                    # Full fit: distribute restarts across MPI processes
-                    fit_gpr_kwargs = {
-                        "start_from_current": mpi.is_main_process,
-                    }
-                    fit_gpr_kwargs["n_restarts"] = (
-                        mpi.split_number_for_parallel_processes(n_restarts_total)
-                        [mpi.RANK]
-                    )
-                    if sched_maxiter is not None:
-                        fit_gpr_kwargs["maxiter"] = sched_maxiter
-                    if fit_gpr_kwargs["n_restarts"] == 0:
-                        fit_gpr_kwargs = False
-                else:
-                    # Simple fit: single restart on main process
-                    if mpi.is_main_process:
-                        fit_gpr_kwargs = {
-                            "start_from_current": True,
-                            "n_restarts": 1,
-                        }
-                        if sched_maxiter is not None:
-                            fit_gpr_kwargs["maxiter"] = sched_maxiter
-                    n_restarts_total = 1
-        else:
-            # Original fixed-schedule logic
-            is_this_iter = lambda every: (
-                every is not None and self.current_iteration % every == every - 1
-            )
-            if is_this_iter(self.fit_full_every):
-                fit_gpr_kwargs = {"start_from_current": mpi.is_main_process}
-                fit_gpr_kwargs["n_restarts"] = (
-                    mpi.split_number_for_parallel_processes(
-                        self.surrogate.gpr.n_restarts_optimizer
-                    )[mpi.RANK]
-                )
-                n_restarts_total = self.surrogate.gpr.n_restarts_optimizer
-                if fit_gpr_kwargs["n_restarts"] == 0:
-                    fit_gpr_kwargs = False
-            elif is_this_iter(self.fit_simple_every):
-                if mpi.is_main_process:
-                    fit_gpr_kwargs = {"start_from_current": True, "n_restarts": 1}
-                n_restarts_total = 1
+            n_restarts_total = self.surrogate.gpr.n_restarts_optimizer
+            if fit_gpr_kwargs["n_restarts"] == 0:
+                fit_gpr_kwargs = False
+        elif is_this_iter(self.fit_simple_every):
+            if mpi.is_main_process:
+                fit_gpr_kwargs = {"start_from_current": True, "n_restarts": 1}
+            n_restarts_total = 1
         # Prepare hyperparameter fit
         hyperparams_bounds = None
         # if self.cov is not None:
@@ -1654,9 +1564,6 @@ class Runner:
                 properties=properties,
             )
             lml = self.surrogate.gpr.log_marginal_likelihood_value_
-            # Record LML for adaptive scheduling
-            if self.hyperopt_scheduler is not None and mpi.is_main_process:
-                self.hyperopt_scheduler.record_lml(lml)
             self.log(
                 f"[{mpi.RANK}] --> Got best log-marginal-likelihood {lml}", level=4
             )
@@ -1737,60 +1644,6 @@ class Runner:
         else:
             self.has_converged = all_necessary and (
                 any_sufficient or (n_sufficient == 0)
-            )
-
-    def _check_backend_fallback(self):
-        """Check if the GP is stalling and switch to a more expressive backend.
-
-        Stalling is detected when y_max hasn't improved AND convergence isn't
-        progressing for `stall_iterations` consecutive iterations, after at
-        least `min_evals_before_switch` evaluations.
-        """
-        cfg = self._backend_fallback
-        state = self._backend_fallback_state
-        y_max = self.surrogate.y_max
-        state["y_max_history"].append(y_max)
-        # Track convergence progress too
-        cc_values = [cc.last_value for cc in self.convergence
-                     if hasattr(cc, 'last_value') and cc.last_value is not None]
-        if cc_values:
-            state.setdefault("cc_value_history", []).append(min(cc_values))
-        # Need enough evaluations
-        if self.surrogate.n_regress < cfg["min_evals_before_switch"]:
-            return
-        # Check if y_max has improved in recent iterations
-        history = state["y_max_history"]
-        if len(history) < 2:
-            return
-        y_max_improved = (
-            history[-1] > history[-2] + 1e-6 * max(abs(history[-2]), 1.0)
-        )
-        # Check if convergence criterion is making progress
-        # (criterion value decreasing = closer to convergence)
-        cc_history = state.get("cc_value_history", [])
-        cc_improving = False
-        if len(cc_history) >= 3:
-            recent_cc = cc_history[-3:]
-            # If the criterion value is trending down, convergence is progressing
-            cc_improving = recent_cc[-1] < 0.8 * recent_cc[0]
-        if y_max_improved or cc_improving:
-            state["stall_count"] = 0
-        else:
-            state["stall_count"] += 1
-        if state["stall_count"] >= cfg["stall_iterations"]:
-            target = cfg["target"]
-            self.log(
-                f"[BACKEND FALLBACK] y_max and convergence stalled for "
-                f"{state['stall_count']} iterations. Switching GP backend from "
-                f"'{self.surrogate._backend}' to '{target}'.",
-                level=1,
-            )
-            old_backend = self.surrogate.switch_backend(target)
-            state["switched"] = True
-            self.log(
-                f"[BACKEND FALLBACK] Successfully switched from '{old_backend}' "
-                f"to '{target}'. Retraining complete.",
-                level=2,
             )
 
     def update_mean_cov(self, use_mc_sample=None):

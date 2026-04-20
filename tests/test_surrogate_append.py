@@ -62,28 +62,3 @@ def test_append_refits_gpr_when_classifier_indices_are_unsorted():
     np.testing.assert_allclose(surrogate.X_last_appended_regress, X1)
     np.testing.assert_allclose(surrogate.y_last_appended_regress, y1)
     assert surrogate.gpr.X_train_.shape[0] == 6
-
-
-def test_append_does_not_refit_gpr_when_new_points_are_not_in_gpr_subset():
-    """The refit gate follows the final GP training subset, not raw append count."""
-    surrogate = make_surrogate_with_all_finite_svm()
-
-    X0 = np.array(
-        [
-            [0.1, 0.1],
-            [0.2, 0.2],
-            [0.3, 0.3],
-            [0.4, 0.4],
-        ]
-    )
-    y0 = np.array([0.0, 3.0, 1.0, 2.0])
-    surrogate.append(X0, y0, fit_gpr={"n_restarts": 1}, fit_classifier=True)
-
-    surrogate._max_training_points = 4
-    X1 = np.array([[0.5, 0.5], [0.6, 0.6]])
-    y1 = np.array([-10.0, -11.0])
-    surrogate.append(X1, y1, fit_gpr={"n_restarts": 1}, fit_classifier=True)
-
-    assert surrogate.n_last_appended_finite == 0
-    assert surrogate._i_last_appended_regress.size == 0
-    assert surrogate.gpr.X_train_.shape[0] == 4

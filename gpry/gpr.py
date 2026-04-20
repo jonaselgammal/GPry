@@ -622,7 +622,7 @@ class GaussianProcessRegressor(sk_GPR):
             return np.asarray(self.X_train_[idx], dtype=float), y_train[idx]
 
         def _build_theta_guess(length_scales=None, output_scale=None):
-            constant_kernel, length_kernel, _ = _kernel_structure()
+            constant_kernel, length_kernel, noise_kernel = _kernel_structure()
             if constant_kernel is None or length_kernel is None:
                 return None
             theta_actual = []
@@ -647,7 +647,17 @@ class GaussianProcessRegressor(sk_GPR):
             ls_guess = np.clip(ls_guess, ls_bounds[:, 0], ls_bounds[:, 1])
             theta_actual.extend(ls_guess.tolist())
             actual_bounds.extend(ls_bounds.tolist())
+            if noise_kernel is not None:
+                noise_bounds = np.exp(np.asarray(noise_kernel.bounds, dtype=float))
+                noise_level = float(noise_kernel.noise_level)
+                noise_level = float(
+                    np.clip(noise_level, noise_bounds[0, 0], noise_bounds[0, 1])
+                )
+                theta_actual.append(noise_level)
+                actual_bounds.append(noise_bounds[0])
             theta = np.log(np.asarray(theta_actual, dtype=float))
+            if theta.shape[0] != hyperparameter_bounds.shape[0]:
+                return None
             theta = np.clip(theta, hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1])
             return theta
 

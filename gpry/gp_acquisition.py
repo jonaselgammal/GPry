@@ -682,13 +682,6 @@ class NORA(GenericGPAcquisition):
         precision_criterion_target=0.01,
         nprior_per_nlive=10,
         max_ncalls=None,
-        exploration_points=0,
-        exploration_candidates="200d",
-        optimistic_beta=0.0,
-        optimistic_until=0,
-        clustered_selection=False,
-        selection_pool_factor=1,
-        cluster_radius_scale=1.5,
         tmpdir=None,
     ):
         super().__init__(
@@ -728,19 +721,6 @@ class NORA(GenericGPAcquisition):
         self.precision_criterion_target = precision_criterion_target
         self.nprior_per_nlive = nprior_per_nlive
         self.max_ncalls = max_ncalls
-        self.exploration_points = max(int(exploration_points), 0)
-        self.exploration_candidates = get_Xnumber(
-            exploration_candidates,
-            "d",
-            self.n_d,
-            int,
-            "exploration_candidates",
-        )
-        self.optimistic_beta = float(optimistic_beta)
-        self.optimistic_until = max(int(optimistic_until), 0)
-        self.clustered_selection = bool(clustered_selection)
-        self.selection_pool_factor = max(int(selection_pool_factor), 1)
-        self.cluster_radius_scale = max(float(cluster_radius_scale), 1e-6)
         # Pool for storing intermediate results during parallelised acquisition
         self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = None, None, None, None
         self._X_mc_internal = None
@@ -750,117 +730,6 @@ class NORA(GenericGPAcquisition):
         self.is_last_mc_reweighted = None
         self.pool = None
         self._acq_mc = None
-
-    def _sample_internal_uniform(self, n, bounds_internal, rng):
-        bounds_internal = np.asarray(bounds_internal, dtype=float)
-        lows = bounds_internal[:, 0]
-        highs = bounds_internal[:, 1]
-        return rng.uniform(lows, highs, size=(n, self.n_d))
-
-    def _pick_exploration_points(
-        self,
-        surrogate,
-        n_points,
-        bounds=None,
-        rng=None,
-        X_existing=None,
-    ):
-        if n_points <= 0:
-            return np.empty((0, surrogate.d)), np.empty((0,)), np.empty((0,))
-        if rng is None:
-            rng = np.random.default_rng()
-        bounds_internal = self._internal_bounds(bounds)
-        n_candidates = max(int(self.exploration_candidates), 8 * n_points)
-        X_cand = self._sample_internal_uniform(n_candidates, bounds_internal, rng)
-        if X_existing is not None and len(X_existing):
-            X_existing = np.asarray(X_existing, dtype=float)
-            keep = np.ones(len(X_cand), dtype=bool)
-            for x in X_existing:
-                keep &= ~np.all(np.isclose(X_cand, x, rtol=0.0, atol=1e-12), axis=1)
-            X_cand = X_cand[keep]
-        if len(X_cand) == 0:
-            return np.empty((0, surrogate.d)), np.empty((0,)), np.empty((0,))
-        y_cand, sigma_cand = surrogate.predict_transformed(
-            X_cand, return_std=True, validate=False
-        )
-        order = np.argsort(sigma_cand)[::-1]
-        chosen = []
-        chosen_y = []
-        chosen_sigma = []
-        for idx in order:
-            x = X_cand[idx]
-            if chosen:
-                if any(np.all(np.isclose(x, x_prev, rtol=0.0, atol=1e-12)) for x_prev in chosen):
-                    continue
-            chosen.append(x)
-            chosen_y.append(y_cand[idx])
-            chosen_sigma.append(sigma_cand[idx])
-            if len(chosen) >= n_points:
-                break
-        if not chosen:
-            return np.empty((0, surrogate.d)), np.empty((0,)), np.empty((0,))
-        return np.asarray(chosen), np.asarray(chosen_y), np.asarray(chosen_sigma)
-
-    def _cluster_labels_for_candidates(self, X, scores):
-        X = np.asarray(X, dtype=float)
-        scores = np.asarray(scores, dtype=float)
-        n = len(X)
-        if n <= 1:
-            return np.zeros(n, dtype=int)
-        scale = np.std(X, axis=0)
-        scale = np.where(scale > 1e-12, scale, 1.0)
-        X_scaled = X / scale
-        diff = X_scaled[:, None, :] - X_scaled[None, :, :]
-        dist = np.sqrt(np.sum(diff * diff, axis=-1))
-        dist_no_diag = dist.copy()
-        np.fill_diagonal(dist_no_diag, np.inf)
-        nn_dist = np.min(dist_no_diag, axis=1)
-        finite_nn = nn_dist[np.isfinite(nn_dist)]
-        if finite_nn.size == 0:
-            return np.zeros(n, dtype=int)
-        radius = max(np.median(finite_nn) * self.cluster_radius_scale, 1e-8)
-        order = np.argsort(scores)[::-1]
-        labels = np.full(n, -1, dtype=int)
-        centers = []
-        for idx in order:
-            x = X_scaled[idx]
-            assigned = False
-            for i_center, center in enumerate(centers):
-                if np.linalg.norm(x - center) <= radius:
-                    labels[idx] = i_center
-                    assigned = True
-                    break
-            if not assigned:
-                labels[idx] = len(centers)
-                centers.append(x)
-        return labels
-
-    def _select_cluster_diverse_batch(self, pool, n_points):
-        n_available = len(pool.X)
-        if n_available <= n_points:
-            return pool.X[:n_points], pool.y[:n_points], pool.sigma[:n_points]
-        scores = np.asarray(pool.acq_cond[:n_available], dtype=float)
-        labels = self._cluster_labels_for_candidates(pool.X[:n_available], scores)
-        clusters = []
-        for cluster_id in np.unique(labels):
-            idx = np.flatnonzero(labels == cluster_id)
-            idx = idx[np.argsort(scores[idx])[::-1]]
-            clusters.append(idx.tolist())
-        clusters.sort(key=lambda idxs: scores[idxs[0]], reverse=True)
-        chosen = []
-        while len(chosen) < n_points:
-            progressed = False
-            for idxs in clusters:
-                if idxs:
-                    chosen.append(idxs.pop(0))
-                    progressed = True
-                    if len(chosen) >= n_points:
-                        break
-            if not progressed:
-                break
-        chosen = np.asarray(chosen, dtype=int)
-        chosen = chosen[np.argsort(scores[chosen])[::-1]]
-        return pool.X[chosen], pool.y[chosen], pool.sigma[chosen]
 
     @property
     def pool_size(self):
@@ -977,24 +846,11 @@ class NORA(GenericGPAcquisition):
             X_internal, return_std=False, validate=False
         )
 
-    def _current_optimistic_beta(self, surrogate):
-        if self.optimistic_beta <= 0:
-            return 0.0
-        if self.optimistic_until <= 0:
-            return 0.0
-        return self.optimistic_beta if surrogate.n_regress <= self.optimistic_until else 0.0
-
     def _sampling_logp_numpy(self, surrogate, X_internal):
-        beta = self._current_optimistic_beta(surrogate)
         X_internal = np.atleast_2d(X_internal)
-        if beta <= 0:
-            return surrogate.predict_transformed(
-                X_internal, return_std=False, validate=False
-            )
-        y, sigma = surrogate.predict_transformed(
-            X_internal, return_std=True, validate=False
+        return surrogate.predict_transformed(
+            X_internal, return_std=False, validate=False
         )
-        return y + beta * sigma
 
     def do_mc_sample(self, surrogate, bounds, rng=None, sampler=None):
         """
@@ -1143,42 +999,33 @@ class NORA(GenericGPAcquisition):
             # Prefer a builder that reproduces the surrogate's transformed-space
             # prediction path. Falling back to raw ``_jax_accel`` is only correct
             # when the GP already lives in the same space as the nested sampler.
-            if not getattr(surrogate, "_using_fallback", False):
-                preprocessing_X = surrogate.preprocessing_X
-                preprocessing_y = surrogate.preprocessing_y
-                clipper = surrogate.clipper
-                y_clip_min = float(surrogate._y[surrogate._i_regress].min())
-                y_clip_max = float(surrogate._y[surrogate._i_regress].max())
-                clip_factor = clipper.clip_factor
-                optimistic_beta = self._current_optimistic_beta(surrogate)
+            preprocessing_y = surrogate.preprocessing_y
+            clipper = surrogate.clipper
+            y_clip_min = float(surrogate._y[surrogate._i_regress].min())
+            y_clip_max = float(surrogate._y[surrogate._i_regress].max())
+            clip_factor = clipper.clip_factor
 
-                def _build_jax_loglikelihood(param_names_list):
-                    import jax.numpy as jnp
+            def _build_jax_loglikelihood(param_names_list):
+                import jax.numpy as jnp
 
-                    def _loglikelihood_fn(params):
-                        x = jnp.array(
-                            [params[name] for name in param_names_list],
-                            dtype=jnp.float64,
+                def _loglikelihood_fn(params):
+                    x = jnp.array(
+                        [params[name] for name in param_names_list],
+                        dtype=jnp.float64,
+                    )
+                    y_ = jax_accel.predict_mean_single_jax(x)
+                    y = preprocessing_y.inverse_transform_jax(y_)
+                    if clip_factor is not None:
+                        upper = (
+                            clip_factor * y_clip_max
+                            - (clip_factor - 1) * y_clip_min
                         )
-                        y_ = jax_accel.predict_mean_single_jax(x)
-                        y = preprocessing_y.inverse_transform_jax(y_)
-                        if optimistic_beta > 0:
-                            sigma_ = jax_accel.predict_std_jax(x[None, :])[0]
-                            sigma = preprocessing_y.inverse_transform_scale_jax(sigma_)
-                            y = y + optimistic_beta * sigma
-                        if clip_factor is not None:
-                            upper = (
-                                clip_factor * y_clip_max
-                                - (clip_factor - 1) * y_clip_min
-                            )
-                            y = jnp.clip(y, None, upper)
-                        return y
+                        y = jnp.clip(y, None, upper)
+                    return y
 
-                    return _loglikelihood_fn
+                return _loglikelihood_fn
 
-                logp._jax_loglikelihood_builder = _build_jax_loglikelihood
-            else:
-                logp._jax_accel = jax_accel
+            logp._jax_loglikelihood_builder = _build_jax_loglikelihood
 
         # Update prior bounds
         self.sampler_interface.set_prior(self._internal_bounds(bounds))
@@ -1526,46 +1373,9 @@ class NORA(GenericGPAcquisition):
             #    )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
-        n_explore = min(self.exploration_points, max(n_points - 1, 0))
-        n_ranked = n_points - n_explore
-        if self.clustered_selection and n_ranked > 1:
-            X_pool, y_pool, sigma_pool = self._select_cluster_diverse_batch(
-                merged_pool,
-                n_ranked,
-            )
-            self.log(
-                f"(clustered-selection) Chose {len(X_pool)} ranked point(s) from "
-                f"{len(merged_pool.X)} pooled candidates.",
-                level=3,
-            )
-        else:
-            X_pool = merged_pool.X[:n_ranked]
-            y_pool = merged_pool.y[:n_ranked]
-            sigma_pool = merged_pool.sigma[:n_ranked]
-        if n_explore > 0 and mpi.is_main_process:
-            X_train_internal = self._to_internal_X(surrogate.X_regress)
-            X_existing = np.concatenate(
-                [
-                    self._X_already_proposed,
-                    X_pool,
-                    X_train_internal,
-                ]
-            )
-            X_explore, y_explore, sigma_explore = self._pick_exploration_points(
-                surrogate,
-                n_explore,
-                bounds=bounds,
-                rng=rng,
-                X_existing=X_existing,
-            )
-            if len(X_explore):
-                self.log(
-                    f"(explore) Added {len(X_explore)} uncertainty-guided point(s) to the batch.",
-                    level=3,
-                )
-                X_pool = np.concatenate([X_pool, X_explore], axis=0)
-                y_pool = np.concatenate([y_pool, y_explore], axis=0)
-                sigma_pool = np.concatenate([sigma_pool, sigma_explore], axis=0)
+        X_pool = merged_pool.X[:n_points]
+        y_pool = merged_pool.y[:n_points]
+        sigma_pool = merged_pool.sigma[:n_points]
         if mpi.multiple_processes:
             X_pool = mpi.bcast(X_pool)
             y_pool = mpi.bcast(y_pool)
@@ -1620,8 +1430,6 @@ class NORA(GenericGPAcquisition):
         #   of points to be evaluated per process, but with less guarantee to find an
         #   optimal set.
         pool_size = n_points
-        if self.clustered_selection:
-            pool_size = max(pool_size, n_points * self.selection_pool_factor)
         self.pool = RankedPool(
             pool_size,
             surrogate=surrogate,
@@ -1672,11 +1480,8 @@ class NORA(GenericGPAcquisition):
         pool_X, pool_y, pool_sigma, pool_acq = self._gather_pools()
         merged_pool = None
         if mpi.is_main_process:
-            pool_size = n_points
-            if self.clustered_selection:
-                pool_size = max(pool_size, n_points * self.selection_pool_factor)
             merged_pool = RankedPool(
-                pool_size,
+                n_points,
                 surrogate=surrogate,
                 acq_func=self.acq_func_y_sigma,
                 transformed_input=True,
