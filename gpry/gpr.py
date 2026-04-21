@@ -33,9 +33,9 @@ from gpry.tools import check_random_state
 GPR_CHOLESKY_LOWER = True
 EPS_SQ_NOISE = 1e-6  # diagonal term to be added when WhiteKernel used as noise
 
-# Try to import JAX accelerator
+# Try to import the optional JAX runtime bundle
 try:
-    from gpry.jax_accel import JaxGPAccelerator
+    from gpry.jax_accel import JaxRuntimeBundle
     _JAX_AVAILABLE = True
 except ImportError:
     _JAX_AVAILABLE = False
@@ -180,9 +180,9 @@ class GaussianProcessRegressor(sk_GPR):
         self.kernel_ = None
         self.last_hyperopt_num_starts = None
         self.last_hyperopt_requested_restarts = None
-        # JAX acceleration for predict operations
+        # Optional JAX runtime bundle for predict/optimization acceleration.
         self.use_jax = use_jax and _JAX_AVAILABLE
-        self._jax_accel = JaxGPAccelerator() if self.use_jax else None
+        self._runtime_bundle = JaxRuntimeBundle() if self.use_jax else None
         # Auto-construct inbuilt kernels
         if isinstance(kernel, str):
             kernel = {kernel: {}}
@@ -254,6 +254,28 @@ class GaussianProcessRegressor(sk_GPR):
             np.sqrt(length_kernel.k1.constant_value),
             np.array(length_kernel.k2.length_scale),
         )
+
+    @property
+    def runtime_bundle(self):
+        """Optional JAX runtime bundle for accelerated prediction/optimization."""
+        return self._runtime_bundle
+
+    @runtime_bundle.setter
+    def runtime_bundle(self, bundle):
+        self._runtime_bundle = bundle
+
+    @property
+    def _jax_accel(self):
+        """Backward-compatible alias for the JAX runtime bundle."""
+        return self._runtime_bundle
+
+    @_jax_accel.setter
+    def _jax_accel(self, bundle):
+        self._runtime_bundle = bundle
+
+    def disable_runtime_bundle(self):
+        """Disable the optional JAX runtime bundle for this GP instance."""
+        self.runtime_bundle = None
 
     @property
     def noise_level(self):
@@ -391,19 +413,13 @@ class GaussianProcessRegressor(sk_GPR):
                 )
             # Update JAX cached training data BEFORE hyperparameter optimization,
             # so the JAX LML uses the current data (not stale data from previous fit)
-            if self._jax_accel is not None and self._jax_accel.ready:
-                import jax.numpy as jnp
-                self._jax_accel._X_train = jnp.array(
-                    self.X_train_, dtype=jnp.float64)
-                self._jax_accel._y_train = jnp.array(
-                    self.y_train_, dtype=jnp.float64)
+            runtime_bundle = self.runtime_bundle
+            if runtime_bundle is not None and runtime_bundle.ready:
                 alpha_val = float(np.atleast_1d(self.alpha).item()) \
                     if np.ndim(self.alpha) == 0 else self.alpha
-                if isinstance(alpha_val, float):
-                    self._jax_accel._alpha_noise = alpha_val
-                else:
-                    self._jax_accel._alpha_noise = jnp.array(
-                        alpha_val, dtype=jnp.float64)
+                runtime_bundle.prime_fit_inputs(
+                    self.X_train_, self.y_train_, alpha_val
+                )
             self.log_marginal_likelihood_value_ = self._fit_hyperparameters(
                 **fit_hyperparameters
             )
@@ -416,10 +432,11 @@ class GaussianProcessRegressor(sk_GPR):
         # Alg. 2.1, page 19, line 2 -> L = cholesky(K + sigma^2 I)
         # NB: if we got here before returning, we *need* to do this.
         jax_fit_ok = False
-        if self._jax_accel is not None and self._jax_accel.ready:
+        runtime_bundle = self.runtime_bundle
+        if runtime_bundle is not None and runtime_bundle.ready:
             # Pure JAX path: compute L, V, alpha_ via JIT-compiled Cholesky
             try:
-                # Extract current kernel parameters and update accelerator
+                # Extract current kernel parameters and update the runtime bundle.
                 kernel = self.kernel_
                 wn = 0.0
                 if hasattr(kernel, 'k1') and hasattr(kernel.k1, 'k1'):
@@ -432,15 +449,15 @@ class GaussianProcessRegressor(sk_GPR):
                 ls = np.atleast_1d(product_kernel.k2.length_scale)
                 alpha_val = (float(np.atleast_1d(self.alpha).item())
                              if np.ndim(self.alpha) == 0 else self.alpha)
-                self._jax_accel.update_params(
+                runtime_bundle.update_params(
                     ls, osc, wn, alpha_val,
                     X_train=self.X_train_, y_train=self.y_train_)
-                L_jax, V_jax, alpha_jax = self._jax_accel.fit_precompute()
+                L_jax, V_jax, alpha_jax = runtime_bundle.fit_precompute()
                 # Store numpy copies for backward compatibility
                 self.L_ = np.asarray(L_jax)
                 self.V_ = np.asarray(V_jax)
                 self.alpha_ = np.asarray(alpha_jax)
-                self._jax_accel._ready = True
+                runtime_bundle._ready = True
                 jax_fit_ok = True
             except Exception:
                 pass  # Fall back to numpy Cholesky below
@@ -468,10 +485,10 @@ class GaussianProcessRegressor(sk_GPR):
                 self.y_train_,
                 check_finite=False,
             )
-            # Update JAX accelerator with new fit state
-            if self._jax_accel is not None:
+            # Update the runtime bundle with the latest fitted state.
+            if runtime_bundle is not None:
                 try:
-                    self._jax_accel.update_from_gpr(self)
+                    runtime_bundle.update_from_gpr(self)
                 except Exception:
                     pass  # Silently fall back to numpy if JAX update fails
         return self
@@ -490,14 +507,14 @@ class GaussianProcessRegressor(sk_GPR):
         # JAX fast path for gradient computation
         if (eval_gradient
                 and theta is not None
-                and self._jax_accel is not None
-                and self._jax_accel.ready
+                and self.runtime_bundle is not None
+                and self.runtime_bundle.ready
                 and hasattr(self, "X_train_")):
             try:
                 # Set theta on kernel so it's consistent
                 if not clone_kernel:
                     self.kernel_.theta = theta
-                lml, grad = self._jax_accel.log_marginal_likelihood_with_grad(
+                lml, grad = self.runtime_bundle.log_marginal_likelihood_with_grad(
                     theta)
                 return lml, grad
             except Exception:
@@ -811,10 +828,11 @@ class GaussianProcessRegressor(sk_GPR):
         self.last_hyperopt_num_starts = len(selected_starts)
 
         # JAX hyperopt path: use jaxopt.LBFGSB with autodiff gradients
-        if (self._jax_accel is not None and self._jax_accel.ready):
+        runtime_bundle = self.runtime_bundle
+        if runtime_bundle is not None and runtime_bundle.ready:
             try:
                 theta_opt, neg_lml = \
-                    self._jax_accel.optimize_hyperparameters(
+                    runtime_bundle.optimize_hyperparameters(
                         bounds=hyperparameter_bounds,
                         theta_candidates=selected_starts,
                         rng=self._rng,
@@ -927,15 +945,16 @@ class GaussianProcessRegressor(sk_GPR):
                 "Mean grad and std grad not implemented \
                 for n_samples > 1"
             )
-        # JAX fast path: already fitted, accelerator ready
-        if (self._jax_accel is not None
-                and self._jax_accel.ready
+        # JAX fast path: already fitted, runtime bundle ready.
+        runtime_bundle = self.runtime_bundle
+        if (runtime_bundle is not None
+                and runtime_bundle.ready
                 and hasattr(self, "X_train_")):
             if return_mean_grad:
                 # JAX auto-diff for predict gradients (single point only)
                 x = X[0]
                 mean, std, grad_mean, grad_std = \
-                    self._jax_accel.predict_with_grads(x)
+                    runtime_bundle.predict_with_grads(x)
                 y_mean = np.array([mean])
                 return_values = [y_mean]
                 if return_std:
@@ -946,10 +965,10 @@ class GaussianProcessRegressor(sk_GPR):
                     return_values.append(grad_std)
                 return return_values
             elif return_std:
-                y_mean_j, y_std_j = self._jax_accel.predict_mean_std_jax(X)
+                y_mean_j, y_std_j = runtime_bundle.predict_mean_std_jax(X)
                 return [np.asarray(y_mean_j), np.asarray(y_std_j)]
             else:
-                y_mean_j = self._jax_accel.predict_mean_jax(X)
+                y_mean_j = runtime_bundle.predict_mean_jax(X)
                 return [np.asarray(y_mean_j)]
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
@@ -1037,10 +1056,11 @@ class GaussianProcessRegressor(sk_GPR):
         """
         self.n_eval += len(X)
         # JAX fast path
-        if (self._jax_accel is not None
-                and self._jax_accel.ready
+        runtime_bundle = self.runtime_bundle
+        if (runtime_bundle is not None
+                and runtime_bundle.ready
                 and hasattr(self, "X_train_")):
-            return self._jax_accel.predict_std(X)
+            return runtime_bundle.predict_std(X)
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
                 dtype, ensure_2d = "numeric", True

@@ -761,7 +761,8 @@ class InterfaceBlackJAX(NSInterface):
         jax_loglikelihood_builder = getattr(
             logp_func, "_jax_loglikelihood_builder", None
         )
-        jax_accel = getattr(logp_func, "_jax_accel", None)
+        runtime_bundle = getattr(logp_func, "_runtime_bundle", None)
+        jax_accel = runtime_bundle or getattr(logp_func, "_jax_accel", None)
         if jax_loglikelihood_builder is not None:
             loglikelihood_fn = jax_loglikelihood_builder(param_names_list)
             jax_path = True

@@ -926,24 +926,24 @@ class SurrogateModel:
         if X.shape[0] != 1 and (return_mean_grad or return_std_grad):
             raise ValueError("Mean grad and std grad not implemented for n_samples > 1")
         # JAX fast path: skip classifier, dict wrapping, and np.copy when
-        # the GP has a ready JAX accelerator and no gradients are requested.
+        # the GP has a ready runtime bundle and no gradients are requested.
         # The classifier is skipped because the acquisition optimizer already
         # respects bounds, and classifier overhead is significant.
-        jax_accel = getattr(self.gpr, '_jax_accel', None)
+        runtime_bundle = getattr(self.gpr, "runtime_bundle", None)
         if (not validate
                 and not return_mean_grad and not return_std_grad
                 and self.clipper.trivial
-                and jax_accel is not None and jax_accel.ready):
+                and runtime_bundle is not None and runtime_bundle.ready):
             X_ = self.preprocessing_X.transform(X)
             if return_std:
-                y_mean_j, y_std_j = jax_accel.predict_mean_std_jax(X_)
+                y_mean_j, y_std_j = runtime_bundle.predict_mean_std_jax(X_)
                 y_mean = self.preprocessing_y.inverse_transform(
                     np.asarray(y_mean_j))
                 y_std = self.preprocessing_y.inverse_transform_scale(
                     np.asarray(y_std_j))
                 return [y_mean, y_std]
             else:
-                y_mean_j = jax_accel.predict_mean_jax(X_)
+                y_mean_j = runtime_bundle.predict_mean_jax(X_)
                 return self.preprocessing_y.inverse_transform(
                     np.asarray(y_mean_j))
         if validate:

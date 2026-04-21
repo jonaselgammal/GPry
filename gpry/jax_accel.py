@@ -329,24 +329,27 @@ def _make_predict_std_single_fn(kernel_fn):
 
 
 # ---------------------------------------------------------------------------
-# JAX accelerator class that wraps GP state
+# JAX runtime bundle that wraps GP state
 # ---------------------------------------------------------------------------
 
-class JaxGPAccelerator:
-    """Accelerates GP predict operations using JAX JIT compilation.
+class JaxRuntimeBundle:
+    """JAX runtime bundle for a fitted GP model.
 
-    This class caches JAX arrays and JIT-compiled functions after a GP is
-    fitted, then provides fast predict_mean and predict_std methods.
+    The bundle holds the JAX-native state derived from a fitted GP and the
+    compiled helper functions that operate on that state. It is intentionally
+    separate from the canonical sklearn-style GP object so callers can treat
+    it as an optional acceleration layer rather than part of the fitted model
+    semantics.
 
     Usage
     -----
     After fitting a GaussianProcessRegressor:
 
-        accel = JaxGPAccelerator()
-        accel.update_from_gpr(gpr)  # caches JAX arrays
-        y_mean = accel.predict_mean(X_new)
-        y_std = accel.predict_std(X_new)
-        y_mean, y_std = accel.predict_mean_std(X_new)
+        bundle = JaxRuntimeBundle()
+        bundle.update_from_gpr(gpr)  # caches JAX arrays
+        y_mean = bundle.predict_mean(X_new)
+        y_std = bundle.predict_std(X_new)
+        y_mean, y_std = bundle.predict_mean_std(X_new)
     """
 
     def __init__(self):
@@ -380,7 +383,7 @@ class JaxGPAccelerator:
         avoids expensive JIT recompilation when the surrogate model is deep-copied
         (e.g. in RankedPool.cache_model).
         """
-        new = JaxGPAccelerator.__new__(JaxGPAccelerator)
+        new = JaxRuntimeBundle.__new__(JaxRuntimeBundle)
         memo[id(self)] = new
         # JIT-compiled functions to share (immutable, keyed on kernel type/dims/noise)
         jit_compiled_attrs = {
@@ -420,7 +423,7 @@ class JaxGPAccelerator:
             val = getattr(self, attr)
             if val is not None:
                 # JAX arrays are immutable, so a numpy round-trip copy is
-                # unnecessary -- just reference the same array. The accelerator
+                # unnecessary -- just reference the same array. The bundle
                 # replaces these wholesale via update_from_gpr(), never mutates
                 # them in-place, so sharing is safe.
                 setattr(new, attr, val)
@@ -431,6 +434,20 @@ class JaxGPAccelerator:
     @property
     def ready(self):
         return self._ready
+
+    @property
+    def ready_for_acquisition_optimization(self):
+        """Whether the bundle can run the JAX acquisition optimizer path."""
+        return self.ready and self._neg_acq_fn is not None
+
+    def prime_fit_inputs(self, X_train, y_train, alpha_noise):
+        """Refresh cached training inputs before hyperparameter optimization."""
+        self._X_train = jnp.array(X_train, dtype=jnp.float64)
+        self._y_train = jnp.array(y_train, dtype=jnp.float64)
+        if isinstance(alpha_noise, (float, int)):
+            self._alpha_noise = float(alpha_noise)
+        else:
+            self._alpha_noise = jnp.array(alpha_noise, dtype=jnp.float64)
 
     def update_from_gpr(self, gpr):
         """Extract kernel parameters and cached arrays from a fitted GPR.
@@ -947,3 +964,30 @@ class JaxGPAccelerator:
             func_min = float(self._neg_acq_fn(x0_jax, *acq_args))
 
         return x_opt, func_min
+
+    def build_surrogate_loglikelihood_builder(
+        self, preprocessing_y, clip_factor, y_clip_min, y_clip_max
+    ):
+        """Build a transformed-space JAX log-likelihood callback for BlackJAX."""
+
+        def _build_jax_loglikelihood(param_names_list):
+            def _loglikelihood_fn(params):
+                x = jnp.array(
+                    [params[name] for name in param_names_list],
+                    dtype=jnp.float64,
+                )
+                y_ = self.predict_mean_single_jax(x)
+                y = preprocessing_y.inverse_transform_jax(y_)
+                if clip_factor is not None:
+                    upper = clip_factor * y_clip_max - (clip_factor - 1) * y_clip_min
+                    y = jnp.clip(y, None, upper)
+                return y
+
+            return _loglikelihood_fn
+
+        return _build_jax_loglikelihood
+
+
+# Backward-compatible alias while callers are migrated to the explicit
+# runtime-bundle terminology.
+JaxGPAccelerator = JaxRuntimeBundle

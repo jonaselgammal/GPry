@@ -329,11 +329,11 @@ class BatchOptimizer(GenericGPAcquisition):
         self.proposer.update_bounds(use_bounds)
 
         # Try to set up JAX-native acquisition function
-        self._jax_accel_ref = None
+        self._runtime_bundle_ref = None
         self._jax_acq_params = None
-        jax_accel = getattr(surrogate.gpr, '_jax_accel', None)
-        if (jax_accel is not None and jax_accel.ready
-                and getattr(jax_accel, '_neg_acq_fn', None) is not None
+        runtime_bundle = getattr(surrogate.gpr, "runtime_bundle", None)
+        if (runtime_bundle is not None
+                and runtime_bundle.ready_for_acquisition_optimization
                 and isinstance(self.acq_func, gpryacqfuncs.BaseLogExp)):
             try:
                 # Get effective zeta
@@ -352,7 +352,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 baseline = surrogate.y_max
                 self._jax_acq_params = (float(zeta), float(noise_var),
                                         float(baseline))
-                self._jax_accel_ref = jax_accel
+                self._runtime_bundle_ref = runtime_bundle
             except Exception:
                 self._jax_acq_params = None
 
@@ -575,9 +575,9 @@ class BatchOptimizer(GenericGPAcquisition):
         if (hasattr(self, '_jax_acq_params')
                 and self._jax_acq_params is not None):
             try:
-                jax_accel = self._jax_accel_ref
+                runtime_bundle = self._runtime_bundle_ref
                 zeta, noise_var, baseline = self._jax_acq_params
-                x_opt, func_min = jax_accel.optimize_acq(
+                x_opt, func_min = runtime_bundle.optimize_acq(
                     initial_X, np.array(bounds),
                     zeta, noise_var, baseline,
                 )
@@ -993,39 +993,22 @@ class NORA(GenericGPAcquisition):
         def logp(X):
             return self._sampling_logp_numpy(surrogate, X)[0]
 
-        # Attach JAX accelerator if available (enables fully-JAX NS pipeline)
-        jax_accel = getattr(surrogate.gpr, '_jax_accel', None)
-        if jax_accel is not None and jax_accel.ready:
-            # Prefer a builder that reproduces the surrogate's transformed-space
-            # prediction path. Falling back to raw ``_jax_accel`` is only correct
-            # when the GP already lives in the same space as the nested sampler.
+        # Attach the JAX runtime bundle if available (enables fully-JAX NS pipeline)
+        runtime_bundle = getattr(surrogate.gpr, "runtime_bundle", None)
+        if runtime_bundle is not None and runtime_bundle.ready:
             preprocessing_y = surrogate.preprocessing_y
             clipper = surrogate.clipper
             y_clip_min = float(surrogate._y[surrogate._i_regress].min())
             y_clip_max = float(surrogate._y[surrogate._i_regress].max())
             clip_factor = clipper.clip_factor
-
-            def _build_jax_loglikelihood(param_names_list):
-                import jax.numpy as jnp
-
-                def _loglikelihood_fn(params):
-                    x = jnp.array(
-                        [params[name] for name in param_names_list],
-                        dtype=jnp.float64,
-                    )
-                    y_ = jax_accel.predict_mean_single_jax(x)
-                    y = preprocessing_y.inverse_transform_jax(y_)
-                    if clip_factor is not None:
-                        upper = (
-                            clip_factor * y_clip_max
-                            - (clip_factor - 1) * y_clip_min
-                        )
-                        y = jnp.clip(y, None, upper)
-                    return y
-
-                return _loglikelihood_fn
-
-            logp._jax_loglikelihood_builder = _build_jax_loglikelihood
+            logp._jax_loglikelihood_builder = (
+                runtime_bundle.build_surrogate_loglikelihood_builder(
+                    preprocessing_y=preprocessing_y,
+                    clip_factor=clip_factor,
+                    y_clip_min=y_clip_min,
+                    y_clip_max=y_clip_max,
+                )
+            )
 
         # Update prior bounds
         self.sampler_interface.set_prior(self._internal_bounds(bounds))
@@ -1915,7 +1898,7 @@ class RankedPool:
         # them on the numpy path avoids repeated JAX recompilation in the ranking loop.
         if hasattr(self.surrogate_cond[i].gpr, "use_jax"):
             self.surrogate_cond[i].gpr.use_jax = False
-            self.surrogate_cond[i].gpr._jax_accel = None
+            self.surrogate_cond[i].gpr.disable_runtime_bundle()
         X_append = self.X[: i + 1]
         if self._transformed_input:
             X_append = self.surrogate_cond[i].preprocessing_X.inverse_transform(X_append)
