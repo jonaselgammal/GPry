@@ -52,6 +52,7 @@ import pandas as pd  # type: ignore
 from sklearn.utils.validation import check_array as _sk_check_array  # type: ignore
 
 # Local
+from gpry.array_api import make_array_converter
 from gpry.gpr import GaussianProcessRegressor
 from gpry.preprocessing import DummyPreprocessor
 from gpry.tools import delta_logp_of_1d_nstd, generic_params_names
@@ -211,8 +212,24 @@ class SurrogateModel:
         kwargs_regressor["noise_level"] = self._noise_level_
         kwargs_regressor["random_state"] = random_state
         self.gpr = GaussianProcessRegressor(**kwargs_regressor)
+        self._gp_input_converter = self._build_gp_input_converter(
+            source_kind="numpy",
+            context="SurrogateModel transformed->GP hot path",
+        )
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
+
+    def _build_gp_input_converter(self, source_kind="numpy", context=None):
+        contract = getattr(self.gpr, "array_contract", None)
+        if contract is None:
+            return lambda x: x
+        warn = source_kind != contract.preferred_input and contract.preferred_input == "jax"
+        return make_array_converter(
+            source_kind,
+            contract.preferred_input,
+            warn=warn,
+            context=context,
+        )
 
     def __str__(self):
         kernel = self.gpr.kernel
@@ -925,27 +942,23 @@ class SurrogateModel:
             )
         if X.shape[0] != 1 and (return_mean_grad or return_std_grad):
             raise ValueError("Mean grad and std grad not implemented for n_samples > 1")
-        # JAX fast path: skip classifier, dict wrapping, and np.copy when
-        # the GP has a ready runtime bundle and no gradients are requested.
-        # The classifier is skipped because the acquisition optimizer already
-        # respects bounds, and classifier overhead is significant.
-        runtime_bundle = getattr(self.gpr, "runtime_bundle", None)
+        # Fast native-backend path planned once at construction time.
         if (not validate
                 and not return_mean_grad and not return_std_grad
-                and self.clipper.trivial
-                and runtime_bundle is not None and runtime_bundle.ready):
+                and self.clipper.trivial):
             X_ = self.preprocessing_X.transform(X)
+            X_gp = self._gp_input_converter(X_)
             if return_std:
-                y_mean_j, y_std_j = runtime_bundle.predict_mean_std_jax(X_)
+                y_mean_native, y_std_native = self.gpr.predict_native(X_gp, return_std=True)
                 y_mean = self.preprocessing_y.inverse_transform(
-                    np.asarray(y_mean_j))
+                    np.asarray(y_mean_native))
                 y_std = self.preprocessing_y.inverse_transform_scale(
-                    np.asarray(y_std_j))
+                    np.asarray(y_std_native))
                 return [y_mean, y_std]
             else:
-                y_mean_j = runtime_bundle.predict_mean_jax(X_)
+                y_mean_native = self.gpr.predict_native(X_gp, return_std=False)
                 return self.preprocessing_y.inverse_transform(
-                    np.asarray(y_mean_j))
+                    np.asarray(y_mean_native))
         if validate:
             if self.gpr.kernel is None or self.gpr.kernel.requires_vector_input:
                 X = check_array(X, ensure_2d=True, dtype="numeric")
@@ -975,8 +988,9 @@ class SurrogateModel:
                 return return_dict["mean"]
             return list(return_dict.values())
         # else: at least some finite points --> regressor predict for them only
+        X_gp = self._gp_input_converter(X_[finite])
         return_gpr_ = self.gpr.predict(
-            X_[finite],
+            X_gp,
             return_std=return_std,
             return_mean_grad=return_mean_grad,
             return_std_grad=return_std_grad,

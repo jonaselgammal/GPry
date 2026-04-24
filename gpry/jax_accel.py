@@ -16,6 +16,7 @@ in acquisition and hyperparameter optimization).
 """
 
 import warnings
+from copy import deepcopy
 from functools import partial
 
 import jax
@@ -383,7 +384,7 @@ class JaxRuntimeBundle:
         avoids expensive JIT recompilation when the surrogate model is deep-copied
         (e.g. in RankedPool.cache_model).
         """
-        new = JaxRuntimeBundle.__new__(JaxRuntimeBundle)
+        new = self.__class__.__new__(self.__class__)
         memo[id(self)] = new
         # JIT-compiled functions to share (immutable, keyed on kernel type/dims/noise)
         jit_compiled_attrs = {
@@ -429,6 +430,11 @@ class JaxRuntimeBundle:
                 setattr(new, attr, val)
             else:
                 setattr(new, attr, None)
+        handled_attrs = jit_compiled_attrs | scalar_attrs | data_attrs
+        for attr, val in self.__dict__.items():
+            if attr in handled_attrs:
+                continue
+            setattr(new, attr, deepcopy(val, memo))
         return new
 
     @property

@@ -328,12 +328,10 @@ class BatchOptimizer(GenericGPAcquisition):
         use_bounds = self.bounds_ if bounds is None else bounds
         self.proposer.update_bounds(use_bounds)
 
-        # Try to set up JAX-native acquisition function
-        self._runtime_bundle_ref = None
+        # Try to set up a backend-native acquisition optimizer
+        self._gp_native_acq_ref = None
         self._jax_acq_params = None
-        runtime_bundle = getattr(surrogate.gpr, "runtime_bundle", None)
-        if (runtime_bundle is not None
-                and runtime_bundle.ready_for_acquisition_optimization
+        if (getattr(surrogate.gpr, "supports_native_acquisition_optimization", False)
                 and isinstance(self.acq_func, gpryacqfuncs.BaseLogExp)):
             try:
                 # Get effective zeta
@@ -352,7 +350,7 @@ class BatchOptimizer(GenericGPAcquisition):
                 baseline = surrogate.y_max
                 self._jax_acq_params = (float(zeta), float(noise_var),
                                         float(baseline))
-                self._runtime_bundle_ref = runtime_bundle
+                self._gp_native_acq_ref = surrogate.gpr
             except Exception:
                 self._jax_acq_params = None
 
@@ -575,9 +573,9 @@ class BatchOptimizer(GenericGPAcquisition):
         if (hasattr(self, '_jax_acq_params')
                 and self._jax_acq_params is not None):
             try:
-                runtime_bundle = self._runtime_bundle_ref
+                gpr = self._gp_native_acq_ref
                 zeta, noise_var, baseline = self._jax_acq_params
-                x_opt, func_min = runtime_bundle.optimize_acq(
+                x_opt, func_min = gpr.optimize_acquisition_native(
                     initial_X, np.array(bounds),
                     zeta, noise_var, baseline,
                 )
@@ -993,22 +991,15 @@ class NORA(GenericGPAcquisition):
         def logp(X):
             return self._sampling_logp_numpy(surrogate, X)[0]
 
-        # Attach the JAX runtime bundle if available (enables fully-JAX NS pipeline)
-        runtime_bundle = getattr(surrogate.gpr, "runtime_bundle", None)
-        if runtime_bundle is not None and runtime_bundle.ready:
+        builder = surrogate.gpr.make_ns_loglikelihood_builder(
+            preprocessing_y=surrogate.preprocessing_y,
+            clip_factor=surrogate.clipper.clip_factor,
+            y_clip_min=float(surrogate._y[surrogate._i_regress].min()),
+            y_clip_max=float(surrogate._y[surrogate._i_regress].max()),
+        )
+        if builder is not None:
             preprocessing_y = surrogate.preprocessing_y
-            clipper = surrogate.clipper
-            y_clip_min = float(surrogate._y[surrogate._i_regress].min())
-            y_clip_max = float(surrogate._y[surrogate._i_regress].max())
-            clip_factor = clipper.clip_factor
-            logp._jax_loglikelihood_builder = (
-                runtime_bundle.build_surrogate_loglikelihood_builder(
-                    preprocessing_y=preprocessing_y,
-                    clip_factor=clip_factor,
-                    y_clip_min=y_clip_min,
-                    y_clip_max=y_clip_max,
-                )
-            )
+            logp._jax_loglikelihood_builder = builder
 
         # Update prior bounds
         self.sampler_interface.set_prior(self._internal_bounds(bounds))
@@ -1896,8 +1887,7 @@ class RankedPool:
         self.surrogate_cond[i] = deepcopy(self._surrogate)
         # These temporary conditioned models are only used for KB ranking. Keeping
         # them on the numpy path avoids repeated JAX recompilation in the ranking loop.
-        if hasattr(self.surrogate_cond[i].gpr, "use_jax"):
-            self.surrogate_cond[i].gpr.use_jax = False
+        if hasattr(self.surrogate_cond[i].gpr, "disable_runtime_bundle"):
             self.surrogate_cond[i].gpr.disable_runtime_bundle()
         X_append = self.X[: i + 1]
         if self._transformed_input:
