@@ -761,15 +761,8 @@ class InterfaceBlackJAX(NSInterface):
         jax_loglikelihood_builder = getattr(
             logp_func, "_jax_loglikelihood_builder", None
         )
-        runtime_bundle = getattr(logp_func, "_runtime_bundle", None)
-        jax_accel = runtime_bundle or getattr(logp_func, "_jax_accel", None)
         if jax_loglikelihood_builder is not None:
             loglikelihood_fn = jax_loglikelihood_builder(param_names_list)
-            jax_path = True
-        elif jax_accel is not None and jax_accel.ready:
-            def loglikelihood_fn(params):
-                x = jnp.array([params[name] for name in param_names_list])
-                return jax_accel.predict_mean_single_jax(x)
             jax_path = True
         else:
             pure_callback_kwargs = (
@@ -800,10 +793,8 @@ class InterfaceBlackJAX(NSInterface):
                 tuple(map(tuple, np.asarray(self.bounds))),
                 int(nlive),
                 int(num_inner_steps),
-                "builder" if jax_loglikelihood_builder is not None else "jax_accel",
-                id(jax_loglikelihood_builder)
-                if jax_loglikelihood_builder is not None
-                else id(jax_accel),
+                "builder",
+                id(jax_loglikelihood_builder),
             )
         cached_runtime = self._compiled_runtime_cache.get(runtime_key)
         if cached_runtime is None:

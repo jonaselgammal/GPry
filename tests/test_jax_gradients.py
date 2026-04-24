@@ -16,8 +16,7 @@ from sklearn.base import clone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gpry.gpr import GaussianProcessRegressor
-from gpry.jax_accel import JaxGPAccelerator
+from gpry.gpr import GaussianProcessRegressor, JaxGaussianProcessRegressor
 
 
 def make_gpr(kernel="RBF", n_dims=2, noise_fixed=True, use_jax=True, **kwargs):
@@ -67,10 +66,10 @@ class TestLMLGradient:
 
         theta = gpr.kernel_.theta
         # JAX gradient
-        lml_jax, grad_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(theta)
+        lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
         # sklearn gradient (via super())
         lml_sk, grad_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6,
@@ -88,9 +87,9 @@ class TestLMLGradient:
         fit_gpr(gpr, X, y)
 
         theta = gpr.kernel_.theta
-        lml_jax, grad_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(theta)
+        lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
         lml_sk, grad_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
@@ -106,9 +105,9 @@ class TestLMLGradient:
         fit_gpr(gpr, X, y)
 
         theta = gpr.kernel_.theta
-        lml_jax, grad_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(theta)
+        lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
         lml_sk, grad_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
@@ -124,9 +123,9 @@ class TestLMLGradient:
         fit_gpr(gpr, X, y, noise_level=0.2)
 
         theta = gpr.kernel_.theta
-        lml_jax, grad_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(theta)
+        lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
         lml_sk, grad_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
@@ -152,7 +151,7 @@ class TestLMLGradient:
 
         # Use a theta with reasonable length scales so the kernel is non-trivial
         theta = np.array([0.0, 0.5, 0.5])
-        _, grad_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(theta)
+        _, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
 
         # Finite difference gradient
         eps = 1e-5
@@ -162,8 +161,8 @@ class TestLMLGradient:
             theta_m = theta.copy()
             theta_p[i] += eps
             theta_m[i] -= eps
-            lml_p, _ = gpr._jax_accel.log_marginal_likelihood_with_grad(theta_p)
-            lml_m, _ = gpr._jax_accel.log_marginal_likelihood_with_grad(theta_m)
+            lml_p, _ = gpr.log_marginal_likelihood_with_grad(theta_p)
+            lml_m, _ = gpr.log_marginal_likelihood_with_grad(theta_m)
             grad_fd[i] = (lml_p - lml_m) / (2 * eps)
 
         np.testing.assert_allclose(grad_jax, grad_fd, rtol=1e-4, atol=1e-6)
@@ -187,7 +186,7 @@ class TestPredictGradient:
 
         x_test = rng.randn(1, 3)
         # JAX gradient
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test[0])
+        grad_jax = gpr.predict_mean_grad(x_test[0])
 
         # Numpy gradient (hand-coded kernel gradient_x)
         grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
@@ -205,7 +204,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(1, 2)
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test[0])
+        grad_jax = gpr.predict_mean_grad(x_test[0])
 
         grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
@@ -222,7 +221,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(1, 2)
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test[0])
+        grad_jax = gpr.predict_mean_grad(x_test[0])
 
         grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
@@ -243,7 +242,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = np.array([2.5, -1.3])
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test)
+        grad_jax = gpr.predict_mean_grad(x_test)
 
         # Finite difference
         eps = 1e-5
@@ -253,8 +252,8 @@ class TestPredictGradient:
             x_m = x_test.copy()
             x_p[i] += eps
             x_m[i] -= eps
-            mean_p = gpr._jax_accel.predict_mean(x_p[None, :])[0]
-            mean_m = gpr._jax_accel.predict_mean(x_m[None, :])[0]
+            mean_p = gpr.predict_mean(x_p[None, :])[0]
+            mean_m = gpr.predict_mean(x_m[None, :])[0]
             grad_fd[i] = (mean_p - mean_m) / (2 * eps)
 
         np.testing.assert_allclose(grad_jax, grad_fd, rtol=1e-3, atol=1e-5)
@@ -269,7 +268,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(2)
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test)
+        grad_jax = gpr.predict_mean_grad(x_test)
 
         # Finite difference
         eps = 1e-5
@@ -279,8 +278,8 @@ class TestPredictGradient:
             x_m = x_test.copy()
             x_p[i] += eps
             x_m[i] -= eps
-            mean_p = gpr._jax_accel.predict_mean(x_p[None, :])[0]
-            mean_m = gpr._jax_accel.predict_mean(x_m[None, :])[0]
+            mean_p = gpr.predict_mean(x_p[None, :])[0]
+            mean_m = gpr.predict_mean(x_m[None, :])[0]
             grad_fd[i] = (mean_p - mean_m) / (2 * eps)
 
         np.testing.assert_allclose(grad_jax, grad_fd, rtol=1e-4, atol=1e-6)
@@ -295,7 +294,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(2)
-        grad_jax = gpr._jax_accel.predict_std_grad(x_test)
+        grad_jax = gpr.predict_std_grad(x_test)
 
         # Finite difference
         eps = 1e-5
@@ -305,8 +304,8 @@ class TestPredictGradient:
             x_m = x_test.copy()
             x_p[i] += eps
             x_m[i] -= eps
-            std_p = gpr._jax_accel.predict_std(x_p[None, :])[0]
-            std_m = gpr._jax_accel.predict_std(x_m[None, :])[0]
+            std_p = gpr.predict_std_native(x_p[None, :])[0]
+            std_m = gpr.predict_std_native(x_m[None, :])[0]
             grad_fd[i] = (std_p - std_m) / (2 * eps)
 
         np.testing.assert_allclose(grad_jax, grad_fd, rtol=1e-3, atol=1e-6)
@@ -321,7 +320,7 @@ class TestPredictGradient:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(2)
-        grad_jax = gpr._jax_accel.predict_std_grad(x_test)
+        grad_jax = gpr.predict_std_grad(x_test)
 
         eps = 1e-5
         grad_fd = np.zeros(2)
@@ -330,8 +329,8 @@ class TestPredictGradient:
             x_m = x_test.copy()
             x_p[i] += eps
             x_m[i] -= eps
-            std_p = gpr._jax_accel.predict_std(x_p[None, :])[0]
-            std_m = gpr._jax_accel.predict_std(x_m[None, :])[0]
+            std_p = gpr.predict_std_native(x_p[None, :])[0]
+            std_m = gpr.predict_std_native(x_m[None, :])[0]
             grad_fd[i] = (std_p - std_m) / (2 * eps)
 
         np.testing.assert_allclose(grad_jax, grad_fd, rtol=1e-3, atol=1e-6)
@@ -416,7 +415,7 @@ class TestGPRGradientIntegration:
         theta = gpr.kernel_.theta
         lml, grad = gpr.log_marginal_likelihood(theta, eval_gradient=True)
         lml_sk, grad_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml, lml_sk, atol=1e-6)
@@ -465,16 +464,16 @@ class TestEdgeCases:
         x_test = rng.randn(5)
 
         # Mean gradient
-        grad_jax = gpr._jax_accel.predict_mean_grad(x_test)
+        grad_jax = gpr.predict_mean_grad(x_test)
         grad_kernel = gpr.kernel_.gradient_x(x_test, gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
         np.testing.assert_allclose(grad_jax, grad_np, rtol=1e-4, atol=1e-6)
 
         # LML gradient
-        _, grad_lml_jax = gpr._jax_accel.log_marginal_likelihood_with_grad(
+        _, grad_lml_jax = gpr.log_marginal_likelihood_with_grad(
             gpr.kernel_.theta)
         _, grad_lml_sk = super(
-            GaussianProcessRegressor, gpr
+            JaxGaussianProcessRegressor, gpr
         ).log_marginal_likelihood(gpr.kernel_.theta, eval_gradient=True,
                                   clone_kernel=True)
         np.testing.assert_allclose(grad_lml_jax, grad_lml_sk, rtol=1e-4, atol=1e-6)
@@ -491,8 +490,8 @@ class TestEdgeCases:
 
         # Test at a point very near a training point
         x_near = X[0] + 1e-8 * rng.randn(2)
-        grad_mean = gpr._jax_accel.predict_mean_grad(x_near)
-        grad_std = gpr._jax_accel.predict_std_grad(x_near)
+        grad_mean = gpr.predict_mean_grad(x_near)
+        grad_std = gpr.predict_std_grad(x_near)
 
         assert np.all(np.isfinite(grad_mean)), "Mean gradient has non-finite values"
         assert np.all(np.isfinite(grad_std)), "Std gradient has non-finite values"
@@ -507,12 +506,12 @@ class TestEdgeCases:
         fit_gpr(gpr, X, y)
 
         x_test = rng.randn(2)
-        mean, std, mean_grad, std_grad = gpr._jax_accel.predict_with_grads(x_test)
+        mean, std, mean_grad, std_grad = gpr.predict_with_grads(x_test)
 
-        mean_ref = gpr._jax_accel.predict_mean(x_test[None, :])[0]
-        std_ref = gpr._jax_accel.predict_std(x_test[None, :])[0]
-        mean_grad_ref = gpr._jax_accel.predict_mean_grad(x_test)
-        std_grad_ref = gpr._jax_accel.predict_std_grad(x_test)
+        mean_ref = gpr.predict_mean(x_test[None, :])[0]
+        std_ref = gpr.predict_std_native(x_test[None, :])[0]
+        mean_grad_ref = gpr.predict_mean_grad(x_test)
+        std_grad_ref = gpr.predict_std_grad(x_test)
 
         np.testing.assert_allclose(mean, mean_ref, atol=1e-10)
         np.testing.assert_allclose(std, std_ref, atol=1e-10)

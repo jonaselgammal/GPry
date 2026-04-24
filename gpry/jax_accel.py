@@ -992,8 +992,3 @@ class JaxRuntimeBundle:
             return _loglikelihood_fn
 
         return _build_jax_loglikelihood
-
-
-# Backward-compatible alias while callers are migrated to the explicit
-# runtime-bundle terminology.
-JaxGPAccelerator = JaxRuntimeBundle

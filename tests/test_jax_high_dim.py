@@ -124,9 +124,7 @@ def run_gpry(logLkl, bounds, true_mean, use_jax, label, seed=42, options=None):
         result = {
             "label": label,
             "use_jax": use_jax,
-            "jax_active": (gpr._jax_accel is not None and gpr._jax_accel.ready)
-                          if hasattr(gpr, '_jax_accel') and gpr._jax_accel is not None
-                          else False,
+            "jax_active": getattr(gpr, "native_backend_ready", False),
             "converged": runner.has_converged,
             "n_total": runner.surrogate.n_total,
             "n_regress": runner.surrogate.n_regress,

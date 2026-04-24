@@ -267,21 +267,26 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
         return self.array_contract.preferred_input
 
     @property
-    def runtime_bundle(self):
+    def native_backend_ready(self):
+        return False
+
+    def disable_native_acceleration(self):
+        self._runtime_enabled = False
+
+    def prime_hyperparameter_optimization(self):
         return None
 
-    @property
-    def _jax_accel(self):
-        """Backward-compatible alias for the JAX runtime bundle."""
-        return self.runtime_bundle
+    def fit_precompute_native(self):
+        return None
 
-    @_jax_accel.setter
-    def _jax_accel(self, bundle):
-        self._runtime_enabled = bundle is not None
+    def refresh_native_state(self):
+        return None
 
-    def disable_runtime_bundle(self):
-        """Disable the optional JAX runtime bundle for this GP instance."""
-        self._runtime_enabled = False
+    def log_marginal_likelihood_with_grad_native(self, theta):
+        raise NotImplementedError
+
+    def optimize_hyperparameters_native(self, hyperparameter_bounds, selected_starts):
+        raise NotImplementedError
 
     @property
     def supports_native_acquisition_optimization(self):
@@ -437,15 +442,9 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
                     "'fit_hyperparameters' kwarg must be bool|dict, but was "
                     f"{fit_hyperparameters}"
                 )
-            # Update JAX cached training data BEFORE hyperparameter optimization,
-            # so the JAX LML uses the current data (not stale data from previous fit)
-            runtime_bundle = self.runtime_bundle
-            if runtime_bundle is not None and runtime_bundle.ready:
-                alpha_val = float(np.atleast_1d(self.alpha).item()) \
-                    if np.ndim(self.alpha) == 0 else self.alpha
-                runtime_bundle.prime_fit_inputs(
-                    self.X_train_, self.y_train_, alpha_val
-                )
+            # Refresh backend-native cached training inputs before hyperopt.
+            if self.native_backend_ready:
+                self.prime_hyperparameter_optimization()
             self.log_marginal_likelihood_value_ = self._fit_hyperparameters(
                 **fit_hyperparameters
             )
@@ -457,66 +456,39 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
         # of actual query points
         # Alg. 2.1, page 19, line 2 -> L = cholesky(K + sigma^2 I)
         # NB: if we got here before returning, we *need* to do this.
-        jax_fit_ok = False
-        runtime_bundle = self.runtime_bundle
-        if runtime_bundle is not None and runtime_bundle.ready:
-            # Pure JAX path: compute L, V, alpha_ via JIT-compiled Cholesky
+        native_fit = self.fit_precompute_native()
+        if native_fit is not None:
             try:
-                # Extract current kernel parameters and update the runtime bundle.
-                kernel = self.kernel_
-                wn = 0.0
-                if hasattr(kernel, 'k1') and hasattr(kernel.k1, 'k1'):
-                    product_kernel = kernel.k1
-                    if hasattr(kernel.k2, 'noise_level'):
-                        wn = float(kernel.k2.noise_level)
-                else:
-                    product_kernel = kernel
-                osc = product_kernel.k1.constant_value
-                ls = np.atleast_1d(product_kernel.k2.length_scale)
-                alpha_val = (float(np.atleast_1d(self.alpha).item())
-                             if np.ndim(self.alpha) == 0 else self.alpha)
-                runtime_bundle.update_params(
-                    ls, osc, wn, alpha_val,
-                    X_train=self.X_train_, y_train=self.y_train_)
-                L_jax, V_jax, alpha_jax = runtime_bundle.fit_precompute()
-                # Store numpy copies for backward compatibility
-                self.L_ = np.asarray(L_jax)
-                self.V_ = np.asarray(V_jax)
-                self.alpha_ = np.asarray(alpha_jax)
-                runtime_bundle._ready = True
-                jax_fit_ok = True
+                L_native, V_native, alpha_native = native_fit
+                self.L_ = np.asarray(L_native)
+                self.V_ = np.asarray(V_native)
+                self.alpha_ = np.asarray(alpha_native)
+                return self
             except Exception:
                 pass  # Fall back to numpy Cholesky below
-        if not jax_fit_ok:
-            K = self.kernel_(self.X_train_)
-            K[np.diag_indices_from(K)] += self.alpha
-            try:
-                self.L_ = cholesky(K, lower=GPR_CHOLESKY_LOWER,
-                                   check_finite=False)
-                self.V_ = solve_triangular(
-                    self.L_, np.eye(self.L_.shape[0]), lower=True)
-            except np.linalg.LinAlgError as exc:
-                exc.args = (
-                    (
-                        f"The kernel, {self.kernel_}, is not returning a "
-                        "positive definite matrix. Try gradually increasing "
-                        "the 'alpha' parameter of your "
-                        "GaussianProcessRegressor estimator."
-                    ),
-                ) + exc.args
-                raise
-            # Alg 2.1, page 19, line 3 -> alpha = L^T \ (L \ y)
-            self.alpha_ = cho_solve(
-                (self.L_, GPR_CHOLESKY_LOWER),
-                self.y_train_,
-                check_finite=False,
-            )
-            # Update the runtime bundle with the latest fitted state.
-            if runtime_bundle is not None:
-                try:
-                    runtime_bundle.update_from_gpr(self)
-                except Exception:
-                    pass  # Silently fall back to numpy if JAX update fails
+        K = self.kernel_(self.X_train_)
+        K[np.diag_indices_from(K)] += self.alpha
+        try:
+            self.L_ = cholesky(K, lower=GPR_CHOLESKY_LOWER,
+                               check_finite=False)
+            self.V_ = solve_triangular(
+                self.L_, np.eye(self.L_.shape[0]), lower=True)
+        except np.linalg.LinAlgError as exc:
+            exc.args = (
+                (
+                    f"The kernel, {self.kernel_}, is not returning a "
+                    "positive definite matrix. Try gradually increasing "
+                    "the 'alpha' parameter of your "
+                    "GaussianProcessRegressor estimator."
+                ),
+            ) + exc.args
+            raise
+        self.alpha_ = cho_solve(
+            (self.L_, GPR_CHOLESKY_LOWER),
+            self.y_train_,
+            check_finite=False,
+        )
+        self.refresh_native_state()
         return self
 
     # Wrapper around log_marginal_likelihood to count the number of evaluations
@@ -530,21 +502,17 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
         falling back to sklearn's analytical gradients otherwise.
         """
         self.n_eval_loglike += 1
-        # JAX fast path for gradient computation
         if (eval_gradient
                 and theta is not None
-                and self.runtime_bundle is not None
-                and self.runtime_bundle.ready
+                and self.native_backend_ready
                 and hasattr(self, "X_train_")):
             try:
-                # Set theta on kernel so it's consistent
                 if not clone_kernel:
                     self.kernel_.theta = theta
-                lml, grad = self.runtime_bundle.log_marginal_likelihood_with_grad(
-                    theta)
+                lml, grad = self.log_marginal_likelihood_with_grad_native(theta)
                 return lml, grad
             except Exception:
-                pass  # Fall back to sklearn
+                pass
         return super().log_marginal_likelihood(
             theta, eval_gradient=eval_gradient, clone_kernel=clone_kernel)
 
@@ -853,23 +821,17 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
                 break
         self.last_hyperopt_num_starts = len(selected_starts)
 
-        # JAX hyperopt path: use jaxopt.LBFGSB with autodiff gradients
-        runtime_bundle = self.runtime_bundle
-        if runtime_bundle is not None and runtime_bundle.ready:
+        if self.native_backend_ready:
             try:
-                theta_opt, neg_lml = \
-                    runtime_bundle.optimize_hyperparameters(
-                        bounds=hyperparameter_bounds,
-                        theta_candidates=selected_starts,
-                        rng=self._rng,
-                    )
+                theta_opt, neg_lml = self.optimize_hyperparameters_native(
+                    hyperparameter_bounds, selected_starts
+                )
                 self.kernel_.theta = theta_opt
                 self._fitted = True
                 self.L_, self.V_, self.alpha_ = None, None, None
                 return -neg_lml
             except Exception:
-                pass  # Fall back to scipy path below
-        # Scipy path (original)
+                pass
         optima = []
         for theta_initial in selected_starts:
             # Run the optimizer!
@@ -971,16 +933,11 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
                 "Mean grad and std grad not implemented \
                 for n_samples > 1"
             )
-        # JAX fast path: already fitted, runtime bundle ready.
-        runtime_bundle = self.runtime_bundle
-        if (runtime_bundle is not None
-                and runtime_bundle.ready
+        if (self.native_backend_ready
                 and hasattr(self, "X_train_")):
             if return_mean_grad:
-                # JAX auto-diff for predict gradients (single point only)
                 x = X[0]
-                mean, std, grad_mean, grad_std = \
-                    runtime_bundle.predict_with_grads(x)
+                mean, std, grad_mean, grad_std = self.predict_with_grads(x)
                 y_mean = np.array([mean])
                 return_values = [y_mean]
                 if return_std:
@@ -991,10 +948,10 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
                     return_values.append(grad_std)
                 return return_values
             elif return_std:
-                y_mean_j, y_std_j = runtime_bundle.predict_mean_std_jax(X)
+                y_mean_j, y_std_j = self.predict_native(X, return_std=True)
                 return [np.asarray(y_mean_j), np.asarray(y_std_j)]
             else:
-                y_mean_j = runtime_bundle.predict_mean_jax(X)
+                y_mean_j = self.predict_native(X, return_std=False)
                 return [np.asarray(y_mean_j)]
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
@@ -1081,14 +1038,9 @@ class BaseGaussianProcessRegressor(sk_GPR, ABC):
             Only returned when return_std is True.
         """
         self.n_eval += len(X)
-        # JAX fast path
-        runtime_bundle = self.runtime_bundle
-        if (runtime_bundle is not None
-                and runtime_bundle.ready
+        if (self.native_backend_ready
                 and hasattr(self, "X_train_")):
-            if runtime_bundle is self:
-                return np.asarray(self.predict_std_native(X))
-            return runtime_bundle.predict_std(X)
+            return np.asarray(self.predict_std_native(X))
         if validate:
             if self.kernel is None or self.kernel.requires_vector_input:
                 dtype, ensure_2d = "numeric", True

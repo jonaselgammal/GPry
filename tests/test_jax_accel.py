@@ -24,7 +24,7 @@ from sklearn.base import clone
 from gpry.gpr import GaussianProcessRegressor
 from gpry.kernels import RBF, Matern, ConstantKernel as C
 from gpry.jax_accel import (
-    JaxGPAccelerator,
+    JaxRuntimeBundle,
     _rbf_kernel_matrix,
     _matern52_kernel_matrix,
     _matern32_kernel_matrix,
@@ -254,15 +254,15 @@ class TestPrecompute:
 # Test accelerator against GPry GPR
 # ---------------------------------------------------------------------------
 
-class TestJaxGPAccelerator:
-    """Test the JaxGPAccelerator against GPry's GaussianProcessRegressor."""
+class TestJaxRuntimeBundle:
+    """Test the JaxRuntimeBundle against GPry's GaussianProcessRegressor."""
 
     def test_accelerator_predict_mean_rbf(self, gpry_gpr_rbf, simple_data_2d):
         """JAX accelerator mean should match GPR mean (RBF)."""
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
         assert accel.ready
 
@@ -281,7 +281,7 @@ class TestJaxGPAccelerator:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         # GPR predict
@@ -298,7 +298,7 @@ class TestJaxGPAccelerator:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         y_mean, y_std = accel.predict_mean_std(X_test)
@@ -313,7 +313,7 @@ class TestJaxGPAccelerator:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_matern
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
         assert accel.ready
 
@@ -330,7 +330,7 @@ class TestJaxGPAccelerator:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_matern
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         _, y_std_gpr = gpr.predict(X_test, return_std=True, validate=False)
@@ -346,7 +346,7 @@ class TestJaxGPAccelerator:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         y_std_gpr = gpr.predict_std(X_test, validate=False)
@@ -374,7 +374,7 @@ class TestJaxGPAccelerator:
         )
         fit_gpr(gpr, X_train, y_train)
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         gpr_mean_result = gpr.predict(X_test, return_std=False, validate=False)
@@ -399,7 +399,7 @@ class TestNumericalStability:
         X_train, _, _ = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         # Predict at training points
@@ -414,7 +414,7 @@ class TestNumericalStability:
         """Predictions far from training should have high variance."""
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         X_far = np.array([[100.0, 100.0], [-100.0, -100.0]])
@@ -427,7 +427,7 @@ class TestNumericalStability:
         """Single point prediction should work."""
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         X_single = np.array([[1.0, 2.0]])
@@ -445,7 +445,7 @@ class TestNumericalStability:
         """Large batch prediction should work without issues."""
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         rng = np.random.RandomState(99)
@@ -462,7 +462,7 @@ class TestNumericalStability:
         """Variance should never be negative."""
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         rng = np.random.RandomState(42)
@@ -485,7 +485,7 @@ class TestPerformance:
         _, _, X_test = simple_data_2d
         gpr = gpry_gpr_rbf
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         # Warmup JIT
@@ -538,7 +538,7 @@ class TestEndToEnd:
             random_state=42,
         )
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
 
         # Simulate iterative fitting (like GPry's active learning loop)
         n_init = 10
@@ -597,7 +597,7 @@ class TestEndToEnd:
         )
         fit_gpr(gpr, X_train, y_train)
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         # Test on a grid around the mean
@@ -641,7 +641,7 @@ class TestEndToEnd:
         )
         fit_gpr(gpr, X_train, y_train, noise_level=0.5)
 
-        accel = JaxGPAccelerator()
+        accel = JaxRuntimeBundle()
         accel.update_from_gpr(gpr)
 
         if accel.ready:

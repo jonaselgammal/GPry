@@ -16,6 +16,7 @@ from scipy.stats import multivariate_normal
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from gpry.run import Runner
+from gpry.gpr import JaxGaussianProcessRegressor
 
 
 def test_full_runner_jax_numpy_consistency():
@@ -42,13 +43,13 @@ def test_full_runner_jax_numpy_consistency():
 
         gpr = runner.surrogate.gpr
         print(f"JAX enabled: {gpr.use_jax}")
-        print(f"JAX ready: {gpr._jax_accel.ready if gpr._jax_accel else False}")
+        print(f"JAX ready: {gpr.native_backend_ready}")
         print(f"Kernel: {gpr.kernel_}")
         print(f"N training: {gpr.X_train_.shape[0]}")
 
         assert gpr.use_jax, "JAX should be enabled"
-        assert gpr._jax_accel is not None and gpr._jax_accel.ready, \
-            "JAX accelerator should be ready"
+        assert isinstance(gpr, JaxGaussianProcessRegressor)
+        assert gpr.native_backend_ready, "JAX backend should be ready"
 
         # Compare JAX vs numpy predictions on a grid
         rng = np.random.RandomState(42)
@@ -60,10 +61,8 @@ def test_full_runner_jax_numpy_consistency():
         y_mean_jax = gpr.predict(X_test_prepro, return_std=True, validate=False)
 
         # Disable JAX and get numpy predictions
-        accel_backup = gpr._jax_accel
-        gpr._jax_accel = None
+        gpr.disable_native_acceleration()
         y_mean_np = gpr.predict(X_test_prepro, return_std=True, validate=False)
-        gpr._jax_accel = accel_backup
 
         # They should match very closely
         np.testing.assert_allclose(
@@ -81,10 +80,8 @@ def test_full_runner_jax_numpy_consistency():
         print(f"Max std diff (JAX vs numpy): {max_std_diff:.2e}")
 
         # Also test predict_std
-        y_std_jax = gpr.predict_std(X_test_prepro, validate=False)
-        gpr._jax_accel = None
+        y_std_jax = y_mean_jax[1]
         y_std_np = gpr.predict_std(X_test_prepro, validate=False)
-        gpr._jax_accel = accel_backup
 
         np.testing.assert_allclose(
             y_std_jax, y_std_np, atol=1e-6,
@@ -131,7 +128,7 @@ def test_jax_active_during_acquisition():
         print(f"Training points: {gpr.X_train_.shape[0]}")
 
         # Verify accelerator is ready and kernel was detected
-        assert gpr._jax_accel.ready, "JAX accelerator should be ready after run"
+        assert gpr.native_backend_ready, "JAX backend should be ready after run"
 
         print("JAX active during acquisition test PASSED!")
 
@@ -181,21 +178,6 @@ def test_performance_comparison():
         result = gpr.predict(X_test, return_std=True, validate=False)
     t_jax = time.time() - t_start
 
-    # Disable JAX and time numpy
-    gpr_accel = gpr._jax_accel
-    gpr._jax_accel = None
-    t_start = time.time()
-    for _ in range(n_repeats):
-        result = gpr.predict(X_test, return_std=True, validate=False)
-    t_numpy = time.time() - t_start
-    gpr._jax_accel = gpr_accel
-
-    speedup = t_numpy / t_jax
-    print(f"\nPerformance ({n_train} train, {len(X_test)} test, {n_dims}D, {n_repeats} repeats):")
-    print(f"  NumPy: {t_numpy/n_repeats*1000:.2f} ms/call")
-    print(f"  JAX:   {t_jax/n_repeats*1000:.2f} ms/call")
-    print(f"  Speedup: {speedup:.1f}x")
-
     # Also test predict_std only
     _ = gpr.predict_std(X_test, validate=False)  # warmup
     t_start = time.time()
@@ -203,12 +185,23 @@ def test_performance_comparison():
         _ = gpr.predict_std(X_test, validate=False)
     t_jax_std = time.time() - t_start
 
-    gpr._jax_accel = None
+    # Disable native acceleration and time numpy/scipy path
+    gpr.disable_native_acceleration()
+    t_start = time.time()
+    for _ in range(n_repeats):
+        result = gpr.predict(X_test, return_std=True, validate=False)
+    t_numpy = time.time() - t_start
+
     t_start = time.time()
     for _ in range(n_repeats):
         _ = gpr.predict_std(X_test, validate=False)
     t_numpy_std = time.time() - t_start
-    gpr._jax_accel = gpr_accel
+
+    speedup = t_numpy / t_jax
+    print(f"\nPerformance ({n_train} train, {len(X_test)} test, {n_dims}D, {n_repeats} repeats):")
+    print(f"  NumPy: {t_numpy/n_repeats*1000:.2f} ms/call")
+    print(f"  JAX:   {t_jax/n_repeats*1000:.2f} ms/call")
+    print(f"  Speedup: {speedup:.1f}x")
 
     speedup_std = t_numpy_std / t_jax_std
     print(f"\n  predict_std only:")
@@ -256,14 +249,12 @@ def test_various_problem_sizes():
         gpr.fit(X_train, y_train, validate=False)
 
         # JAX predictions
-        y_mean_jax, y_std_jax = gpr._jax_accel.predict_mean_std(X_test)
+        y_mean_jax, y_std_jax = gpr.predict_native(X_test, return_std=True)
 
         # NumPy predictions
-        gpr._jax_accel_bak = gpr._jax_accel
-        gpr._jax_accel = None
+        gpr.disable_native_acceleration()
         result = gpr.predict(X_test, return_std=True, validate=False)
         y_mean_np, y_std_np = result[0], result[1]
-        gpr._jax_accel = gpr._jax_accel_bak
 
         max_mean_err = np.max(np.abs(y_mean_jax - y_mean_np))
         max_std_err = np.max(np.abs(y_std_jax - y_std_np))

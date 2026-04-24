@@ -27,11 +27,10 @@ X_test = rng.randn(n_predict, n_dim)
 # Fit JAX GP
 gpr_jax = make_gpr(n_dim, True)
 gpr_jax.fit(X_train, y_train, validate=False)
-accel = gpr_jax._jax_accel
 
 # Warmup
-_ = accel.predict_mean_std_jax(X_test)
-_ = accel.predict_mean_std(X_test)
+_ = gpr_jax.predict_native(X_test, return_std=True)
+_ = gpr_jax.predict(X_test, return_std=True)
 
 # Already-JAX array test
 X_test_jax = jnp.array(X_test, dtype=jnp.float64)
@@ -41,7 +40,7 @@ print(f"n_train={n_train}, n_predict={n_predict}, n_dim={n_dim}, {n_reps} reps\n
 # 1. Raw JAX predict (no conversion)
 t0 = time.perf_counter()
 for _ in range(n_reps):
-    m, s = accel.predict_mean_std_jax(X_test_jax)
+    m, s = gpr_jax.predict_native(X_test_jax, return_std=True)
     m.block_until_ready()
 t_raw_jax = (time.perf_counter() - t0) / n_reps * 1000
 print(f"JAX predict (JAX input):     {t_raw_jax:.3f} ms")
@@ -49,7 +48,7 @@ print(f"JAX predict (JAX input):     {t_raw_jax:.3f} ms")
 # 2. JAX predict with numpy->jax conversion
 t0 = time.perf_counter()
 for _ in range(n_reps):
-    m, s = accel.predict_mean_std_jax(X_test)
+    m, s = gpr_jax.predict_native(X_test, return_std=True)
     m.block_until_ready()
 t_jax_conv = (time.perf_counter() - t0) / n_reps * 1000
 print(f"JAX predict (np input):      {t_jax_conv:.3f} ms  (+{t_jax_conv - t_raw_jax:.3f} ms conversion)")
@@ -57,7 +56,7 @@ print(f"JAX predict (np input):      {t_jax_conv:.3f} ms  (+{t_jax_conv - t_raw_
 # 3. JAX predict returning numpy (what GPR.predict does)
 t0 = time.perf_counter()
 for _ in range(n_reps):
-    m, s = accel.predict_mean_std(X_test)
+    m, s = gpr_jax.predict(X_test, return_std=True)
 t_jax_np = (time.perf_counter() - t0) / n_reps * 1000
 print(f"JAX predict (np in+out):     {t_jax_np:.3f} ms  (+{t_jax_np - t_jax_conv:.3f} ms jax->np)")
 

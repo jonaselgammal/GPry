@@ -434,12 +434,15 @@ def mc_sample_from_gp_ns(
         else:
             raise excpt
     sampler.set_precision(**(sampler_options or {}))
-    # For BlackJAX: attach the JAX runtime bundle to logp for a fully-JAX pipeline.
     if isinstance(sampler, nsint.InterfaceBlackJAX):
-        runtime_bundle = getattr(surrogate.gpr, "runtime_bundle", None)
-        if runtime_bundle is not None and runtime_bundle.ready:
-            logp._runtime_bundle = runtime_bundle
-            logp._jax_accel = runtime_bundle
+        builder = surrogate.gpr.make_ns_loglikelihood_builder(
+            preprocessing_y=surrogate.preprocessing_y,
+            clip_factor=surrogate.clipper.clip_factor,
+            y_clip_min=float(surrogate._y[surrogate._i_regress].min()),
+            y_clip_max=float(surrogate._y[surrogate._i_regress].max()),
+        )
+        if builder is not None:
+            logp._jax_loglikelihood_builder = builder
     if not run:
         return sampler
     # Run sampler

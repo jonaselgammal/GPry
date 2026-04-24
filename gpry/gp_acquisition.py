@@ -1887,8 +1887,8 @@ class RankedPool:
         self.surrogate_cond[i] = deepcopy(self._surrogate)
         # These temporary conditioned models are only used for KB ranking. Keeping
         # them on the numpy path avoids repeated JAX recompilation in the ranking loop.
-        if hasattr(self.surrogate_cond[i].gpr, "disable_runtime_bundle"):
-            self.surrogate_cond[i].gpr.disable_runtime_bundle()
+        if hasattr(self.surrogate_cond[i].gpr, "disable_native_acceleration"):
+            self.surrogate_cond[i].gpr.disable_native_acceleration()
         X_append = self.X[: i + 1]
         if self._transformed_input:
             X_append = self.surrogate_cond[i].preprocessing_X.inverse_transform(X_append)

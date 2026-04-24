@@ -6,7 +6,7 @@ from sklearn.base import clone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gpry.gpr import GaussianProcessRegressor
+from gpry.gpr import GaussianProcessRegressor, JaxGaussianProcessRegressor
 from gpry.preprocessing import DummyPreprocessor
 
 
@@ -30,7 +30,7 @@ def make_gpr(dim=2, random_state=0):
     )
 
 
-def test_runtime_bundle_alias_matches_legacy_accessor():
+def test_jax_backend_exposes_native_contract():
     rng = np.random.RandomState(0)
     X = rng.randn(25, 2)
     y = np.sin(X[:, 0]) + 0.1 * rng.randn(25)
@@ -38,12 +38,12 @@ def test_runtime_bundle_alias_matches_legacy_accessor():
     gpr = make_gpr()
     fit_gpr(gpr, X, y)
 
-    assert gpr.runtime_bundle is gpr._jax_accel
-    assert gpr.runtime_bundle is not None
-    assert gpr.runtime_bundle.ready
+    assert isinstance(gpr, JaxGaussianProcessRegressor)
+    assert gpr.native_backend_ready
+    assert gpr.array_contract.preferred_input == "jax"
 
 
-def test_disabling_runtime_bundle_preserves_numpy_predictions():
+def test_disabling_native_acceleration_preserves_numpy_predictions():
     rng = np.random.RandomState(1)
     X = rng.randn(30, 2)
     y = np.cos(X[:, 0] - X[:, 1]) + 0.05 * rng.randn(30)
@@ -53,23 +53,20 @@ def test_disabling_runtime_bundle_preserves_numpy_predictions():
     fit_gpr(gpr, X, y)
 
     mean_jax, std_jax = gpr.predict(X_test, return_std=True, validate=False)
-    gpr.disable_runtime_bundle()
+    gpr.disable_native_acceleration()
     mean_np, std_np = gpr.predict(X_test, return_std=True, validate=False)
 
     np.testing.assert_allclose(mean_jax, mean_np, atol=1e-8)
     np.testing.assert_allclose(std_jax, std_np, atol=1e-6)
 
 
-def test_runtime_bundle_builds_transformed_loglikelihood():
+def test_jax_backend_builds_transformed_loglikelihood():
     X = np.array([[0.0, 0.0], [0.5, -0.5], [1.0, 1.0], [-1.0, 0.2]])
     y = np.array([-0.1, -0.2, -0.3, -0.4])
     gpr = make_gpr()
     fit_gpr(gpr, X, y)
 
-    bundle = gpr.runtime_bundle
-    assert bundle is not None and bundle.ready
-
-    builder = bundle.build_surrogate_loglikelihood_builder(
+    builder = gpr.make_ns_loglikelihood_builder(
         preprocessing_y=DummyPreprocessor,
         clip_factor=None,
         y_clip_min=float(y.min()),
