@@ -1383,9 +1383,11 @@ class Runner:
             if not finished:
                 raise RuntimeError(
                     f"The desired number of finite initial samples ({n_still_needed}) "
-                    f"has not been reached after {len(X_init)} evaluations. Try "
-                    "increasing the amount of max initial evaluations `max_initial`, or "
-                    "decreasing the volume of the prior."
+                    f"has not been reached after {len(X_init)} evaluations. Possible "
+                    "solutions: (1) increase the amount of max initial evaluations "
+                    "`max_initial`; (2) decrease the volume of the prior; (3) provide as "
+                    "`ref_bounds` tighter bounds from within which to draw the initial "
+                    "evaluations."
                 )
             # Append the initial samples to the surrogate
             with TimerCounter(self.surrogate) as timer_fit:
