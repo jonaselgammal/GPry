@@ -949,7 +949,8 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         the dimension of the parameter space used for auto-scaling the zeta
 
     zeta_scaling: double, default=0.85
-        the scaling power of the zeta with dimension, if auto-scaled
+        the scaling power of the zeta with dimension, if auto-scaled. Increasing it
+        promotes exploration.
     """
 
     def __init__(
@@ -1124,7 +1125,8 @@ class LogExp(BaseLogExp):
         the dimension of the parameter space used for auto-scaling the zeta
 
     zeta_scaling: double, default=0.85
-        the scaling power of the zeta with dimension, if auto-scaled
+        the scaling power of the zeta with dimension, if auto-scaled. Increasing it
+        promotes exploration.
     """
 
     @staticmethod
@@ -1180,7 +1182,8 @@ class NonlinearLogExp(BaseLogExp):
         the dimension of the parameter space used for auto-scaling the zeta
 
     zeta_scaling: double, default=0.85
-        the scaling power of the zeta with dimension, if auto-scaled
+        the scaling power of the zeta with dimension, if auto-scaled. Increasing it
+        promotes exploration.
     """
 
     @staticmethod

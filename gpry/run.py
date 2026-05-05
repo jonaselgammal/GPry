@@ -352,8 +352,7 @@ class Runner:
             self._construct_initial_proposer(initial_proposer)
             if mpi.is_main_process:
                 self._construct_convergence_criterion(
-                    convergence_criterion,
-                    acq_has_mc=isinstance(self.acquisition, gprygpacqs.NORA),
+                    convergence_criterion, acquisition=self.acquisition,
                 )
             self._share_convergence_from_main()
             self._construct_mc_options(mc)
@@ -541,7 +540,7 @@ class Runner:
                 f" Got {initial_proposer}"
             )
 
-    def _construct_convergence_criterion(self, convergence_criterion, acq_has_mc=False):
+    def _construct_convergence_criterion(self, convergence_criterion, acquisition):
         """Constructs or passes the convergence criterion."""
         # Special case: False = DontConverge
         if convergence_criterion is False:
@@ -550,8 +549,12 @@ class Runner:
         # Defaults:
         if convergence_criterion is None:
             convergence_criterion = {"CorrectCounter": {"policy": "s"}}
+            acq_has_mc=isinstance(acquisition, gprygpacqs.NORA),
             if acq_has_mc:
-                convergence_criterion["GaussianKL"] = {"policy": "s"}
+                convergence_criterion["GaussianKL"] = {
+                    "policy": "s",
+                    "limit_times": getattr(acquisition, "mc_every", self.d)
+                }
                 convergence_criterion["TrainAlignment"] = {"policy": "n"}
         if isinstance(convergence_criterion, Mapping):
             # In principle, deepcopy, but keep values that are ConvergenceCriterion as is!
