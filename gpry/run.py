@@ -452,7 +452,7 @@ class Runner:
 
     def _construct_gp_acquisition(self, gp_acquisition):
         """Constructs or passes the GPAcquisition instance."""
-        default_gq_acquisition = "BatchOptimizer"
+        default_gq_acquisition = "NORA"
         if isinstance(gp_acquisition, GenericGPAcquisition):
             self.acquisition = gp_acquisition
         elif isinstance(gp_acquisition, (Mapping, str, type(None))):
@@ -986,6 +986,8 @@ class Runner:
             with TimerCounter(self.surrogate) as timer_acq:
                 force_resample = self.resamples > 0
                 try:
+                    # TODO: since trust bounds are passed here, consider disabling
+                    #       the trust_bounds classifier for this step to save time.
                     new_X, y_pred, acq_vals = self.acquisition.multi_add(
                         self.surrogate,
                         n_points=self.n_points_per_acq,

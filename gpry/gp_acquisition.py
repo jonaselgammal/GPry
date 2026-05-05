@@ -834,7 +834,7 @@ class NORA(GenericGPAcquisition):
         return X_mc, y_mc, None, w_mc
 
     def _do_mc_sample_ultranest(self, surrogate, bounds=None, rng=None):
-        # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
+
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).

@@ -987,7 +987,7 @@ def plot_trace(
         transform=axes[1].transAxes,
         **scales_kwargs,
     )
-    # NEXT: parameters plots
+    # Single parameters plots
     for i, p in enumerate(truth.params):
         label = truth.labels[i] if truth.labels else p
         ax = axes[i + 2]
