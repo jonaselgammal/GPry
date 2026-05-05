@@ -356,7 +356,7 @@ class SurrogateModel:
     @property
     def _i_finite_y(self):
         """
-        Indices of the elements in the training set whole log-posterior has been
+        Indices of the elements in the training set whose log-posterior has been
         classified as non-finite.
 
         NB: Intentionally separated from ``self._i_regress`` since there may be finite
@@ -730,7 +730,7 @@ class SurrogateModel:
         # NB: which points are finite does not change after classifier is refit (as long
         #     as the y-preprocessor is a linear transf.), so we can select them now.
         if self.infinities_classifier is None:
-            self._i_regress = self._i_y_sorted.copy()
+            self._i_regress = np.arange(len(self._y))
         else:
             # The point of this: select points early, even before fitting preprocessors!
             # precisely because we need this selection to fit the preprocessors!
@@ -741,8 +741,12 @@ class SurrogateModel:
             else:  # first call, preprocessors not fit yet.
                 use_y = self._y
             self._i_y_sorted = np.argsort(use_y)
-            self._i_regress = self.infinities_classifier._i_finite_y_prefit(
-                use_y, i_sorted=self._i_y_sorted, validate=False
+            # To keep track of the order of appeding of samples, we sort self._i_regress
+            # (the infinities classifier returns y-sorting indices)
+            self._i_regress = np.sort(
+                self.infinities_classifier._i_finite_y_prefit(
+                    use_y, i_sorted=self._i_y_sorted, validate=False
+                )
             )
         nstd_calculator = None
         if fit_preprocessors:
@@ -757,7 +761,6 @@ class SurrogateModel:
         self._X_ = self.preprocessing_X.transform(self._X)
         self._y_ = self.preprocessing_y.transform(self._y)
         # The transformed noise level is always an array if noise is not in the kernel
-        noise_level_upd = self._noise_level
         self._noise_level_ = self.preprocessing_y.transform_scale(self._noise_level)
         # 2. Fit the classifiers: SVM in the transformed space, and trust region
         if self.infinities_classifier is None:
@@ -771,16 +774,18 @@ class SurrogateModel:
                     i_sorted=self._i_y_sorted,
                     validate=False,
                 )
-            else:  # there is a classifier, but are not fitting it
+            elif validate:  # there is a classifier, but we are not fitting it
                 i_finite_predict = self.infinities_classifier.i_finite_y(
                     self._y_, i_sorted=self._i_y_sorted, validate=False
                 )
-            assert set(self._i_regress) == set(i_finite_predict), (
-                "Infinities classifier miss-classified at least 1 point."
-            )
-        # Get number of newly added finite points -- not trivial
+            if validate:
+                # NB: self._i_regress: appending order; i_finite_predict: y-ascending
+                assert set(self._i_regress) == set(i_finite_predict), (
+                    "Infinities classifier miss-classified at least 1 point."
+                )
+        # Get number of newly added finite points -- relies on self._i_regress sorted.
         self.n_last_appended_finite = len(self._i_regress) - np.searchsorted(
-            i_finite_predict, self.n_total - self.n_last_appended
+            self._i_regress, self.n_total - self.n_last_appended
         )
         # 3. Re-fit the GPR in the transformed space, and maybe hyperparameters
         # If all added values are infinite there's no need to refit the GPR,

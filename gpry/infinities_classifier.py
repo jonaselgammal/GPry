@@ -268,7 +268,7 @@ class InfinitiesClassifiers:
         -------
         i_finite : array-like int
             Indices of elements in ``y`` classified as "finite" according to the
-            threshold.
+            threshold, in sorting order.
         """
         use_infclass = self.get_classifier_min_threshold(ignore)
         if use_infclass is None:
@@ -308,7 +308,7 @@ class InfinitiesClassifiers:
         -------
         i_finite : array-like int
             Indices of elements in ``y`` classified as "finite" according to the
-            threshold.
+            threshold, in sorting order.
         """
         use_infclass = self.get_classifier_min_threshold(ignore)
         if use_infclass is None:
@@ -611,7 +611,7 @@ class ThresholdClassifier:
             are selected as "finite". Must be positive, can be ``np.inf``.
 
         is_abs : bool (default: False)
-            If True, the threshold is understood as absolute, instead of a delte with
+            If True, the threshold is understood as absolute, instead of a delta with
             respect to the max value in ``y``.
 
         keep_min : int, optional
