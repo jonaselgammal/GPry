@@ -586,11 +586,11 @@ class GaussianKL(ConvergenceCriterion):
 class GaussianKLTrain(GaussianKL):
     """
     This criterion is not aimed at estimating convergence, but at discarding cases in
-    which a MC sample from the surrogate model (the last one obtained by the acquisition step, if it
-    exists, otherwise computed on the fly) would not sample the mode mapped by the
-    training set, but instead some overshooting or large baseline plateau. It compares the
-    Gaussian approximation of the last MC sample by the acquisition step with the mean and
-    covariance matrix computed from the training set using probabilities as weights.
+    which a MC sample from the surrogate model (the last one obtained by the acquisition
+    step, if it exists, otherwise computed on the fly) would not sample the mode mapped by
+    the training set, but instead some overshooting or large baseline plateau. It compares
+    the Gaussian approximation of the last MC sample by the acquisition step with the mean
+    and covariance matrix computed from the training set using probabilities as weights.
 
     Since its a check in the current iteration, by default it is enough for this criterion
     to be satisfied in the last step, and with a high tolerance, since it affects extreme
@@ -685,9 +685,9 @@ class GaussianKLTrain(GaussianKL):
 class TrainAlignment(GaussianKL):
     """
     This criterion is not aimed at estimating convergence, but at discarding cases in
-    which a MC sample from the surrogate model (the last one obtained by the acquisition step, if it
-    exists, otherwise computed on the fly) would not sample the mode mapped by the
-    training set, but instead some overshooting or large baseline plateau.
+    which a MC sample from the surrogate model (the last one obtained by the acquisition
+    step, if it exists, otherwise computed on the fly) would not sample the mode mapped by
+    the training set, but instead some overshooting or large baseline plateau.
 
     It computes the minimum central confidence level of the mean of the training set with
     respect to a Gaussian approximation of the surrogate posterior.
