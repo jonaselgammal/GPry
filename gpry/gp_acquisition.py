@@ -581,32 +581,6 @@ class NORA(GenericGPAcquisition):
         Bounds in which to optimize the acquisition function,
         assumed to be of shape (d,2) for d dimensional prior
 
-    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
-        Acquisition function to maximize/minimize. If none is given the
-        `LogExp` acquisition function will be used. Can also be a dictionary with the name
-        of the acquisition function as the single key, and as value a dict of its
-        arguments.
-
-    mc_every : int
-        If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
-        otherwise, recomputing y and sigma with the new surrogate model.
-
-    nlive_per_training: int
-        live points per sample in the current training set.
-        Not recommended to decrease it.
-
-    nlive_max: int
-        live points max cap
-
-    num_repeats: int
-        length of slice-chains
-
-    precision_criterion_target: float
-        Cap on precision criterion of Nested Sampling
-
-    nprior_per_nlive: int
-        Number of initial samples times dimension.
-
     preprocessing_X : X-preprocessor, Pipeline_X, optional (default: None)
         Single preprocessor or pipeline of preprocessors for X. Preprocessing
         makes sense if the scales along the different dimensions are vastly
@@ -618,6 +592,57 @@ class NORA(GenericGPAcquisition):
         Level of verbosity. 3 prints Infos, Warnings and Errors, 2
         Warnings and Errors, and 1 only Errors. Should be set to 2 or 3 if
         problems arise.
+
+    acq_func : GPry Acquisition Function, dict, optional (default: "LogExp")
+        Acquisition function to maximize/minimize. If none is given the
+        `LogExp` acquisition function will be used. Can also be a dictionary with the name
+        of the acquisition function as the single key, and as value a dict of its
+        arguments.
+
+    sampler : str, optional (default: None)
+        Which nested sampler to use for exploration: ``polychord``, ``ultranest``,
+        ``nessai``. If left unspecified, PolyChord will be used if available, otherwise
+        UltraNest. For uniform sampling within prior bounds, for tests, use ``uniform``.
+
+    mc_every : int
+        If >1, only calls the MC sampler every `mc_steps`, and reuses previous X
+        otherwise, recomputing ``y`` and ``sigma`` with the new surrogate model.
+        ``d``-dimensional notation can be used (e.g. ``2d`` for once every
+        twice-the-dimensionality iterations).
+
+    nlive_per_training : int
+        live points per sample in the current training set.
+        Not recommended to decrease it. ``d``-dimensional notation can be used.
+
+    nlive_max : int
+        live points max cap. ``d``-dimensional notation can be used.
+
+    num_repeats : int
+        length of slice-chains for the PolyChord sampler. ``d``-dimensional notation can
+        be used.
+
+    precision_criterion_target : float
+        Cap on precision criterion of Nested Sampling.
+
+    nprior_per_nlive : int
+        Number of initial samples times dimension. ``d``-dimensional notation can be used.
+
+    max_ncalls : int, optional (default: None)
+        Total number of calls of the surrogate model allowed during the sampler run.
+        ``d``-dimensional notation can be used.
+
+    rank_method : str (default: "single sort acq")
+        Ranking method used on the MC samples to extract candidates. For possible values
+        check the documentation of :class:`gq_acquisition.RankedPool`.
+
+    rank_merge_method : str (default: "bulk")
+        When running more than one MPI processes, ranking method used to merge the
+        individual ranked pools. For possible values check the documentation of
+        :class:`gq_acquisition.RankedPool`.
+
+    tmpdir : str, optional (default: None)
+        Folder where to store the results of the sampler chains, if they want to be kept
+        for further tests. If unspecified, a temporary folder, managed by the OS, is used.
 
     Attributes
     ----------
@@ -643,6 +668,8 @@ class NORA(GenericGPAcquisition):
         precision_criterion_target=0.01,
         nprior_per_nlive=10,
         max_ncalls=None,
+        rank_method="single sort acq",
+        rank_merge_method="bulk",
         tmpdir=None,
     ):
         super().__init__(
@@ -687,6 +714,8 @@ class NORA(GenericGPAcquisition):
         self._X_mc_reweight, self._y_mc_reweight = None, None
         self._sigma_y_mc_reweight, self._w_mc_reweight = None, None
         self.is_last_mc_reweighted = None
+        self.rank_method = rank_method
+        self.rank_merge_method = rank_merge_method
         self.pool = None
         self._acq_mc = None
 
@@ -1152,36 +1181,9 @@ class NORA(GenericGPAcquisition):
         if mpi.is_main_process:
             start_rank = time()
         args = (this_X, this_y, this_sigma_y, this_acq, n_points, surrogate)
-        # TODO: facility to test speed of ranking methods
-        # CHECK: if no MPI, all methods starting with the same one should yield the same
-        # IMPLEMENT: non-parallel even if MPI
-        # TODO: update "auto" method default values
-        # if not hasattr(self, "totals"):
-        #     self.totals = {}
-        for method, merge_method in [
-            # ("bulk", "bulk"),
-            # ("bulk", "single sort acq"),
-            ("single sort acq", "bulk"),  # seems to be the fastest
-            # ("bulk", "single sort y"),
-            # ("single sort acq", "single sort acq"),
-            # ("single sort y", "bulk"),
-            # ("single sort y", "single sort y"),
-            # ("single", "single"),
-        ]:
-            # start = time()
-            merged_pool = self._parallel_rank_and_merge(
-                *args, method=method, merge_method=merge_method
-            )
-            # delta = time() - start
-            # if (method, merge_method) not in self.totals:
-            #     self.totals[(method, merge_method)] = 0
-            # self.totals[(method, merge_method)] += delta
-            # if mpi.is_main_process:
-            #     print(
-            #         f"TOOK: {delta:.2g} ; "
-            #         f"TOTAL: {self.totals[(method, merge_method)]:.2g}; "
-            #         f"methods: {(method, merge_method)}"
-            #    )
+        merged_pool = self._parallel_rank_and_merge(
+                *args, method=self.rank_method, merge_method=self.rank_merge_method
+        )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
         X_pool, y_pool = merged_pool.X[:n_points], merged_pool.y[:n_points]
@@ -1410,6 +1412,19 @@ class RankedPool:
     def __str__(self):
         return self.str_pool(include_last=False)
 
+    def normalize_input(self, X, y, sigma, acq):
+        """Ensures vector types and computes missing quantities."""
+        X = np.atleast_2d(X)
+        if y is None:  # assume sigma is also None
+            y, sigma = self._surrogate.predict(X, return_std=True, validate=False)
+        elif not hasattr(y, "__len__"):
+            y = np.array([y])
+        if sigma is None:
+            sigma = self._surrogate.predict_std(X, validate=False)
+        if acq is None:
+            acq = self._acq_func(y, sigma)
+        return X, np.atleast_1d(y), np.atleast_1d(sigma), np.atleast_1d(acq)
+
     def add(self, X, y=None, sigma=None, acq=None, method="single sort acq"):
         """
         Adds points to the pool.
@@ -1433,17 +1448,7 @@ class RankedPool:
             Uses the one-by-one algorithm ("single", with pre-sorting according to X if
             "single sort X"), or the bulk algorithm.
         """
-        X = np.atleast_2d(X)
-        if y is not None:
-            y = np.atleast_1d(y)
-        if sigma is not None:
-            sigma = np.atleast_1d(sigma)
-        if y is None:
-            y, sigma = self._surrogate.predict(X, return_std=True, validate=False)
-        elif sigma is None:
-            sigma = self._surrogate.predict_std(X, validate=False)
-        if acq is None:
-            acq = self._acq_func(y, sigma)
+        X, y, sigma, acq = self.normalize_input(X, y, sigma, acq)
         if method.lower() == "bulk":
             self.add_bulk(X, y, sigma, acq)
         elif method.lower().startswith("single"):
@@ -1472,6 +1477,9 @@ class RankedPool:
         many more of them, so it will be better only up to some dimension and some amount
         of training, and then ``add_one`` will take over.
         """
+        logpref = "[pool.add_bulk] "
+        if self.verbose >= 4:
+            self.log(level=4, msg=logpref + f"Bulk-adding for position {i_start + 1}")
         # Compute acq using the model just above (and cache it if needed)
         if i_start == 0:  # no need to condition
             surrogate = self._surrogate
@@ -1480,10 +1488,22 @@ class RankedPool:
             surrogate = self.cache_model(i_start - 1)
             sigma_cond = surrogate.predict_std(X, validate=False)
             acq_cond = self._acq_func(y, sigma_cond)
+        if self.verbose >= 4:
+            self.log(level=4, msg=logpref + "Current batch:")
+            i_max = np.argmax(acq_cond)
+            for i in range(len(X)):
+                str_point = self.str_point(
+                    X[i], y[i], sigma[i], acq[i], acq_cond=acq_cond[i]
+                )
+                prefix = "--->" if i == i_max else "    "
+                self.log(level=4, msg=logpref + prefix + str_point)
         if acq_cond.size == 0:
             self.log(
                 level=4,
-                msg=f"No finite acq points to fill the pool from [{i_start}] down.",
+                msg=(
+                    logpref
+                    + f"No finite acq points to fill the pool from [{i_start}] down."
+                ),
             )
             return
         # Find best
@@ -1492,7 +1512,10 @@ class RankedPool:
         if acq_cond_max == np.inf:
             self.log(
                 level=4,
-                msg=f"No finite acq points to fill the pool from [{i_start}] down.",
+                msg=(
+                    logpref
+                    + f"No finite acq points to fill the pool from [{i_start}] down."
+                ),
             )
             return
         self.X[i_start] = X[i_max]
@@ -1551,37 +1574,29 @@ class RankedPool:
         ------
         ValueError: if invalid acq. function value, unless ``acq_nan_is_null=True``.
         """
+        logpref = "[pool.add_one] "
+        if self.verbose >= 4:
+            self.log(
+                level=4,
+                msg=(logpref + "Checking point " + self.str_point(X, y, sigma, acq)),
+            )
         # Discard the point as early as possible!
         # NB: The equals sign below takes care of the case in which we are trying to add a
         # point with -inf acq. func. to a pool which is not full (min acq. func. = -inf)
         if acq <= self.min_acq:
-            self.log(level=4, msg="[pool.add] Acq. func. value too small. Ignoring.")
+            self.log(level=4, msg=logpref + "Acq. func. value too small. Ignoring.")
             return
-        X = np.atleast_2d(X)
-        if y is None:  # assume sigma is also None
-            y, sigma = self._surrogate.predict(X, return_std=True, validate=False)
-            y, sigma = y[0], sigma[0]
-        elif not hasattr(y, "__len__"):
-            y = np.array([y])
-        if sigma is None:
-            sigma = self._surrogate.predict_std(X, validate=False)
-        if acq is None:
-            acq = self._acq_func(y, sigma)
-        if self.verbose >= 4:
-            self.log(
-                level=4,
-                msg=("[pool.add] Checking point " + self.str_point(X, y, sigma, acq)),
-            )
+        X, y, sigma, acq = self.normalize_input(X, y, sigma, acq)
         # Repeat the min acq test above to leave asap
         if acq <= self.min_acq:
-            self.log(level=4, msg="[pool.add] Acq. func. value too small. Ignoring.")
+            self.log(level=4, msg=logpref + "Acq. func. value too small. Ignoring.")
             return
         if np.isnan(acq):
             if not acq_nan_is_null:
                 raise ValueError(f"Acquisition function value not a number: {acq}")
             acq = -np.inf
-        self.log(level=4, msg="[pool.add] Initial pool:")
-        self.log_pool(level=4, prefix="[pool.add] ")
+        self.log(level=4, msg=logpref + "Initial pool:")
+        self.log_pool(level=4, prefix=logpref)
         # Find its position in the list, conditioned to those on top
         # Shortcut: start from the bottom, ignore last element (just a placeholder)
         i_new_last = len(self)
@@ -1598,7 +1613,7 @@ class RankedPool:
                 )
             except StopIteration:  # top of the list reached
                 i_new = 0
-            self.log(level=4, msg=f"[pool.add] Provisional position: [{i_new + 1}]")
+            self.log(level=4, msg=logpref + f"Provisional position: [{i_new + 1}]")
             # top, same as last or last: final ranking reached
             if i_new in [0, i_new_last, len(self)]:
                 break
@@ -1617,18 +1632,18 @@ class RankedPool:
             i_new_last = i_new
             if self.verbose >= 4:  # avoid creating the f-strings
                 self.log(
-                    level=4, msg=f"[pool.add] Updated conditional std: {sigma_cond}"
+                    level=4, msg=logpref + f"Updated conditional std: {sigma_cond}"
                 )
                 self.log(
                     level=4,
-                    msg=f"[pool.add] Updated conditional acquisition: {acq_cond}",
+                    msg=logpref + f"Updated conditional acquisition: {acq_cond}",
                 )
         # The last position is just a place-holder: don't save it if it falls there.
         if i_new >= len(self):
-            self.log(level=4, msg="[pool.add] Discarded!")
+            self.log(level=4, msg=logpref + "Discarded!")
             return
         self.log(
-            level=4, msg=f"[pool.add] Final position: [{i_new + 1}] of {len(self)}"
+            level=4, msg=logpref + f"Final position: [{i_new + 1}] of {len(self)}"
         )
         # Insert the new one in its place, and push the rest down one place.
         # We track the conditioned acq. value (but not the sigma), to retain the
@@ -1646,15 +1661,15 @@ class RankedPool:
         # If not in the last position, we can safely assume that it has finite value,
         # since -inf's from conditional acq cannot climb.
         assert self.acq_cond[i_new] > -np.inf
-        self.log(level=4, msg="[pool.add] Current unsorted pool:")
+        self.log(level=4, msg=logpref + "Current unsorted pool:")
         self.log_pool(
-            level=4, include_last=True, last_sorted=i_new, prefix="[pool.add] "
+            level=4, include_last=True, last_sorted=i_new, prefix=logpref
         )
         # Sort the sublist below the new element
         self.sort(i_new + 1)
-        self.log(level=4, msg="[pool.add] The new pool, sorted:")
+        self.log(level=4, msg=logpref + "The new pool, sorted:")
         self.log_pool(
-            level=4, include_last=True, prefix="[pool.add] ", suffix_last="[unused]"
+            level=4, include_last=True, prefix=logpref, suffix_last="[unused]"
         )
         # Make sure that the last slot (buffer) is marked as empty
         self.acq_cond[-1] = -np.inf
