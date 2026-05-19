@@ -7,7 +7,7 @@
 
 :Documentation: `Documentation on Read the Docs <https://gpry.readthedocs.io>`_
 
-:License: `LGPL <https://www.gnu.org/licenses/lgpl-3.0.en.html>`_ + mandatory bug reporting asap + mandatory `arXiv'ing <https://arxiv.org>`_ of publications using it (see `LICENSE <https://github.com/jonaselgammal/GPry/blob/main/LICENSE>`_ for exceptions). The documentation is licensed under the `GFDL <https://www.gnu.org/licenses/fdl-1.3.en.html>`_.
+:License: `LGPL <https://www.gnu.org/licenses/lgpl-3.0.en.html>`_ + bug reporting asap + `arXiv'ing <https://arxiv.org>`_ of publications using it (see `LICENSE <https://github.com/jonaselgammal/GPry/blob/main/LICENSE>`_ for exceptions). The documentation is licensed under the `GFDL <https://www.gnu.org/licenses/fdl-1.3.en.html>`_.
 
 :Support: For questions drop me an `email <mailto:jonas.e.elgammal@uis.no>`_. For issues/bugs please use `GitHub's Issues <https://github.com/jonaselgammal/GPry/issues>`_.
 
@@ -33,7 +33,7 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
    :width: 400px
    :align: center
 
-An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/running_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines. 
+An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
 
 GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
 
