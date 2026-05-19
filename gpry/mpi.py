@@ -186,7 +186,7 @@ def share_attr(instance, attr_name, root=0):
     )
 
 
-def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
+def compute_y_parallel(surrogate, X, y, sigma_y, ensure_sigma_y=False):
     """
     Computes the GPR mean (and std if `do_sigma_y=True`) in parallel.
 
@@ -199,11 +199,11 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
         this_X = step_split(X)
         if len(this_X) > 0:
             if ensure_sigma_y:
-                this_y, this_sigma_y = gpr.predict(
+                this_y, this_sigma_y = surrogate.predict(
                     this_X, return_std=True, validate=False
                 )
             else:
-                this_y = gpr.predict(this_X, return_std=False, validate=False)
+                this_y = surrogate.predict(this_X, return_std=False, validate=False)
         else:
             this_y = np.array([], dtype=float)
             this_sigma_y = np.array([], dtype=float) if ensure_sigma_y else None
@@ -215,7 +215,7 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
     if sigma_y is None and ensure_sigma_y:
         this_X = step_split(X)
         if len(this_X) > 0:
-            this_sigma_y = gpr.predict_std(this_X, validate=False)
+            this_sigma_y = surrogate.predict_std(this_X, validate=False)
         else:
             this_sigma_y = np.array([], dtype=float)
         return (

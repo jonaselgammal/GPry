@@ -220,6 +220,10 @@ class GaussianProcessRegressor(sk_GPR):
             random_state=random_state,
         )
 
+    def __repr__(self):
+        """Print the current kernel."""
+        return str(self.kernel_)
+
     @property
     def scales(self):
         """

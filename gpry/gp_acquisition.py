@@ -1331,7 +1331,7 @@ class RankedPool:
         self.acq = np.zeros((size + 1))
         # Cached conditioned surrogates
         self.reset_cache()
-        # Counter how many models have been cached, for efficieny checks
+        # Counter how many models have been cached, for efficiency checks
         self.cache_counter = 0
 
     def __len__(self):
@@ -1461,7 +1461,7 @@ class RankedPool:
 
     def add_bulk(self, X, y, sigma, acq, i_start=0):
         """
-        Tries to fill the pull using a batch of points at once:
+        Tries to fill the pool using a batch of points at once:
 
         1. Compute their acquisition value conditioned to the position above (if any).
         2. Pick the best and delete infinities (acq cannot grow with more conditioning).

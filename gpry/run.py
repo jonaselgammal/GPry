@@ -1109,7 +1109,7 @@ class Runner:
                 self.log(
                     f"Current maximum log-posterior: {self.surrogate.y_max}", level=3
                 )
-                self.log(f"Current GPR kernel: {self.surrogate.gpr.kernel_}", level=3)
+                self.log(f"Current GPR kernel: {self.surrogate.gpr}", level=3)
             mpi.sync_processes()
             # Share new_X, new_y and y_pred to the runner instance
             self.new_X, self.new_y, self.y_pred = mpi.bcast(
@@ -1408,7 +1408,7 @@ class Runner:
                 level=3,
             )
             self.log(
-                f"Current GP regressor kernel: {self.surrogate.gpr.kernel_}", level=3
+                f"Current GP regressor kernel: {self.surrogate.gpr}", level=3
             )
         # Broadcast results
         self._share_surrogate()
