@@ -212,7 +212,7 @@ In this case, GPry will use the prior specified in the Cobaya model, so there is
 Module documentation
 --------------------
 
-.. automodule:: gpry.cobaya
+.. automodule:: gpry.cobaya_interface
    :members:
    :undoc-members:
    :show-inheritance:
