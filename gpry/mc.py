@@ -344,6 +344,7 @@ def mc_sample_from_gp_ns(
     output=None,
     run=True,
     verbose=3,
+    sampler_cache=None,
 ):
     """
     Generates an MC sample of the surrogate model using one of the NS interfaces.
@@ -379,6 +380,18 @@ def mc_sample_from_gp_ns(
         Verbosity level, similarly valued to that of the Runner, e.g. 3 indicates normal
         output, and 4 'debug' level output; lower-than-three values print only warnings
         and errors.
+
+    sampler_cache : dict, optional
+        A dict-like cache for NS interface instances, keyed by the resolved
+        sampler name (``"polychord"``, ``"blackjax"``, ``"ultranest"``, ...). If
+        provided, an existing instance is reused (with its bounds, precision and
+        verbosity updated to the current call); otherwise a fresh instance is
+        constructed and stored under the resolved name. Reusing the instance
+        keeps its JAX-jitted closures alive across calls, which keeps JAX's
+        process-level compilation cache populated. Without this, every call to
+        ``mc_sample_from_gp_ns`` rebuilds the BlackJAX NSS kernel from scratch
+        because the previous instance (and the jitted functions it held) was
+        garbage-collected at the end of the previous call.
 
     Returns
     -------
@@ -421,28 +434,54 @@ def mc_sample_from_gp_ns(
                 f"Nested sampler {sampler_name} unknown. Did you mean any of "
                 f"{list(nsint._ns_interfaces)}?"
             ) from kerr
-    try:
-        sampler = interface(bounds, verbosity=verbose)
-    except nsint.NestedSamplerNotInstalledError as excpt:
-        # Exception: if "nested" passed, default to UltraNest
-        if sampler_name == "nested":
-            warnings.warn(
-                f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
-                "Defaulting to UltraNest."
-            )
-            sampler = nsint._ns_interfaces["ultranest"](bounds, verbosity=verbose)
-        else:
-            raise excpt
+    # Reuse a cached NS interface instance if the caller supplied a cache. This
+    # keeps the BlackJAX-jitted ``init_fn`` / ``step_fn`` closures alive across
+    # calls so JAX's process-level compile cache stays populated; without it, a
+    # fresh instance is constructed per call, the previous closures get
+    # garbage-collected, and JAX has to recompile every primitive op (~ 5 min
+    # on a 2-D problem at ``nlive=100``). Same mechanic helps PolyChord/UltraNest
+    # by avoiding their per-call setup, though the speedup there is smaller.
+    cache_key = sampler_name
+    sampler = sampler_cache.get(cache_key) if sampler_cache is not None else None
+    if sampler is None:
+        try:
+            sampler = interface(bounds, verbosity=verbose)
+        except nsint.NestedSamplerNotInstalledError as excpt:
+            # Exception: if "nested" passed, default to UltraNest
+            if sampler_name == "nested":
+                warnings.warn(
+                    f"Importing the default NS PolyChord failed (Err msg: {excpt}). "
+                    "Defaulting to UltraNest."
+                )
+                sampler = nsint._ns_interfaces["ultranest"](bounds, verbosity=verbose)
+                cache_key = "ultranest"
+            else:
+                raise excpt
+        if sampler_cache is not None:
+            sampler_cache[cache_key] = sampler
+    else:
+        sampler.set_prior(bounds)
+        sampler.set_verbosity(verbose)
     sampler.set_precision(**(sampler_options or {}))
+    # When the BlackJAX adapter is available, the surrogate's native loglikelihood
+    # operates in the transformed (preprocessed) parameter space — the same space
+    # NORA uses for its acquisition-time NS run (see
+    # ``gp_acquisition.py:_do_mc_sample_blackjax`` and ``_internal_bounds``).
+    # The adapter would otherwise be fed user-space coordinates and silently
+    # interpret them as transformed-space inputs, which collapses the BlackJAX
+    # final MC posterior near the transformed-space center (e.g.
+    # ``[0.5]^d`` for ``NormalizeBounds``).
+    blackjax_using_adapter = False
     if isinstance(sampler, nsint.InterfaceBlackJAX):
-        builder = surrogate.gpr.make_ns_loglikelihood_builder(
-            preprocessing_y=surrogate.preprocessing_y,
-            clip_factor=surrogate.clipper.clip_factor,
-            y_clip_min=float(surrogate._y[surrogate._i_regress].min()),
-            y_clip_max=float(surrogate._y[surrogate._i_regress].max()),
-        )
-        if builder is not None:
-            logp._jax_loglikelihood_builder = builder
+        adapter = surrogate.make_ns_loglikelihood_adapter(logp)
+        if adapter is not None:
+            logp = adapter
+            blackjax_using_adapter = True
+            if surrogate.preprocessing_X is not None:
+                transformed_bounds = np.asarray(
+                    surrogate.preprocessing_X.transform_bounds(bounds)
+                )
+                sampler.set_prior(transformed_bounds)
     if not run:
         return sampler
     # Run sampler
@@ -456,6 +495,11 @@ def mc_sample_from_gp_ns(
     X_mc, y_mc, w_mc = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
     if isinstance(sampler, nsint.InterfaceUltraNest):
         surrogate.minus_inf_value = prev_min
+    # The BlackJAX adapter sampled in transformed space; convert X back to user
+    # space before returning. Other NS backends (PolyChord, UltraNest) ran in
+    # user space already and need no inverse transform.
+    if blackjax_using_adapter and surrogate.preprocessing_X is not None:
+        X_mc = np.asarray(surrogate.preprocessing_X.inverse_transform(X_mc))
     # Delete the "raw" output and write the unified-format one
     sampler.delete_output()
     if output is not None and mpi.is_main_process:
