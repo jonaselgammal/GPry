@@ -1206,6 +1206,7 @@ class Runner:
                             "[PLOTS] Creating and saving progress plots...", level=3
                         )
                     self.plot_progress(
+                        close=True,
                         **(self.plots if isinstance(self.plots, Mapping) else {})
                     )
                 except Exception as excpt:
@@ -1721,151 +1722,6 @@ class Runner:
             bounds=self.prior_bounds,
         )
 
-    def plot_progress(
-        self,
-        ext="png",
-        timing=True,
-        convergence=True,
-        trace=True,
-        slices=False,
-        corner=False,
-        corner_final=None,
-    ):
-        """
-        Creates some progress plots and saves them at path (assumes path exists).
-
-        Parameters
-        ----------
-        ext : str (default ``"png"``)
-            Format for the plots, among the available ones in ``matplotlib``.
-
-        timing : bool (default: True)
-            Plot histogram of timing per iteration (totals in legend).
-
-        convergence : bool (default: True)
-            Plot the evolution of the convergence criterion (included in ``trace`` plot).
-
-        trace : bool (default: True)
-            Plot the evolution of the run: convergence criterion, surrogate log(p) and
-            parameters.
-
-        slices : bool (default: False)
-            Plots slices per training samples.
-            Slow -- use for diagnosis only.
-
-        corner : bool (default: False)
-            Creates a corner plot per iteration (contours for current GP shown only if
-            using NORA). Slow -- use for diagnosis only.
-
-        corner_final : bool, optional (default: None)
-            Whether the final corner plot is created. Needs a surrogate mc sample.
-            If undefined, it is created only if the run has converged.
-        """
-        if not mpi.is_main_process:
-            return
-        self.ensure_paths(plots=True)
-        output_dpi_corner = 200
-        import matplotlib.pyplot as plt
-
-        if timing:
-            self.progress.plot_timing(
-                truth=True, save=os.path.join(self.plots_path, f"timing.{ext}")
-            )
-        if convergence:
-            fig, ax = gpplt.plot_convergence(self.convergence)
-            plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
-        fid_mc = None
-        if trace or corner and self.fiducial_mc_X is not None:
-            fid_mc = self._fiducial_mc_as_getdist()
-        if trace:
-            gpplt.plot_trace(
-                self.truth,
-                self.surrogate,
-                self.convergence,
-                self.progress,
-                reference=fid_mc,
-            )
-            plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
-        if slices:
-            gpplt.plot_slices(self.truth, self.surrogate, self.acquisition)
-            plt.savefig(
-                os.path.join(
-                    self.plots_path, f"slices_it_{self.current_iteration:03d}.{ext}"
-                )
-            )
-        if corner:
-            mc_samples = {}
-            filled = {}
-            add_logp, add_loglike = True, False
-            if fid_mc is not None:
-                mc_samples["Fiducial"] = fid_mc
-                # If fiducial present and it has loglikelihood, use it instead of logp,
-                # since the prior normalization of the fiducial may be different
-                if mc._name_loglike in fid_mc.getParamNames().getDerivedNames():
-                    add_logp, add_loglike = False, True
-            # Optional: plot train set Gaussian Approx
-            # mean_train, cov_train = mean_covmat_from_evals(
-            #     self.surrogate.X_regress, self.surrogate.y_regress
-            # )
-            # from getdist.gaussian_mixtures import GaussianND
-
-            # k_train = "Gauss approx train set"
-            # mc_samples[k_train] = GaussianND(
-            #     mean_train, cov_train, names=self.truth.params
-            # )
-            # filled[k_train] = False
-            if hasattr(self.acquisition, "last_mc_sample"):
-                rw = "-- reweighted " if self.acquisition.is_last_mc_reweighted else ""
-                acq_key = f"Acq. sample {rw}({len(self.surrogate.X)} evals.)"
-                try:
-                    mc_samples[acq_key] = self.acquisition.last_mc_sample_getdist(
-                        params=list(zip(self.params, self.labels)),
-                        warn_reweight=False,
-                        logprior_func=self.logprior,
-                    )
-                except ValueError:
-                    warnings.warn("Aquisition sample could not be loaded.")
-            markers = None
-            if self.fiducial_X is not None:
-                markers = dict(zip(self.params, self.fiducial_X))
-                if self.fiducial_logpost is not None:
-                    markers[mc._name_logp] = self.fiducial_logpost
-            output_corner = os.path.join(
-                self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
-            )
-            try:
-                if len(mc_samples) > 0:
-                    gpplt.plot_corner_getdist(
-                        mc_samples,
-                        params=self.params,
-                        # bounds=self.prior_bounds,
-                        filled=filled,
-                        training={tuple(self.params): self.surrogate},
-                        training_highlight_last=True,
-                        add_logp=add_logp,
-                        add_loglike=add_loglike,
-                        markers=markers,
-                        output=output_corner,
-                        output_dpi=output_dpi_corner,
-                    )
-                else:
-                    warnings.warn(
-                        "No acquisition or fiducial sample to do the corner plot."
-                    )
-                if self.has_converged:
-                    self.plot_mc(output_dpi=output_dpi_corner, ext=ext)
-            except Exception as excpt:
-                # Usually fails with reweighted Acquisition samples
-                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
-        if corner_final is None:
-            corner_final = self.has_converged
-        if corner_final:
-            try:
-                self.plot_mc(output_dpi=output_dpi_corner, ext=ext)
-            except Exception as excpt:
-                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
-        plt.close("all")
-
     def generate_mc_sample(
         self, sampler=None, add_options=None, output=None, resume=False
     ):
@@ -1903,8 +1759,8 @@ class Runner:
         """
         if not self.surrogate.fitted:
             raise ValueError(
-                "You have to have added points to the surrogate model before you can generate an MC "
-                "sample"
+                "You have to have added points to the surrogate model before you can "
+                "generate an MC sample. Call the run() method first."
             )
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, _default_mc_samples_filename)
@@ -2074,6 +1930,7 @@ class Runner:
         output=None,
         output_dpi=200,
         ext="png",
+        close=False,
     ):
         """
         Creates a triangle plot of an MC sample of the surrogate model, and optionally
@@ -2097,14 +1954,19 @@ class Runner:
 
         output : str or os.path, optional (default=None)
             The location to save the generated plot in. If ``None`` it will be saved in
-            ``checkpoint_path/images/Surrogate_triangle.pdf`` or
-            ``./images/Surrogate_triangle.png`` if ``checkpoint_path`` is ``None``
+            ``checkpoint_path/images/surrogate_corner.pdf`` or
+            ``./images/surrogate_corner.png`` if ``checkpoint_path`` is ``None``
 
         output_dpi : int (default: 200)
             The resolution of the generated plot in DPI.
 
         ext : str (default: "png" if `output` not defined; else ignore)
             Format for the plot.
+
+        close : bool (default: False)
+            Whether to close the figure (it cannot be shown with ``plt.show()`` after
+            calling this method, but it will be saved). It should be True if called
+            multiple times during a run, to avoid wasting memory.
         """
         if not mpi.is_main_process:
             warnings.warn(
@@ -2137,7 +1999,7 @@ class Runner:
             if self.fiducial_logpost is not None:
                 markers[mc._name_logp] = self.fiducial_logpost
         if output is None:
-            output = os.path.join(self.plots_path, f"Surrogate_triangle.{ext}")
+            output = os.path.join(self.plots_path, f"surrogate_corner.{ext}")
         gdplot = gpplt.plot_corner_getdist(
             mc_samples,
             params=self.params,
@@ -2146,6 +2008,7 @@ class Runner:
             markers=markers,
             output=output,
             output_dpi=output_dpi,
+            close=close,
         )
         return gdplot
 
@@ -2225,3 +2088,158 @@ class Runner:
             self.surrogate, mean, covmat, density=True, show_added=show_added
         )
         plt.savefig(output_2, dpi=output_dpi)
+
+    def plot_progress(
+        self,
+        ext="png",
+        timing=True,
+        convergence=False,
+        trace=True,
+        slices=False,
+        corner=False,
+        corner_final=None,
+        close=False,
+    ):
+        """
+        Creates some progress plots and saves them at path (assumes path exists).
+
+        Parameters
+        ----------
+        ext : str (default ``"png"``)
+            Format for the plots, among the available ones in ``matplotlib``.
+
+        timing : bool (default: True)
+            Plot histogram of timing per iteration (totals in legend).
+
+        convergence : bool (default: True)
+            Plot the evolution of the convergence criterion (included in ``trace`` plot).
+
+        trace : bool (default: True)
+            Plot the evolution of the run: convergence criterion, surrogate log(p) and
+            parameters.
+
+        slices : bool (default: False)
+            Plots slices per training samples.
+            Slow -- use for diagnosis only.
+
+        corner : bool (default: False)
+            Creates a corner plot per iteration (contours for current GP shown only if
+            using NORA). Slow -- use for diagnosis only
+.
+        corner_final : bool, optional (default: None)
+            Whether the final corner plot is created. Needs a surrogate mc sample.
+            If undefined, it is created only if the run has converged.
+
+        close : bool (default: False)
+            Whether to close the figures (they cannot be shown with ``plt.show()`` after
+            calling this method, but they will be saved). It should be True if called
+            multiple times during a run, to avoid wasting memory.
+        """
+        if not mpi.is_main_process:
+            return
+        self.ensure_paths(plots=True)
+        output_dpi_corner = 200
+        import matplotlib.pyplot as plt
+
+        if timing:
+            self.progress.plot_timing(
+                truth=True,
+                save=os.path.join(self.plots_path, f"timing.{ext}"),
+                close=close,
+            )
+        if convergence:
+            fig, ax = gpplt.plot_convergence(self.convergence)
+            plt.savefig(os.path.join(self.plots_path, f"convergence.{ext}"))
+        fid_mc = None
+        if trace or corner and self.fiducial_mc_X is not None:
+            fid_mc = self._fiducial_mc_as_getdist()
+        if trace:
+            gpplt.plot_trace(
+                self.truth,
+                self.surrogate,
+                self.convergence,
+                self.progress,
+                reference=fid_mc,
+            )
+            plt.savefig(os.path.join(self.plots_path, f"trace.{ext}"))
+        if slices:
+            gpplt.plot_slices(self.truth, self.surrogate, self.acquisition)
+            plt.savefig(
+                os.path.join(
+                    self.plots_path, f"slices_it_{self.current_iteration:03d}.{ext}"
+                )
+            )
+        if corner:
+            # TODO: remove the block below in favour of a call to Runner.plot_mc
+            mc_samples = {}
+            filled = {}
+            add_logp, add_loglike = True, False
+            if fid_mc is not None:
+                mc_samples["Fiducial"] = fid_mc
+                # If fiducial present and it has loglikelihood, use it instead of logp,
+                # since the prior normalization of the fiducial may be different
+                if mc._name_loglike in fid_mc.getParamNames().getDerivedNames():
+                    add_logp, add_loglike = False, True
+            # Optional: plot train set Gaussian Approx
+            # mean_train, cov_train = mean_covmat_from_evals(
+            #     self.surrogate.X_regress, self.surrogate.y_regress
+            # )
+            # from getdist.gaussian_mixtures import GaussianND
+
+            # k_train = "Gauss approx train set"
+            # mc_samples[k_train] = GaussianND(
+            #     mean_train, cov_train, names=self.truth.params
+            # )
+            # filled[k_train] = False
+            if hasattr(self.acquisition, "last_mc_sample"):
+                rw = "-- reweighted " if self.acquisition.is_last_mc_reweighted else ""
+                acq_key = f"Acq. sample {rw}({len(self.surrogate.X)} evals.)"
+                try:
+                    mc_samples[acq_key] = self.acquisition.last_mc_sample_getdist(
+                        params=list(zip(self.params, self.labels)),
+                        warn_reweight=False,
+                        logprior_func=self.logprior,
+                    )
+                except ValueError:
+                    warnings.warn("Aquisition sample could not be loaded.")
+            markers = None
+            if self.fiducial_X is not None:
+                markers = dict(zip(self.params, self.fiducial_X))
+                if self.fiducial_logpost is not None:
+                    markers[mc._name_logp] = self.fiducial_logpost
+            output_corner = os.path.join(
+                self.plots_path, f"corner_it_{self.current_iteration:03d}.{ext}"
+            )
+            try:
+                if len(mc_samples) > 0:
+                    gpplt.plot_corner_getdist(
+                        mc_samples,
+                        params=self.params,
+                        # bounds=self.prior_bounds,
+                        filled=filled,
+                        training={tuple(self.params): self.surrogate},
+                        training_highlight_last=True,
+                        add_logp=add_logp,
+                        add_loglike=add_loglike,
+                        markers=markers,
+                        output=output_corner,
+                        output_dpi=output_dpi_corner,
+                    )
+                else:
+                    warnings.warn(
+                        "No acquisition or fiducial sample to do the corner plot."
+                    )
+                if self.has_converged:
+                    self.plot_mc(output_dpi=output_dpi_corner, ext=ext, close=close)
+            except Exception as excpt:
+                # Usually fails with reweighted Acquisition samples
+                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
+        if corner_final is None:
+            corner_final = self.has_converged
+        if corner_final:
+            try:
+                self.plot_mc(output_dpi=output_dpi_corner, ext=ext, close=close)
+            except Exception as excpt:
+                warnings.warn(f"{excpt.__class__.__name__}: {excpt}")
+        if close:
+            plt.close("all")

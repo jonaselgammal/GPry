@@ -193,7 +193,7 @@ class Progress:
         labels = labels[:: max(1, int(n_xticks / 10.0))]
         ax.set_xticks(xticks, labels=labels)
 
-    def plot_timing(self, truth=True, show=False, save="progress_timing.png"):
+    def plot_timing(self, truth=True, show=False, save="progress_timing.png", close=False):
         """
         Plots as stacked bars the timing of each part of each iteration.
 
@@ -258,7 +258,8 @@ class Progress:
             plt.savefig(save)
         if show:
             plt.show(block=True)
-        plt.close()
+        if close:
+            plt.close()
 
 
 class Timer:

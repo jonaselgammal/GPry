@@ -470,6 +470,7 @@ def plot_corner_getdist(
     output=None,
     output_dpi=200,
     subplot_size=2,
+    close=False,
 ):
     """
     Creates a corner plot the given MC samples, and optionally shows evaluation locations.
@@ -539,10 +540,17 @@ def plot_corner_getdist(
     output_dpi : int (default: 200)
         The resolution of the generated plot in DPI.
 
+    close : bool (default: False)
+        Whether to close the figure (it cannot be shown with ``plt.show()`` after calling
+        this function). It should be True if called multiple times during a run, to avoid
+        wasting memory.
+
     Returns
     -------
     getdist.plots.GetDistPlotter object containing the figure.
     """
+    if close and output is None:
+        raise ValueError("Calling with 'close=True' and no output has no effect.")
     if add_logp and add_loglike:
         raise ValueError("Only one of add_logp/add_loglike can be True.")
     if _name_logp in params or _name_loglike in params:
@@ -581,7 +589,7 @@ def plot_corner_getdist(
             raise TypeError("'training' is not a SurrogateModel instance.")
     import getdist.plots as gdplt  # type: ignore
 
-    gdplot = gdplt.get_subplot_plotter(subplot_size=subplot_size, auto_close=True)
+    gdplot = gdplt.get_subplot_plotter(subplot_size=subplot_size, auto_close=close)
     gdplot.settings.line_styles = "tab10"
     gdplot.settings.solid_colors = "tab10"
     triang_args = [list(gdsamples_dict.values())]
