@@ -375,6 +375,12 @@ class Runner:
         self._last_mc_samples = None
         self._last_mc_cobaya_info = None
         self._last_mc_cobaya_sampler = None
+        # Per-runner cache of NS interface instances. Reused across calls to
+        # ``generate_mc_sample`` so JAX's process-level compile cache stays
+        # warm; without it, BlackJAX's NSS kernel recompiles from scratch on
+        # every final-MC call (~ 5 min cold compile on a 2-D problem). See
+        # ``mc.mc_sample_from_gp_ns`` for the cache-key contract.
+        self._mc_sampler_cache = {}
         # Placeholders for fiducial quantities
         self.fiducial_X = None
         self.fiducial_logpost = None
@@ -407,7 +413,15 @@ class Runner:
                     "length_scale_prior": [1e-2, 1e2],
                     "noise_level": 1e-2,
                     "optimizer": "fmin_l_bfgs_b",
-                    "n_restarts_optimizer": 10 + 2 * self.d,
+                    "n_hyperopt_restarts": 10 + 2 * self.d,
+                    # Match the GPR's own ``use_jax=True`` default so the
+                    # surrogate's SVM backend (in ``surrogate.py``) and any
+                    # downstream native-prediction checks see the same flag.
+                    # Required for the BlackJAX final MC to use the JAX adapter
+                    # instead of the slow ``pure_callback`` numpy path. JAX
+                    # falls back to sklearn cleanly inside the GPR factory if
+                    # JAX is not importable, so this is safe regardless.
+                    "use_jax": True,
                 },
                 "clip_factor": 1.1,
                 "infinities_classifier": {
@@ -424,7 +438,7 @@ class Runner:
                             surrogate[k][k2] = default_value2
             # If running with MPI, round down the #restarts of hyperparam optimizer to
             # a multiple of the MPI size (NB: #restarts includes from current best)
-            nres = "n_restarts_optimizer"
+            nres = "n_hyperopt_restarts"
             if nres in surrogate.get("regressor", {}):
                 surrogate["regressor"][nres] = get_Xnumber(
                     surrogate["regressor"][nres], "d", self.d, int, nres
@@ -1135,7 +1149,10 @@ class Runner:
                 self.log(
                     f"Current maximum log-posterior: {self.surrogate.y_max}", level=3
                 )
-                self.log(f"Current GPR kernel: {self.surrogate.gpr.kernel_}", level=3)
+                self.log(
+                    f"Current GPR kernel: {self.surrogate.gpr.fitted_kernel}",
+                    level=3,
+                )
             mpi.sync_processes()
             # Share new_X, new_y and y_pred to the runner instance
             self.new_X, self.new_y, self.y_pred = mpi.bcast(
@@ -1443,7 +1460,7 @@ class Runner:
             else:
                 hyperopt_msg = (
                     "Hyperparameters were fit with "
-                    f"{self.surrogate.gpr.n_restarts_optimizer} restart(s)."
+                    f"{self.surrogate.gpr.n_hyperopt_restarts} restart(s)."
                 )
             self.log(
                 f"[FIT] ({timer_fit.time:.2g} sec) Fitted GP model with new acquired"
@@ -1453,7 +1470,8 @@ class Runner:
                 level=3,
             )
             self.log(
-                f"Current GP regressor kernel: {self.surrogate.gpr.kernel_}", level=3
+                f"Current GP regressor kernel: {self.surrogate.gpr.fitted_kernel}",
+                level=3,
             )
         # Broadcast results
         self._share_surrogate()
@@ -1512,10 +1530,10 @@ class Runner:
             fit_gpr_kwargs = {"start_from_current": mpi.is_main_process}
             fit_gpr_kwargs["n_restarts"] = (
                 mpi.split_number_for_parallel_processes(
-                    self.surrogate.gpr.n_restarts_optimizer
+                    self.surrogate.gpr.n_hyperopt_restarts
                 )[mpi.RANK]
             )
-            n_restarts_total = self.surrogate.gpr.n_restarts_optimizer
+            n_restarts_total = self.surrogate.gpr.n_hyperopt_restarts
             if fit_gpr_kwargs["n_restarts"] == 0:
                 fit_gpr_kwargs = False
         elif is_this_iter(self.fit_simple_every):
@@ -1529,7 +1547,7 @@ class Runner:
         #     prior_bounds = self.prior_bounds
         #     relative_stds = stds / (prior_bounds[:, 1] - prior_bounds[:, 0])
         #     new_bounds = np.array([relative_stds / 2,  relative_stds * 2]).T
-        #     hyperparams_bounds = self.surrogate.kernel_.bounds.copy()
+        #     hyperparams_bounds = self.surrogate.fitted_kernel.bounds.copy()
         #     hyperparams_bounds[1:] = np.log(new_bounds)
         if fit_gpr_kwargs is not False:
             fit_gpr_kwargs["hyperparameter_bounds"] = hyperparams_bounds
@@ -1999,7 +2017,13 @@ class Runner:
                     "Resuming not possible for nested sampler. Starting from scratch."
                 )
             if "nlive" not in sampler_options:
-                sampler_options["nlive"] = 50 * self.d
+                # The final MC pass is intentionally heavier than a NORA-time NS
+                # run: it is run once at convergence and its posterior summary
+                # feeds the diagnosis check, so it benefits from more live
+                # points than the per-iteration acquisition NS (which caps at
+                # ``25 * d`` per paper 2). ``max(200, 100 * d)`` gives 200 live
+                # points in 2D and scales linearly with dimensionality.
+                sampler_options["nlive"] = max(200, 100 * self.d)
             self._last_mc_sampler_type = "nested"
             X_mc, y_mc, w_mc = mc.mc_sample_from_gp_ns(
                 self.surrogate,
@@ -2009,6 +2033,7 @@ class Runner:
                 sampler_options=sampler_options,
                 output=output,
                 verbose=self.verbose,
+                sampler_cache=self._mc_sampler_cache,
             )
             if mpi.is_main_process:
                 logprior_mc = np.array([self.truth.logprior(x) for x in X_mc])

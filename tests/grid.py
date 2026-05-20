@@ -50,7 +50,7 @@ def generate_inputs(bounds):
     default_input["gp_acquisition"] = GPAcquisition(
         bounds, acq_func="LogExp",
         proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
-        acq_optimizer="fmin_l_bfgs_b", n_restarts_optimizer=5 * d,
+        acq_optimizer="fmin_l_bfgs_b", n_hyperopt_restarts=5 * d,
         n_repeats_propose=10, preprocessing_X=Normalize_bounds(bounds),
         zeta_scaling=1.1, verbose=verbose)
     # Creating grid -- User modifications usually from here down
@@ -67,7 +67,7 @@ def generate_inputs(bounds):
         acq = GPAcquisition(
             bounds, acq_func="LogExp",
             proposer=PartialProposer(bounds, CentroidsProposer(bounds)),
-            acq_optimizer="fmin_l_bfgs_b", n_restarts_optimizer=5 * d,
+            acq_optimizer="fmin_l_bfgs_b", n_hyperopt_restarts=5 * d,
             n_repeats_propose=10, preprocessing_X=Normalize_bounds(bounds),
             zeta=value, verbose=verbose)
         inputs[key]["gp_acquisition"] = acq

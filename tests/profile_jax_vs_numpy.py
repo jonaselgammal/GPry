@@ -28,7 +28,7 @@ def make_gpr(n_dim, use_jax, n_restarts=0):
     return GPR(
         kernel="RBF",
         length_scale_prior=length_scale_prior,
-        n_restarts_optimizer=n_restarts,
+        n_hyperopt_restarts=n_restarts,
         use_jax=use_jax,
     )
 

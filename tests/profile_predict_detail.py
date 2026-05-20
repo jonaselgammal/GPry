@@ -11,7 +11,7 @@ import jax.numpy as jnp
 def make_gpr(n_dim, use_jax):
     length_scale_prior = np.column_stack([np.full(n_dim, 1e-3), np.full(n_dim, 1e1)])
     return GPR(kernel="RBF", length_scale_prior=length_scale_prior,
-               n_restarts_optimizer=1, use_jax=use_jax)
+               n_hyperopt_restarts=1, use_jax=use_jax)
 
 
 n_dim = 5

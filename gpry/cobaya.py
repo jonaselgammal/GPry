@@ -182,7 +182,7 @@ surrogate:
     # Hyperparameter fitting: optimizer (from scipy) and number of restarts for full fits
     optimizer: fmin_l_bfgs_b
 # TODOOOO: n_restarts optimizer!!!!
-    n_restarts_optimizer: 2d
+    n_hyperopt_restarts: 2d
   # Treatment of infinities and large negative values; False for no classifier
   infinities_classifier:
     svm:
@@ -221,7 +221,7 @@ gp_acquisition:
   options_BatchOptimizer:
     proposer:  # default (undefined): a mixture of uniform and centroids
     acq_optimizer: fmin_l_bfgs_b  # scipy optimiser to use
-    n_restarts_optimizer: 5d  # number of restarts during hyperparameter fitting
+    n_hyperopt_restarts: 5d  # number of restarts during hyperparameter fitting
     n_repeats_propose: 10  # number of starting points drawn from the proposer
 
 # Proposer used for drawing the initial training samples before running

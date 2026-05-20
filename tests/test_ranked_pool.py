@@ -37,11 +37,11 @@ generator.redraw()
 points_start = generator.rv.rvs(n_start)
 y_start_truth = generator.rv.logpdf(points_start)
 gpr = GPR(bounds=np.array([list(bounds)] * dim), account_for_inf=None,
-          n_restarts_optimizer=2*dim)
+          n_hyperopt_restarts=2*dim)
 gpr.append_to_data(points_start, y_start_truth, fit=True, simplified_fit=False)
 print("")
 print("GPR:", gpr)
-print("Fitted kernel:", gpr.kernel_)
+print("Fitted kernel:", gpr.fitted_kernel)
 print("")
 
 print("Generating points to be added...")
