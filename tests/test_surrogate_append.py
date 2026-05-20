@@ -23,7 +23,7 @@ def make_surrogate_with_all_finite_svm():
             "noise_level": 0.01,
             "length_scale_prior": [0.01, 100.0],
             "output_scale_prior": [0.01, 100.0],
-            "n_restarts_optimizer": 0,
+            "n_hyperopt_restarts": 0,
         },
         infinities_classifier={"svm": {"threshold": np.inf}},
         verbose=0,
@@ -50,7 +50,10 @@ def test_append_refits_gpr_when_classifier_indices_are_unsorted():
     y0 = np.array([0.0, 3.0, 1.0, 2.0])
     surrogate.append(X0, y0, fit_gpr={"n_restarts": 1}, fit_classifier=True)
 
-    assert surrogate.gpr.X_train_.shape[0] == 4
+    # Surrogate-level accessor (was ``surrogate.gpr.X_train_.shape[0]``). The
+    # sklearn-named attribute is being phased out for callers outside the GPR
+    # backend per ``AGENTS/jax_split_refactor_plan.md`` Phase 1.
+    assert surrogate.n_regress == 4
     assert not np.all(surrogate._i_regress[:-1] <= surrogate._i_regress[1:])
 
     X1 = np.array([[0.5, 0.5], [0.6, 0.6]])
@@ -61,4 +64,4 @@ def test_append_refits_gpr_when_classifier_indices_are_unsorted():
     np.testing.assert_array_equal(surrogate._i_last_appended_regress, np.array([4, 5]))
     np.testing.assert_allclose(surrogate.X_last_appended_regress, X1)
     np.testing.assert_allclose(surrogate.y_last_appended_regress, y1)
-    assert surrogate.gpr.X_train_.shape[0] == 6
+    assert surrogate.n_regress == 6

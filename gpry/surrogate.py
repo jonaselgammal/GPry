@@ -52,11 +52,12 @@ import pandas as pd  # type: ignore
 from sklearn.utils.validation import check_array as _sk_check_array  # type: ignore
 
 # Local
-from gpry.array_api import make_array_converter
+from gpry.array_api import make_array_converter, to_jax
 from gpry.gpr import GaussianProcessRegressor
 from gpry.preprocessing import DummyPreprocessor
 from gpry.tools import delta_logp_of_1d_nstd, generic_params_names
 from gpry.infinities_classifier import InfinitiesClassifiers
+from gpry.ns_interfaces import NativeNestedSamplingLogLikelihood
 
 
 def check_array(*args, **kwargs):
@@ -182,6 +183,24 @@ class SurrogateModel:
                 delta_logp_of_1d_nstd(nsigma, self.d)
             )
             try:
+                if isinstance(infinities_classifier, Mapping) and "svm" in infinities_classifier:
+                    infinities_classifier = deepcopy(infinities_classifier)
+                    svm_options = infinities_classifier.get("svm") or {}
+                    svm_options = deepcopy(svm_options)
+                    # Default to "jax" to match the GPR's own default (``use_jax=True``
+                    # in ``BaseGaussianProcessRegressor``). The previous default of
+                    # ``False`` here was the cause of the BatchOptimizer + final-MC
+                    # 5-minute cold compile: it forced the SVM onto the sklearn
+                    # backend, which made
+                    # ``surrogate.supports_native_transformed_prediction`` False, which
+                    # made ``make_ns_loglikelihood_adapter`` return None, which made
+                    # the BlackJAX final MC fall back to the slow ``pure_callback``
+                    # numpy path that retraces every NS step. NORA was never affected
+                    # because callers pass ``regressor.use_jax`` explicitly.
+                    svm_options.setdefault(
+                        "backend", "jax" if regressor.get("use_jax", True) else "sklearn"
+                    )
+                    infinities_classifier["svm"] = svm_options
                 self.infinities_classifier = InfinitiesClassifiers(
                     bounds=bounds_,
                     nstd_calculator=nstd_calculator,
@@ -216,11 +235,37 @@ class SurrogateModel:
             source_kind="numpy",
             context="SurrogateModel transformed->GP hot path",
         )
+        self._gp_input_converter_native = self._build_gp_input_converter(
+            source_kind="jax",
+            context="SurrogateModel transformed->GP native hot path",
+        )
+        self._classifier_input_converter = self._build_classifier_input_converter(
+            source_kind="numpy",
+            context="SurrogateModel transformed->classifier hot path",
+        )
+        self._classifier_input_converter_native = self._build_classifier_input_converter(
+            source_kind="jax",
+            context="SurrogateModel transformed->classifier native hot path",
+        )
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
 
     def _build_gp_input_converter(self, source_kind="numpy", context=None):
         contract = getattr(self.gpr, "array_contract", None)
+        if contract is None:
+            return lambda x: x
+        warn = source_kind != contract.preferred_input and contract.preferred_input == "jax"
+        return make_array_converter(
+            source_kind,
+            contract.preferred_input,
+            warn=warn,
+            context=context,
+        )
+
+    def _build_classifier_input_converter(self, source_kind="numpy", context=None):
+        if self.infinities_classifier is None:
+            return lambda x: x
+        contract = getattr(self.infinities_classifier, "array_contract", None)
         if contract is None:
             return lambda x: x
         warn = source_kind != contract.preferred_input and contract.preferred_input == "jax"
@@ -857,13 +902,70 @@ class SurrogateModel:
         else:
             noise_level_passed = self._noise_level_[i_gpr]
         if self.n_last_appended_finite != 0 or force_fit_gpr:
-            self.gpr.fit(
-                X=self._X_[i_gpr],
-                y=self._y_[i_gpr],
-                noise_level=noise_level_passed,
-                fit_hyperparameters=fit_gpr,
-                validate=False,
+            # Phase R-C: fast path for hyperopt-free appends (the KB
+            # ranking loop, BatchOpt's KB conditioning loop) -- use the
+            # GP's online block-Cholesky update instead of a full re-fit.
+            # Only viable when:
+            #   * not refitting hyperparameters and not refitting the
+            #     classifier (otherwise the regress set may change),
+            #   * the GPR supports the JAX append path and is already
+            #     fitted (we need a prior L/V/alpha to update),
+            #   * the new points are at the tail of self._X_[i_gpr] (so
+            #     the update is purely additive on the GP side),
+            #   * the noise level passed is scalar-compatible with the
+            #     existing one (per-point noise vectors not yet supported
+            #     by append_points_jax).
+            used_online = False
+            # noise_level=None means "use the existing instance noise" --
+            # safe for online updates. An explicit array implies per-point
+            # noise changes; falling back to a full re-fit there is the
+            # conservative call (append_points_jax assumes scalar noise).
+            noise_compatible = noise_level is None or (
+                hasattr(noise_level, '__len__') and len(noise_level) == 1
             )
+            if (fit_gpr is False
+                    and not fit_classifier
+                    and not force_fit_gpr
+                    and noise_compatible
+                    and hasattr(self.gpr, "append_points_jax")
+                    and getattr(self.gpr, "X_train_", None) is not None
+                    and getattr(self.gpr, "_L_padded", None) is not None
+                    and self.n_last_appended_finite > 0):
+                X_after = self._X_[i_gpr]
+                y_after = self._y_[i_gpr]
+                n_old = self.gpr.X_train_.shape[0]
+                n_new = self.n_last_appended_finite
+                if X_after.shape[0] == n_old + n_new:
+                    # Verify the old rows are unchanged (cheap defensive
+                    # check; if it doesn't hold, fall through to full
+                    # re-fit).
+                    X_old_match = np.allclose(
+                        X_after[:n_old], np.asarray(self.gpr.X_train_)
+                    )
+                    if X_old_match:
+                        X_new_only = X_after[n_old:]
+                        y_new_only = y_after[n_old:]
+                        try:
+                            self.gpr.append_points_jax(X_new_only, y_new_only)
+                            used_online = True
+                        except Exception as e:
+                            # Don't swallow silently -- warn so a real bug
+                            # in append_points_jax doesn't masquerade as a
+                            # mild perf regression to full re-fit.
+                            warnings.warn(
+                                f"append_points_jax failed ({e!r}); "
+                                "falling back to full re-fit. Investigate "
+                                "if this fires repeatedly."
+                            )
+                            used_online = False
+            if not used_online:
+                self.gpr.fit(
+                    X=self._X_[i_gpr],
+                    y=self._y_[i_gpr],
+                    noise_level=noise_level_passed,
+                    fit_hyperparameters=fit_gpr,
+                    validate=False,
+                )
         self._fitted = True
         return self
 
@@ -1077,13 +1179,24 @@ class SurrogateModel:
             if len(return_dict) == 1:
                 return return_dict["mean"]
             return list(return_dict.values())
-        return_gpr_ = self.gpr.predict(
-            X_[finite],
-            return_std=return_std,
-            return_mean_grad=return_mean_grad,
-            return_std_grad=return_std_grad,
-            validate=validate,
-        )
+        X_gp = self._gp_input_converter(X_[finite])
+        if (not validate
+                and not return_mean_grad and not return_std_grad
+                and self.clipper.trivial):
+            if return_std:
+                y_mean_native, y_std_native = self.gpr.predict_native(X_gp, return_std=True)
+                return_gpr_ = [np.asarray(y_mean_native), np.asarray(y_std_native)]
+            else:
+                y_mean_native = self.gpr.predict_native(X_gp, return_std=False)
+                return_gpr_ = [np.asarray(y_mean_native)]
+        else:
+            return_gpr_ = self.gpr.predict(
+                X_gp,
+                return_std=return_std,
+                return_mean_grad=return_mean_grad,
+                return_std_grad=return_std_grad,
+                validate=validate,
+            )
         return_gpr_ = self._regressor_output_to_dict(
             return_gpr_, return_std, return_mean_grad, return_std_grad
         )
@@ -1107,6 +1220,232 @@ class SurrogateModel:
         if len(return_dict) == 1:
             return return_dict["mean"]
         return list(return_dict.values())
+
+    @property
+    def supports_native_transformed_prediction(self):
+        if not getattr(self.gpr, "native_backend_ready", False):
+            return False
+        if self.infinities_classifier is not None and not self.infinities_classifier.supports_native_prediction:
+            return False
+        if not hasattr(self.preprocessing_y, "inverse_transform_jax"):
+            return False
+        if not self.clipper.trivial and not hasattr(self.clipper, "apply_jax"):
+            return False
+        return True
+
+    def predict_transformed_native(self, X_, return_std=False, ignore_classifier=None):
+        if not self.supports_native_transformed_prediction:
+            raise RuntimeError("Native transformed prediction is not available.")
+        import jax
+        import jax.numpy as jnp
+
+        X_native = to_jax(X_)
+        if X_native.ndim == 1:
+            X_native = X_native[None, :]
+        X_classifier = self._classifier_input_converter_native(X_native)
+
+        if self.infinities_classifier is None or ignore_classifier == "all":
+            finite = jnp.full((X_native.shape[0],), True, dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X_native(
+                X_classifier, ignore=ignore_classifier
+            )
+
+        # ``y_clip_min`` / ``y_clip_max`` are passed as **0-D jnp arrays**, not
+        # Python floats. If captured as Python floats inside ``_predict_one``
+        # below, ``jax.vmap`` traces them as compile-time constants baked into
+        # the JAXpr — every change to the surrogate training-set min/max would
+        # then invalidate the JAX compile cache on the next call. As 0-D jnp
+        # arrays they enter as ``Tracer``s, so the JAXpr is invariant and the
+        # compile cache survives across acquisition iterations even when the
+        # training-set min/max moves.
+        if np.any(self._i_regress):
+            y_clip_min = jnp.asarray(
+                float(self._y[self._i_regress].min()), dtype=jnp.float64
+            )
+            y_clip_max = jnp.asarray(
+                float(self._y[self._i_regress].max()), dtype=jnp.float64
+            )
+        else:
+            y_clip_min = jnp.asarray(self.minus_inf_value, dtype=jnp.float64)
+            y_clip_max = jnp.asarray(self.minus_inf_value, dtype=jnp.float64)
+
+        def _predict_one(x_row, is_finite):
+            x_row = x_row[None, :]
+
+            def _finite_branch(_):
+                x_gp = self._gp_input_converter_native(x_row)
+                if return_std:
+                    y_mean_native, y_std_native = self.gpr.predict_native(
+                        x_gp, return_std=True
+                    )
+                    y_mean = self.preprocessing_y.inverse_transform_jax(y_mean_native)[0]
+                    y_std = self.preprocessing_y.inverse_transform_scale_jax(y_std_native)[0]
+                    if not self.clipper.trivial:
+                        y_mean = self.clipper.apply_jax(y_mean, y_clip_min, y_clip_max)
+                    return y_mean, y_std
+                y_mean_native = self.gpr.predict_native(x_gp, return_std=False)
+                y_mean = self.preprocessing_y.inverse_transform_jax(y_mean_native)[0]
+                if not self.clipper.trivial:
+                    y_mean = self.clipper.apply_jax(y_mean, y_clip_min, y_clip_max)
+                return y_mean
+
+            def _infinite_branch(_):
+                if return_std:
+                    return (
+                        jnp.asarray(self.minus_inf_value, dtype=jnp.float64),
+                        jnp.asarray(0.0, dtype=jnp.float64),
+                    )
+                return jnp.asarray(self.minus_inf_value, dtype=jnp.float64)
+
+            return jax.lax.cond(is_finite, _finite_branch, _infinite_branch, operand=None)
+
+        if return_std:
+            y_mean, y_std = jax.vmap(_predict_one)(X_native, finite)
+            return y_mean, y_std
+        return jax.vmap(_predict_one)(X_native, finite)
+
+    def make_ns_loglikelihood_adapter(self, numpy_loglikelihood, ignore_classifier=None):
+        if not self.supports_native_transformed_prediction:
+            return None
+
+        # Cache the JAX builder closure per ``ignore_classifier`` setting on
+        # the surrogate, so its ``id`` is stable across calls. The BlackJAX
+        # runtime cache in ``ns_interfaces.py`` keys on
+        # ``id(jax_loglikelihood_builder)``; without this caching, every call
+        # produces a fresh closure (different id), which forces a full XLA
+        # recompile of the entire NSS kernel per call. Cold-compile is ~5 min
+        # for ``nlive=200`` in 2D — that was 97% of one e2e run's wall time.
+        if not hasattr(self, "_ns_loglikelihood_jax_builders"):
+            self._ns_loglikelihood_jax_builders = {}
+        cache_key = ignore_classifier
+        builder = self._ns_loglikelihood_jax_builders.get(cache_key)
+        if builder is None:
+            def _jax_builder(param_names_list, _ignore=ignore_classifier):
+                import jax.numpy as jnp
+
+                def _loglikelihood_fn(params):
+                    x = jnp.array(
+                        [params[name] for name in param_names_list],
+                        dtype=jnp.float64,
+                    )
+                    return self.predict_transformed_native(
+                        x, return_std=False, ignore_classifier=_ignore
+                    )[0]
+
+                return _loglikelihood_fn
+
+            builder = _jax_builder
+            self._ns_loglikelihood_jax_builders[cache_key] = builder
+
+        return NativeNestedSamplingLogLikelihood(
+            numpy_loglikelihood=numpy_loglikelihood,
+            jax_builder=builder,
+        )
+
+    def make_native_acquisition_objective(self, acq_func, ignore_classifier=None):
+        """Build a native transformed-space acquisition objective.
+
+        The returned callable takes a single transformed-space point ``x`` and
+        returns the negative acquisition value, matching the minimization
+        convention used by the scipy/JAX optimizers in ``gp_acquisition.py``.
+
+        Native optimization is only supported for acquisition functions whose
+        semantics we can reproduce exactly with the surrogate-native prediction
+        path. At present that means the LogExp family.
+
+        **The closure is cached on the surrogate** (``self._native_acq_objective_cache``)
+        keyed on ``(acq_func type, sigma_n, zeta, baseline, ignore_classifier)``.
+        Without this cache, ``BatchOptimizer.optimize_acquisition_function``
+        rebuilt a fresh ``_neg_objective`` closure on **every restart × every
+        Kriging-Believer step** — typically ~20 times per acquisition iteration
+        for ``n_points_per_acq = d = 2`` with ``n_restarts ≈ 10 + 2·d``. Because
+        ``gp_acquisition.py:_constrained_optimization`` keys its ``jaxopt.LBFGSB``
+        cache on ``id(_native_acq_objective)``, a fresh closure id forced a
+        cold ``LBFGSB`` build on every call, producing 20× cold compiles per
+        iteration (~80 XLA compiles / iter, ~60 % of total wall time on a
+        2-D smoke run). The cache key intentionally captures the per-call
+        scalars (``zeta``, ``baseline``, ``noise_var``) so the closure is
+        reused across restarts but invalidated when those genuinely change.
+        """
+        if not self.supports_native_transformed_prediction:
+            return None
+
+        import jax.numpy as jnp
+        from gpry import acquisition_functions as gpryacqfuncs
+
+        if not isinstance(acq_func, gpryacqfuncs.BaseLogExp):
+            return None
+
+        if acq_func.sigma_n is None:
+            noise_var = self.gpr.noise_level
+            if hasattr(noise_var, "__len__"):
+                noise_var = float(np.mean(noise_var))
+        else:
+            noise_var = acq_func.sigma_n
+        # The AF owns its scheduling: ``effective_zeta`` returns ``self.zeta``
+        # when ``zeta_schedule is None`` and otherwise evaluates the schedule
+        # against the surrogate's training-set state. The returned scalar is
+        # baked into the JAX closure below (the closure cache keys on it, so
+        # a change in scheduled zeta correctly invalidates the cached trace).
+        zeta = acq_func.effective_zeta(self)
+        baseline = self.y_max
+
+        noise_var = float(noise_var)
+        zeta = float(zeta)
+        baseline = float(baseline)
+        min_epistemic_std = max(noise_var * 0.01, 1e-6)
+
+        # Cache lookup. The key uses ``type(acq_func).__name__`` because the
+        # function body branches on ``isinstance(acq_func, LogExp/NonlinearLogExp)``,
+        # which produces structurally different JAXprs. Scalars are part of the
+        # key so a different ``zeta`` etc. triggers a rebuild (and a fresh
+        # jaxopt compile cycle), but only when they actually change.
+        if not hasattr(self, "_native_acq_objective_cache"):
+            self._native_acq_objective_cache = {}
+        cache_key = (
+            type(acq_func).__name__,
+            float(noise_var),
+            float(zeta),
+            float(baseline),
+            float(min_epistemic_std),
+            ignore_classifier,
+        )
+        cached = self._native_acq_objective_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        invalid_penalty = jnp.asarray(1e30, dtype=jnp.float64)
+
+        def _safe_log_expm1_jax(x):
+            return jnp.where(
+                x < 1.0,
+                jnp.log(jnp.expm1(x)),
+                x + jnp.log1p(-jnp.exp(-x)),
+            )
+
+        def _neg_objective(x):
+            mu_vec, std_vec = self.predict_transformed_native(
+                x, return_std=True, ignore_classifier=ignore_classifier
+            )
+            mu = mu_vec[0]
+            std = std_vec[0]
+            var = std**2.0 - noise_var**2.0
+            valid = jnp.isfinite(mu) & (var > 0.0)
+            if isinstance(acq_func, gpryacqfuncs.LogExp):
+                value = 2.0 * zeta * (mu - baseline) + jnp.log(
+                    jnp.sqrt(jnp.clip(var, min_epistemic_std**2, None))
+                )
+            elif isinstance(acq_func, gpryacqfuncs.NonlinearLogExp):
+                value = 2.0 * zeta * (mu - baseline) + _safe_log_expm1_jax(
+                    jnp.sqrt(jnp.clip(var, 0.0, None))
+                )
+            else:
+                return invalid_penalty
+            return jnp.where(valid, -value, invalid_penalty)
+
+        self._native_acq_objective_cache[cache_key] = _neg_objective
+        return _neg_objective
 
     @staticmethod
     def _regressor_output_to_dict(
@@ -1261,3 +1600,11 @@ class Clipper:
             return y
         upper = self.clip_factor * y_max - (self.clip_factor - 1) * y_min
         return np.clip(y, None, upper)
+
+    def apply_jax(self, y, y_min, y_max=None):
+        if self.trivial:
+            return y
+        import jax.numpy as jnp
+
+        upper = self.clip_factor * y_max - (self.clip_factor - 1) * y_min
+        return jnp.minimum(y, upper)

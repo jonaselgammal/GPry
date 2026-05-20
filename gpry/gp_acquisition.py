@@ -297,6 +297,9 @@ class BatchOptimizer(GenericGPAcquisition):
         self.n_repeats_propose = n_repeats_propose
         self.mean_ = None
         self.cov = None
+        self._native_acq_objective = None
+        self._cached_native_acq_solver = None
+        self._cached_native_acq_solver_fn_id = None
 
     def optimize_acquisition_function(self, surrogate, i, bounds=None, rng=None):
         """Exposes the optimization method for the acquisition function. When
@@ -328,31 +331,15 @@ class BatchOptimizer(GenericGPAcquisition):
         use_bounds = self.bounds_ if bounds is None else bounds
         self.proposer.update_bounds(use_bounds)
 
-        # Try to set up a backend-native acquisition optimizer
-        self._gp_native_acq_ref = None
-        self._jax_acq_params = None
-        if (getattr(surrogate.gpr, "supports_native_acquisition_optimization", False)
-                and isinstance(self.acq_func, gpryacqfuncs.BaseLogExp)):
+        # Try to set up a surrogate-faithful native acquisition objective
+        self._native_acq_objective = None
+        if self.acq_optimizer == "fmin_l_bfgs_b":
             try:
-                # Get effective zeta
-                if (self.acq_func.zeta_schedule is not None
-                        and hasattr(surrogate.gpr, "X_train_")):
-                    n_train = surrogate.gpr.X_train_.shape[0]
-                    d = surrogate.gpr.X_train_.shape[1]
-                    zeta = self.acq_func.effective_zeta(n_train, d)
-                else:
-                    zeta = self.acq_func.zeta
-                # Get noise level
-                noise_var = (self.acq_func.sigma_n if self.acq_func.sigma_n
-                             is not None else surrogate.gpr.noise_level)
-                if hasattr(noise_var, '__len__'):
-                    noise_var = float(np.mean(noise_var))
-                baseline = surrogate.y_max
-                self._jax_acq_params = (float(zeta), float(noise_var),
-                                        float(baseline))
-                self._gp_native_acq_ref = surrogate.gpr
+                self._native_acq_objective = surrogate.make_native_acquisition_objective(
+                    self.acq_func
+                )
             except Exception:
-                self._jax_acq_params = None
+                self._native_acq_objective = None
 
         # If we do a first-time run, use this
         if not self.obj_func:
@@ -416,6 +403,12 @@ class BatchOptimizer(GenericGPAcquisition):
             for n_try in range(n_tries):
                 x0 = self.proposer.get(rng=rng)
                 value = self.acq_func(x0, surrogate, validate=False)
+                # Coerce ndim>0 returns from the AF (acquisition_functions.py
+                # returns shape-() or shape-(1,) arrays in some branches) to a
+                # plain scalar. Without this, ``values[ifull] = value`` emits a
+                # numpy-1.25 ndarray->scalar deprecation per inner-loop call,
+                # which spams the NORA hot path.
+                value = float(np.asarray(value).reshape(()))
                 if not np.isfinite(value):
                     continue
                 x0s[ifull] = x0
@@ -504,6 +497,18 @@ class BatchOptimizer(GenericGPAcquisition):
             # the optimization. The GP will be reset after the
             # Acquisition is done.
             surrogate_ = deepcopy(surrogate)
+            # Keep the conditioned surrogate on the numpy path. Phase B-5
+            # padded the JAX fit_precompute so re-enabling JAX in the KB
+            # loop is technically *correct*, but the padded Cholesky / V
+            # operate on (capacity, capacity) matrices -- at n_train ~ 300
+            # / d=5 that's a 512x512 trace per KB step vs ~300x300 in numpy.
+            # The 3x extra FLOPs from over-allocation dominate the recompile
+            # savings, and BatchOpt regressed 162s -> 319s when we tried it
+            # (NORA: 76s -> 95s). Numpy on right-sized matrices wins for
+            # these problem sizes; revisit if/when n_train approaches the
+            # padded capacity (so the over-allocation factor approaches 1).
+            if hasattr(surrogate_.gpr, "disable_native_acceleration"):
+                surrogate_.gpr.disable_native_acceleration()
         surrogate_ = mpi.bcast(surrogate_ if mpi.is_main_process else None)
         n_acq_per_process = mpi.split_number_for_parallel_processes(
             self.n_restarts_optimizer
@@ -569,17 +574,38 @@ class BatchOptimizer(GenericGPAcquisition):
         )
 
     def _constrained_optimization(self, obj_func, initial_X, bounds):
-        # JAX fast path: use cached jaxopt.LBFGSB with static acq function
-        if (hasattr(self, '_jax_acq_params')
-                and self._jax_acq_params is not None):
+        # JAX fast path: optimize a surrogate-native transformed-space objective
+        if self._native_acq_objective is not None:
             try:
-                gpr = self._gp_native_acq_ref
-                zeta, noise_var, baseline = self._jax_acq_params
-                x_opt, func_min = gpr.optimize_acquisition_native(
-                    initial_X, np.array(bounds),
-                    zeta, noise_var, baseline,
+                import jax.numpy as jnp
+                import jaxopt
+                import logging
+
+                fn_id = id(self._native_acq_objective)
+                if (self._cached_native_acq_solver is None
+                        or self._cached_native_acq_solver_fn_id != fn_id):
+                    for name in ("jaxopt", "jaxopt._src", "absl"):
+                        logging.getLogger(name).setLevel(logging.ERROR)
+                    # ``implicit_diff=False`` to avoid jaxopt's per-call
+                    # ``custom_root`` wrapper, which has a fresh Python identity
+                    # each call and defeats JAX's process-level compile cache.
+                    # The acquisition optimum is consumed as a point — no
+                    # implicit derivative is needed. See micro-benchmark in
+                    # ``AGENTS/jax_split_refactor_plan.md`` history.
+                    self._cached_native_acq_solver = jaxopt.LBFGSB(
+                        fun=self._native_acq_objective, maxiter=50, tol=1e-5,
+                        implicit_diff=False,
+                    )
+                    self._cached_native_acq_solver_fn_id = fn_id
+
+                result = self._cached_native_acq_solver.run(
+                    jnp.array(initial_X, dtype=jnp.float64),
+                    bounds=(
+                        jnp.array(bounds[:, 0], dtype=jnp.float64),
+                        jnp.array(bounds[:, 1], dtype=jnp.float64),
+                    ),
                 )
-                return x_opt, func_min
+                return np.asarray(result.params), float(result.state.value)
             except Exception:
                 pass  # Fall back to scipy
         if self.acq_optimizer == "fmin_l_bfgs_b":
@@ -991,15 +1017,9 @@ class NORA(GenericGPAcquisition):
         def logp(X):
             return self._sampling_logp_numpy(surrogate, X)[0]
 
-        builder = surrogate.gpr.make_ns_loglikelihood_builder(
-            preprocessing_y=surrogate.preprocessing_y,
-            clip_factor=surrogate.clipper.clip_factor,
-            y_clip_min=float(surrogate._y[surrogate._i_regress].min()),
-            y_clip_max=float(surrogate._y[surrogate._i_regress].max()),
-        )
-        if builder is not None:
-            preprocessing_y = surrogate.preprocessing_y
-            logp._jax_loglikelihood_builder = builder
+        adapter = surrogate.make_ns_loglikelihood_adapter(logp)
+        if adapter is not None:
+            logp = adapter
 
         # Update prior bounds
         self.sampler_interface.set_prior(self._internal_bounds(bounds))
@@ -1117,14 +1137,25 @@ class NORA(GenericGPAcquisition):
                     else np.ones(shape=self._X_mc_reweight.shape[0])
                 ) * reweight_factor
                 w_mc_reweight /= max(w_mc_reweight)
+            # NOTE: ``_X_mc_reweight_internal`` must be filtered alongside
+            # ``_X_mc_reweight`` to stay in lockstep with the ``y``/``sigma``
+            # arrays. Forgetting this here previously caused
+            # ``multi_add``'s ``np.delete`` calls (which read
+            # ``self._X_mc_reweight_internal``) to index out of bounds against
+            # the smaller ``_y_mc_reweight``. The bug fired on Banana5D under
+            # NORA + np-GPR + PolyChord/UltraNest (the user-space numpy
+            # adapter path), where the wide bounds + ranked-pool reuse
+            # produced a non-empty zero-weight set.
             (
                 self._w_mc_reweight,
                 self._X_mc_reweight,
+                self._X_mc_reweight_internal,
                 self._y_mc_reweight,
                 self._sigma_y_mc_reweight,
             ) = remove_0_weight_samples(
                 w_mc_reweight,
                 self._X_mc_reweight,
+                self._X_mc_reweight_internal,
                 self._y_mc_reweight,
                 self._sigma_y_mc_reweight,
             )
@@ -1297,7 +1328,7 @@ class NORA(GenericGPAcquisition):
             self.acq_func.f,
             baseline=surrogate.y_max,
             noise_level=surrogate.noise_level,
-            zeta=self.acq_func.zeta,
+            zeta=self.acq_func.effective_zeta(surrogate),
         )
         # *Split* among MPI processes and compute acq func value (in parallel)
         this_X, this_y, this_sigma_y, this_acq = self._split_and_compute_acq(
@@ -1839,7 +1870,15 @@ class RankedPool:
             (self.acq_cond, acq_cond),
         ]:
             pool[i_new + 1 :] = pool[i_new:-1]
-            pool[i_new] = value
+            # Coerce shape-() / shape-(1,) inserts to a plain scalar for the
+            # 1-D pool slots (y, sigma, acq, acq_cond). Multi-D ``X`` is left
+            # alone. Avoids the numpy-1.25 ndarray->scalar deprecation that
+            # previously fired once per ranked-pool insertion (~88/iteration
+            # in the NORA loop).
+            if pool.ndim == 1:
+                pool[i_new] = float(np.asarray(value).reshape(()))
+            else:
+                pool[i_new] = value
         # If not in the last position, we can safely assume that it has finite value,
         # since -inf's from conditional acq cannot climb.
         assert self.acq_cond[i_new] > -np.inf
@@ -1885,8 +1924,12 @@ class RankedPool:
             return self._surrogate
         self.log(level=4, msg=f"[pool.cache] Caching model [{i + 1}]")
         self.surrogate_cond[i] = deepcopy(self._surrogate)
-        # These temporary conditioned models are only used for KB ranking. Keeping
-        # them on the numpy path avoids repeated JAX recompilation in the ranking loop.
+        # Keep KB-conditioned models on the numpy path. See parallel comment
+        # in ``BatchOptimizer.multi_add``: even after Phase B-5 padded
+        # ``fit_precompute``, the padded JAX Cholesky on capacity-sized
+        # matrices is *slower* per-call than numpy on n_valid-sized matrices
+        # for our typical regimes (n_train ~ a few hundred). Re-enabling JAX
+        # here regressed NORA wall 76s -> 95s; reverted.
         if hasattr(self.surrogate_cond[i].gpr, "disable_native_acceleration"):
             self.surrogate_cond[i].gpr.disable_native_acceleration()
         X_append = self.X[: i + 1]

@@ -23,6 +23,8 @@ import numpy as np
 from sklearn.svm import SVC  # type: ignore
 from sklearn.utils.validation import check_array as _sk_check_array  # type: ignore
 
+from gpry.array_api import ArrayContract, make_array_converter, to_jax
+from gpry.jax_svm import JaxBinaryRBFSVC
 from gpry.tools import check_random_state, get_Xnumber, shrink_bounds, is_in_bounds
 
 k_trust, k_svm = "trust_region", "svm"
@@ -35,6 +37,17 @@ def check_array(*args, **kwargs):
         except TypeError:
             kwargs["force_all_finite"] = kwargs.pop("ensure_all_finite")
     return _sk_check_array(*args, **kwargs)
+
+
+def _bool_ones_like_X(X):
+    try:
+        import jax.numpy as jnp
+
+        if type(X).__module__.startswith("jax"):
+            return jnp.full((len(X),), True, dtype=bool)
+    except ImportError:  # pragma: no cover
+        pass
+    return np.full(len(X), True, dtype=bool)
 
 
 class InfinitiesClassifiers:
@@ -99,6 +112,44 @@ class InfinitiesClassifiers:
 
     def __str__(self):
         return ", ".join(str(c) for c in self.classifiers.values())
+
+    @property
+    def array_contract(self):
+        if not self.classifiers:
+            return ArrayContract(
+                accepted_inputs=frozenset({"numpy", "jax"}),
+                preferred_input="jax",
+                output_kind="jax",
+            )
+        if not self.supports_native_prediction:
+            return ArrayContract(
+                accepted_inputs=frozenset({"numpy"}),
+                preferred_input="numpy",
+                output_kind="numpy",
+            )
+        return ArrayContract(
+            accepted_inputs=frozenset({"numpy", "jax"}),
+            preferred_input="jax",
+            output_kind="jax",
+        )
+
+    @property
+    def supports_native_prediction(self):
+        return all(
+            getattr(classifier, "supports_native_prediction", False)
+            for classifier in self.classifiers.values()
+        )
+
+    def plan_input_converter(self, source_kind="numpy", context=None):
+        return make_array_converter(
+            source_kind,
+            self.array_contract.preferred_input,
+            warn=(
+                source_kind != self.array_contract.preferred_input
+                and self.array_contract.preferred_input == "jax"
+            ),
+            context=context,
+        )
 
     @property
     def trust_bounds(self):
@@ -390,18 +441,41 @@ class InfinitiesClassifiers:
         i_finite = None
         if ignore is None:
             ignore = []
+        elif isinstance(ignore, str):
+            ignore = [ignore]
         for k, infclass in self.classifiers.items():
             if k in ignore:
                 continue
-            this_i_finite = self.classifiers[k].is_finite_X(
-                np.ascontiguousarray(X) if k == k_svm else X, validate=validate
-            )
+            this_i_finite = infclass.is_finite_X(X, validate=validate)
             if i_finite is None:
                 i_finite = this_i_finite
             else:
                 i_finite &= this_i_finite
         if i_finite is None:  # all classifiers were ignored.
-            return self._i_finite_X(X, validate=validate, ignore="all")
+            return np.full(len(X), True, dtype=bool)
+        return i_finite
+
+    def is_finite_X_native(self, X, ignore=None):
+        if not self.supports_native_prediction:
+            raise RuntimeError("Native classifier prediction requested, but unsupported.")
+        if not self.classifiers or ignore == "all":
+            return _bool_ones_like_X(X)
+        i_finite = None
+        if ignore is None:
+            ignore = []
+        elif isinstance(ignore, str):
+            ignore = [ignore]
+        X_native = to_jax(X)
+        for k, infclass in self.classifiers.items():
+            if k in ignore:
+                continue
+            this_i_finite = infclass.predict_native(X_native)
+            if i_finite is None:
+                i_finite = this_i_finite
+            else:
+                i_finite = i_finite & this_i_finite
+        if i_finite is None:
+            return _bool_ones_like_X(X_native)
         return i_finite
 
     def set_random_state(self, random_state):
@@ -437,6 +511,18 @@ class ThresholdClassifier:
 
     def __str__(self):
         return f"{self.__class__.__name__} (threshold: {self.threshold_definition})"
+
+    @property
+    def array_contract(self):
+        return ArrayContract(
+            accepted_inputs=frozenset({"numpy"}),
+            preferred_input="numpy",
+            output_kind="numpy",
+        )
+
+    @property
+    def supports_native_prediction(self):
+        return False
 
     def update_threshold_definition(self, nstd_calculator):
         """
@@ -554,6 +640,11 @@ class ThresholdClassifier:
         if not self.fitted:
             raise ValueError("This classifier has not been trained yet!")
         return self.predict(X, validate=validate)
+
+    def predict_native(self, X):
+        raise RuntimeError(
+            f"{self.__class__.__name__} does not support native classifier prediction."
+        )
 
     def fit(
         self, X, y, nstd_calculator=None, keep_min=None, i_sorted=None, validate=True
@@ -703,179 +794,130 @@ class ThresholdClassifier:
         return i_sorted[j_first_finite:], threshold
 
 
-class SVM(SVC, ThresholdClassifier):
-    r"""
-    Wrapper for the sklearn `RBF kernel SVM <https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html>`_.
+class _SklearnSVMBackend:
+    @property
+    def array_contract(self):
+        return ArrayContract(
+            accepted_inputs=frozenset({"numpy"}),
+            preferred_input="numpy",
+            output_kind="numpy",
+        )
 
-    Classifies points as finite of non-finite, in order to exclude the latter from the
-    training set of a parent GPR. It keeps track of the full training set, including
-    classified-infinite points.
+    @property
+    def supports_native_prediction(self):
+        return False
 
-    The classification is performed using a threshold understood as a positive difference
-    against the current maximum ``y`` in the training set. The threshold is passed at
-    fitting time and not at initialisation, in case the classifier is defined in a
-    transformed coordinate space, with a transformation that changes through the training
-    of the parent GPR. (NB: passing the threshold every time is a compromise that allows
-    to keep the full training set stored in this object with non-reduced ``y`` values
-    while avoiding preprocessing overhead.)
+    def __init__(self, **kwargs):
+        kwargs["random_state"] = check_random_state(
+            kwargs["random_state"], convert_to_random_state=True
+        )
+        self.model = SVC(**kwargs)
 
-    Also in case there is a coordinate transformation, the training set of this object
-    should not be obtained directly, but via properties of the parent GP instead that will
-    undo the transformation. The same applying to calling any method directly.
+    def set_random_state(self, random_state):
+        self.model.random_state = check_random_state(
+            random_state, convert_to_random_state=True
+        )
 
-    Parameters
-    ----------
-    threshold : numeric
-        Differential threshold below the maximum element in ``y`` over which points
-        are selected as "finite". Must be positive, can be ``np.inf``.
+    def fit(self, X, y_finite, validate=True):
+        X = np.ascontiguousarray(check_array(X, ensure_2d=True, dtype="numeric")) \
+            if validate else np.ascontiguousarray(X)
+        self.model.fit(X, y_finite)
 
-    nstd_calculator : callable
-        Function able to translate threshold values from sigma units to the space in which
-        the classifiers are defined (including preprocessing, if present).
+    def predict(self, X, validate=True):
+        if validate:
+            X = np.ascontiguousarray(check_array(X, ensure_2d=True, dtype="numeric"))
+            return self.model.predict(X)
+        return self.model.classes_.take(
+            np.asarray(self.model._dense_predict(np.ascontiguousarray(X)), dtype=np.intp)
+        )
 
-
-    C : float, default=1e7
-        Regularization parameter. The strength of the regularization is
-        inversely proportional to C. Must be strictly positive. The penalty
-        is a squared l2 penalty.
-
-    kernel : {'linear', 'poly', 'rbf', 'sigmoid', 'precomputed'}, default='rbf'
-        Specifies the kernel type to be used in the algorithm.
-        It must be one of 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed' or
-        a callable.
-        If none is given, 'rbf' will be used. If a callable is given it is
-        used to pre-compute the kernel matrix from data matrices; that matrix
-        should be an array of shape ``(n_samples, n_samples)``.
-
-    degree : int, default=3
-        Degree of the polynomial kernel function ('poly').
-        Ignored by all other kernels.
-
-    gamma : {'scale', 'auto'} or float, default='scale'
-        Kernel coefficient for 'rbf', 'poly' and 'sigmoid'.
-
-        * if ``gamma='scale'`` (default) is passed then it uses
-          1 / (n_features * X.var()) as value of gamma,
-        * if 'auto', uses 1 / n_features.
+    def __getattr__(self, name):
+        # Pickle / copy / deepcopy / sklearn-clone all probe attributes via
+        # ``__getattr__`` (e.g. ``__getstate__``, ``__reduce__``, ``__deepcopy__``,
+        # ``_sklearn_clone_estimator``). Forwarding those to ``self.model``
+        # makes pickle serialize the SVC's state as the wrapper's state — on
+        # unpickle the wrapper ends up with the SVC's attributes (``classes_``,
+        # ``support_``, ``_sklearn_version``, ...) but **no** ``model`` slot,
+        # and the next ``predict`` call raises ``AttributeError: model``.
+        # Refuse to forward dunder lookups; the wrapper itself doesn't define
+        # any custom dunders, so ``object``'s defaults are the right answer.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        model = self.__dict__.get("model")
+        if model is None:
+            raise AttributeError(name)
+        return getattr(model, name)
 
 
-    coef0 : float, default=0.0
-        Independent term in kernel function.
-        It is only significant in 'poly' and 'sigmoid'.
+class _JaxSVMBackend:
+    @property
+    def array_contract(self):
+        return self.model.array_contract
 
-    shrinking : bool, default=True
-        Whether to use the shrinking heuristic.
+    @property
+    def supports_native_prediction(self):
+        return True
 
-    probability : bool, default=False
-        Whether to enable probability estimates. This must be enabled prior
-        to calling `fit`, will slow down that method as it internally uses
-        5-fold cross-validation, and `predict_proba` may be inconsistent with
-        `predict`.
+    def __init__(self, **kwargs):
+        unsupported = []
+        for key, expected in (
+            ("kernel", "rbf"),
+            ("degree", 3),
+            ("coef0", 0.0),
+            ("shrinking", True),
+            ("probability", False),
+            ("cache_size", 200),
+            ("verbose", False),
+            ("decision_function_shape", "ovr"),
+            ("break_ties", False),
+        ):
+            if kwargs[key] != expected:
+                unsupported.append(f"{key}={kwargs[key]!r}")
+        if unsupported:
+            raise ValueError(
+                "JAX SVM backend currently supports only dense binary RBF SVC options; "
+                f"unsupported settings: {', '.join(unsupported)}."
+            )
+        self.model = JaxBinaryRBFSVC(
+            C=kwargs["C"],
+            gamma=kwargs["gamma"],
+            tol=kwargs["tol"],
+            max_iter=kwargs["max_iter"] if kwargs["max_iter"] > 0 else 1000,
+            class_weight=kwargs["class_weight"],
+        )
 
-    tol : float, default=1e-3
-        Tolerance for stopping criterion.
+    def set_random_state(self, random_state):
+        self.random_state = random_state
 
-    cache_size : float, default=200
-        Specify the size of the kernel cache (in MB).
+    def fit(self, X, y_finite, validate=True):
+        if validate:
+            X = check_array(X, ensure_2d=True, dtype="numeric")
+        self.model.fit(X, y_finite)
 
-    class_weight : dict or 'balanced', default=None
-        Set the parameter C of class i to class_weight[i]*C for
-        SVC. If not given, all classes are supposed to have
-        weight one.
-        The "balanced" mode uses the values of y to automatically adjust
-        weights inversely proportional to class frequencies in the input data
-        as ``n_samples / (n_classes * np.bincount(y))``.
+    def predict(self, X, validate=True):
+        if validate:
+            X = check_array(X, ensure_2d=True, dtype="numeric")
+        return np.asarray(self.model.predict(X))
 
-    verbose : bool, default=False
-        Enable verbose output. Note that this setting takes advantage of a
-        per-process runtime setting in libsvm that, if enabled, may not work
-        properly in a multithreaded context.
+    def predict_native(self, X):
+        return self.model.predict_native(X)
 
-    max_iter : int, default=-1
-        Hard limit on iterations within solver, or -1 for no limit.
+    def decision_function_native(self, X):
+        return self.model.decision_function_native(X)
 
-    decision_function_shape : {'ovo', 'ovr'}, default='ovr'
-        Whether to return a one-vs-rest ('ovr') decision function of shape
-        (n_samples, n_classes) as all other classifiers, or the original
-        one-vs-one ('ovo') decision function of libsvm which has shape
-        (n_samples, n_classes * (n_classes - 1) / 2). However, one-vs-one
-        ('ovo') is always used as multi-class strategy. The parameter is
-        ignored for binary classification.
+    def __getattr__(self, name):
+        # Same dunder-forwarding hazard as ``_SklearnSVMBackend.__getattr__``
+        # above; see the comment there for the failure mode.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        model = self.__dict__.get("model")
+        if model is None:
+            raise AttributeError(name)
+        return getattr(model, name)
 
-    break_ties : bool, default=False
-        If true, ``decision_function_shape='ovr'``, and number of classes > 2,
-        predict will break ties according to the confidence values of
-        decision_function; otherwise the first class among the tied
-        classes is returned. Please note that breaking ties comes at a
-        relatively high computational cost compared to a simple predict.
 
-    random_state : int, RandomState instance or None, default=None
-        Controls the pseudo random number generation for shuffling the data for
-        probability estimates. Ignored when `probability` is False.
-        Pass an int for reproducible output across multiple function calls.
-
-    Attributes
-    ----------
-
-    all_finite : bool
-        Is true when all posterior values which have been sampled are finite
-        which removes the need for fitting the SVM.
-
-    class_weight_ : ndarray of shape (n_classes,)
-        Multipliers of parameter C for each class.
-        Computed based on the ``class_weight`` parameter.
-
-    classes_ : ndarray of shape (n_classes,)
-        The classes labels.
-
-    coef_ : ndarray of shape (n_classes * (n_classes - 1) / 2, n_features)
-        Weights assigned to the features (coefficients in the primal
-        problem). This is only available in the case of a linear kernel.
-        `coef_` is a readonly property derived from `dual_coef_` and
-        `support_vectors_`.
-
-    dual_coef_ : ndarray of shape (n_classes -1, n_SV)
-        Dual coefficients of the support vector in the decision
-        function, multiplied by
-        their targets.
-        For multiclass, coefficient for all 1-vs-1 classifiers.
-        The layout of the coefficients in the multiclass case is somewhat
-        non-trivial.
-
-    fit_status_ : int
-        0 if correctly fitted, 1 otherwise (will raise warning)
-
-    intercept_ : ndarray of shape (n_classes * (n_classes - 1) / 2,)
-        Constants in decision function.
-
-    n_features_in_ : int
-        Number of features seen during fit.
-
-    feature_names_in_ : ndarray of shape (`n_features_in_`,)
-        Names of features seen during fit. Defined only when `X`
-        has feature names that are all strings.
-
-    support_ : ndarray of shape (n_SV)
-        Indices of support vectors.
-
-    support_vectors_ : ndarray of shape (n_SV, n_features)
-        Support vectors.
-
-    n_support_ : ndarray of shape (n_classes,), dtype=int32
-        Number of support vectors for each class.
-
-    probA_ : ndarray of shape (n_classes * (n_classes - 1) / 2)
-    probB_ : ndarray of shape (n_classes * (n_classes - 1) / 2)
-        If `probability=True`, it corresponds to the parameters learned in
-        Platt scaling to produce probability estimates from decision values.
-        If `probability=False`, it's an empty array. Platt scaling uses the
-        logistic function
-        ``1 / (1 + exp(decision_value * probA_ + probB_))``
-        where ``probA_`` and ``probB_`` are learned from the dataset..
-
-    shape_fit_ : tuple of int of shape (n_dimensions_of_X,)
-        Array dimensions of training vector ``X``.
-    """
+class SVM(ThresholdClassifier):
+    """Backend-selecting SVM wrapper for infinities classification."""
 
     def __init__(
         self,
@@ -896,15 +938,12 @@ class SVM(SVC, ThresholdClassifier):
         decision_function_shape="ovr",
         break_ties=False,
         random_state=None,
+        backend="auto",
     ):
         ThresholdClassifier.__init__(self, threshold, nstd_calculator)
         self.all_finite = None
-        # In the SVM, since we have not wrapper the calls to the RNG,
-        # (as we have for the GPR), we need to repackage the new numpy Generator
-        # as a RandomState, which is achieved by gpry.tools.check_random_state
-        random_state = check_random_state(random_state, convert_to_random_state=True)
-        SVC.__init__(
-            self,
+        self.backend = self._resolve_backend(backend)
+        backend_kwargs = dict(
             C=C,
             kernel=kernel,
             degree=degree,
@@ -921,65 +960,42 @@ class SVM(SVC, ThresholdClassifier):
             break_ties=break_ties,
             random_state=random_state,
         )
+        self._backend_model = (
+            _JaxSVMBackend(**backend_kwargs)
+            if self.backend == "jax"
+            else _SklearnSVMBackend(**backend_kwargs)
+        )
+
+    @staticmethod
+    def _resolve_backend(backend):
+        backend = (backend or "auto").lower()
+        if backend == "auto":
+            return "jax"
+        if backend not in {"jax", "sklearn"}:
+            raise ValueError(
+                f"Unknown SVM backend {backend!r}. Expected 'auto', 'jax', or 'sklearn'."
+            )
+        return backend
+
+    @property
+    def array_contract(self):
+        return self._backend_model.array_contract
+
+    @property
+    def supports_native_prediction(self):
+        return self._backend_model.supports_native_prediction
 
     def set_random_state(self, random_state):
-        self.random_state = check_random_state(
-            random_state, convert_to_random_state=True
-        )
+        self._backend_model.set_random_state(random_state)
 
     def fit(
         self, X, y, nstd_calculator=None, keep_min=None, i_sorted=None, validate=True
     ):
-        r"""
-        Fits the SVM with two categorial classes:
-
-        * :math:`\tilde{y}=True` Finite points
-        * :math:`\tilde{y}=False` Infinite points
-
-        where :math:`\tilde{y}` is produced after checking the input ``y``'s against
-        an internal threshold value, which may also be adjusted at this step.
-
-        If the representation space of the ``y``'s has changed, it is necessary to pass an
-        updated ``nstd_calculator`` to update the thresholds.
-
-        Parameters
-        ----------
-        X : array-like, shape = (n_samples, dimensionality)
-            Training data.
-
-        y : array-like, shape = (n_samples, [n_output_dims])
-            Target values. They can have any value smaller than positive infinity,
-            including negative infinity.
-
-        nstd_calculator : callable
-            Function able to translate threshold values from sigma units to the space in
-            which the classifiers are defined (including preprocessing, if present).
-
-        keep_min : int, optional
-            If passed, and there are fewer than ``keep_min`` points above the threshold,
-            the threshold is ignored and the ``keep_min`` largest points are returned.
-            Exception: fewer than ``keep_min`` points in ``y`` that are not ``-np.inf``.
-            If none passed, uses by default ``max(2, dimensionality)``.
-
-        i_sorted : bool or array-like, int, 1-dimensional, optional
-            Sorting indices for ``y``. If True passed, ``y`` is assumed sorted.
-            Passing sorting indices (or True) greatly improves the efficiency of this
-            function, saving a sort of ``y``.
-
-        validate : bool (default: True)
-            If passed, check consistency of input arrays.
-
-        Returns
-        -------
-        i_finite : array-like int
-            Indices of elements in ``y`` classified as "finite" according to the
-            threshold, in sorting order.
-        """
         if nstd_calculator is not None:
             self.update_threshold_definition(nstd_calculator)
         if keep_min is None:
             keep_min = max(2, len(X))
-        if validate:  # make sure X.shape[1] is the dimensionality
+        if validate:
             X = check_array(X, ensure_2d=True, dtype="numeric")
         i_finite, current_threshold = self.i_finite_threshold(
             y,
@@ -992,65 +1008,50 @@ class SVM(SVC, ThresholdClassifier):
             self._current_threshold = None
             return
         self._current_threshold = current_threshold
-        if validate:
-            if X.shape[0] != y.shape[0]:
-                raise TypeError(
-                    f"Different numbers of points in X (shape {X.shape}) and y (shape "
-                    f"{y.shape})."
-                )
-        # If no value below the threshold, nothing to do. Save test for faster checks.
+        if validate and X.shape[0] != y.shape[0]:
+            raise TypeError(
+                f"Different numbers of points in X (shape {X.shape}) and y (shape "
+                f"{y.shape})."
+            )
         if len(i_finite) == len(y):
             self.all_finite = True
             return i_finite
         self.all_finite = False
         y_finite = np.full_like(y, False, dtype=bool)
         y_finite[i_finite] = True
-        # Stupid attribute assignment bc sklearn tries to be too clever at validation
-        attrs = ["nstd_calculator", "threshold"]
-        for attr in attrs:
-            setattr(self, attr, None)
-        super(SVC, self).fit(X, y_finite)
-        for attr in attrs:
-            delattr(self, attr)
+        self._backend_model.fit(X, y_finite, validate=validate)
         return i_finite
 
     def predict(self, X, validate=True):
-        """
-        Wrapper for the predict method of the SVM. Returns a boolean array which is true
-        at locations where the SVM predicts a finite posterior distribution and False
-        where it predicts infinite values.
-
-        Parameters
-        ----------
-        X : array-like, shape = (n_samples, dimensionality)
-            Training data.
-
-        validate : bool (default: True)
-            If passed, check consistency of input arrays.
-
-        Returns
-        -------
-        X_finite : array-like bool
-            A boolean array which is True at locations predicted finite posterior
-            and False at locations with predicted infinite posterior.
-
-        Raises
-        ------
-        ValueError: "ndarray is not C-contiguous"
-           May be raised if ``validate`` is False. Call ``numpy.ascontiguousarray()`` on
-           the input before the call.
-        """
         if not self.fitted:
             raise ValueError("This classifier has not been trained yet!")
-        if validate:
-            X = np.ascontiguousarray(check_array(X, ensure_2d=True, dtype="numeric"))
         if self.all_finite:
             return np.full(len(X), True)
-        if validate:
-            return SVC.predict(self, X)
-        else:  # valid for our use only (dense, 2 classes), when input is guaranteed valid
-            y = self._dense_predict(X)
-            return self.classes_.take(np.asarray(y, dtype=np.intp))
+        return self._backend_model.predict(X, validate=validate)
+
+    def predict_native(self, X):
+        if not self.fitted:
+            raise ValueError("This classifier has not been trained yet!")
+        if self.all_finite:
+            X_native = to_jax(X)
+            try:
+                import jax.numpy as jnp
+
+                return jnp.full((X_native.shape[0],), True, dtype=bool)
+            except ImportError:  # pragma: no cover
+                return np.full(len(X_native), True, dtype=bool)
+        return self._backend_model.predict_native(X)
+
+    def decision_function_native(self, X):
+        return self._backend_model.decision_function_native(X)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        backend_model = self.__dict__.get("_backend_model")
+        if backend_model is None:
+            raise AttributeError(name)
+        return getattr(backend_model, name)
 
 
 class TrustRegion(ThresholdClassifier):
@@ -1100,6 +1101,18 @@ class TrustRegion(ThresholdClassifier):
         ``factor=None``).
         """
         return np.copy(self._trust_bounds)
+
+    @property
+    def array_contract(self):
+        return ArrayContract(
+            accepted_inputs=frozenset({"numpy", "jax"}),
+            preferred_input="jax",
+            output_kind="jax",
+        )
+
+    @property
+    def supports_native_prediction(self):
+        return True
 
     def fit(
         self, X, y, nstd_calculator=None, keep_min=None, i_sorted=None, validate=True
@@ -1191,3 +1204,15 @@ class TrustRegion(ThresholdClassifier):
         if not self.fitted:
             raise ValueError("This classifier has not been trained yet!")
         return is_in_bounds(X, self._trust_bounds, validate=validate)
+
+    def predict_native(self, X):
+        if not self.fitted:
+            raise ValueError("This classifier has not been trained yet!")
+        try:
+            import jax.numpy as jnp
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("JAX is required for native trust-region prediction.") from exc
+        X = to_jax(X)
+        lower = jnp.asarray(self._trust_bounds[:, 0], dtype=jnp.float64)
+        upper = jnp.asarray(self._trust_bounds[:, 1], dtype=jnp.float64)
+        return jnp.all((X >= lower) & (X <= upper), axis=1)
