@@ -17,6 +17,7 @@ from sklearn.base import clone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from gpry.gpr import GaussianProcessRegressor, JaxGaussianProcessRegressor
+from gpry.gpr_jax import _numpy_log_marginal_likelihood
 
 
 def make_gpr(kernel="RBF", n_dims=2, noise_fixed=True, use_jax=True, **kwargs):
@@ -32,7 +33,7 @@ def make_gpr(kernel="RBF", n_dims=2, noise_fixed=True, use_jax=True, **kwargs):
         length_scale_prior=length_scale_prior,
         noise_level=0.1,
         noise_fixed=noise_fixed,
-        n_restarts_optimizer=2,
+        n_hyperopt_restarts=2,
         random_state=42,
         use_jax=use_jax,
         **kwargs,
@@ -41,8 +42,8 @@ def make_gpr(kernel="RBF", n_dims=2, noise_fixed=True, use_jax=True, **kwargs):
 
 def fit_gpr(gpr, X, y, noise_level=None):
     """Fit a GPR, handling the kernel_ = None quirk."""
-    if gpr.kernel_ is None:
-        gpr.kernel_ = clone(gpr.kernel)
+    if gpr.fitted_kernel is None:
+        gpr.fitted_kernel = clone(gpr.kernel)
     kwargs = {"validate": False}
     if noise_level is not None:
         kwargs["noise_level"] = noise_level
@@ -64,13 +65,12 @@ class TestLMLGradient:
         y = np.sin(X[:, 0]) + 0.1 * rng.randn(50)
         fit_gpr(gpr, X, y)
 
-        theta = gpr.kernel_.theta
+        theta = gpr.fitted_kernel.theta
         # JAX gradient
         lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
         # sklearn gradient (via super())
-        lml_sk, grad_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
+        lml_sk, grad_sk = _numpy_log_marginal_likelihood(
+            gpr, theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6,
                                    err_msg="LML value mismatch")
@@ -86,11 +86,10 @@ class TestLMLGradient:
         y = np.sum(np.sin(X), axis=1) + 0.1 * rng.randn(40)
         fit_gpr(gpr, X, y)
 
-        theta = gpr.kernel_.theta
+        theta = gpr.fitted_kernel.theta
         lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
-        lml_sk, grad_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
+        lml_sk, grad_sk = _numpy_log_marginal_likelihood(
+            gpr, theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
         np.testing.assert_allclose(grad_jax, grad_sk, rtol=1e-4, atol=1e-6)
@@ -104,11 +103,10 @@ class TestLMLGradient:
         y = np.sum(np.sin(X), axis=1) + 0.1 * rng.randn(40)
         fit_gpr(gpr, X, y)
 
-        theta = gpr.kernel_.theta
+        theta = gpr.fitted_kernel.theta
         lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
-        lml_sk, grad_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
+        lml_sk, grad_sk = _numpy_log_marginal_likelihood(
+            gpr, theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
         np.testing.assert_allclose(grad_jax, grad_sk, rtol=1e-4, atol=1e-6)
@@ -122,11 +120,10 @@ class TestLMLGradient:
         y = np.sum(np.sin(X), axis=1) + 0.2 * rng.randn(40)
         fit_gpr(gpr, X, y, noise_level=0.2)
 
-        theta = gpr.kernel_.theta
+        theta = gpr.fitted_kernel.theta
         lml_jax, grad_jax = gpr.log_marginal_likelihood_with_grad(theta)
-        lml_sk, grad_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
+        lml_sk, grad_sk = _numpy_log_marginal_likelihood(
+            gpr, theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml_jax, lml_sk, atol=1e-6)
         # Looser tolerance for white noise: sklearn zeros gradient for
@@ -189,7 +186,7 @@ class TestPredictGradient:
         grad_jax = gpr.predict_mean_grad(x_test[0])
 
         # Numpy gradient (hand-coded kernel gradient_x)
-        grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
+        grad_kernel = gpr.fitted_kernel.gradient_x(x_test[0], gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
 
         np.testing.assert_allclose(grad_jax, grad_np, rtol=1e-4, atol=1e-6)
@@ -206,7 +203,7 @@ class TestPredictGradient:
         x_test = rng.randn(1, 2)
         grad_jax = gpr.predict_mean_grad(x_test[0])
 
-        grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
+        grad_kernel = gpr.fitted_kernel.gradient_x(x_test[0], gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
 
         np.testing.assert_allclose(grad_jax, grad_np, rtol=1e-4, atol=1e-6)
@@ -223,7 +220,7 @@ class TestPredictGradient:
         x_test = rng.randn(1, 2)
         grad_jax = gpr.predict_mean_grad(x_test[0])
 
-        grad_kernel = gpr.kernel_.gradient_x(x_test[0], gpr.X_train_)
+        grad_kernel = gpr.fitted_kernel.gradient_x(x_test[0], gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
 
         np.testing.assert_allclose(grad_jax, grad_np, rtol=1e-4, atol=1e-6)
@@ -354,7 +351,7 @@ class TestGPRGradientIntegration:
         fit_gpr(gpr_jax, X, y)
         fit_gpr(gpr_np, X, y)
         # Copy fitted kernel to ensure identical hyperparameters
-        gpr_np.kernel_ = clone(gpr_jax.kernel_)
+        gpr_np.fitted_kernel = clone(gpr_jax.fitted_kernel)
         gpr_np.fit(X, y, fit_hyperparameters=False, validate=False)
 
         x_test = rng.randn(1, 2)
@@ -412,11 +409,10 @@ class TestGPRGradientIntegration:
         y = np.sum(np.sin(X), axis=1) + 0.1 * rng.randn(40)
         fit_gpr(gpr, X, y)
 
-        theta = gpr.kernel_.theta
+        theta = gpr.fitted_kernel.theta
         lml, grad = gpr.log_marginal_likelihood(theta, eval_gradient=True)
-        lml_sk, grad_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(theta, eval_gradient=True, clone_kernel=True)
+        lml_sk, grad_sk = _numpy_log_marginal_likelihood(
+            gpr, theta, eval_gradient=True, clone_kernel=True)
 
         np.testing.assert_allclose(lml, lml_sk, atol=1e-6)
         np.testing.assert_allclose(grad, grad_sk, rtol=1e-4, atol=1e-6)
@@ -431,12 +427,12 @@ class TestGPRGradientIntegration:
         gpr_jax = make_gpr("RBF", n_dims=2, use_jax=True)
         fit_gpr(gpr_jax, X, y)
         lml_jax = gpr_jax.log_marginal_likelihood_value_
-        theta_jax = gpr_jax.kernel_.theta.copy()
+        theta_jax = gpr_jax.fitted_kernel.theta.copy()
 
         gpr_np = make_gpr("RBF", n_dims=2, use_jax=False)
         fit_gpr(gpr_np, X, y)
         lml_np = gpr_np.log_marginal_likelihood_value_
-        theta_np = gpr_np.kernel_.theta.copy()
+        theta_np = gpr_np.fitted_kernel.theta.copy()
 
         # Both should converge to similar optima
         np.testing.assert_allclose(lml_jax, lml_np, rtol=1e-3,
@@ -465,17 +461,15 @@ class TestEdgeCases:
 
         # Mean gradient
         grad_jax = gpr.predict_mean_grad(x_test)
-        grad_kernel = gpr.kernel_.gradient_x(x_test, gpr.X_train_)
+        grad_kernel = gpr.fitted_kernel.gradient_x(x_test, gpr.X_train_)
         grad_np = np.dot(grad_kernel.T, gpr.alpha_)
         np.testing.assert_allclose(grad_jax, grad_np, rtol=1e-4, atol=1e-6)
 
         # LML gradient
         _, grad_lml_jax = gpr.log_marginal_likelihood_with_grad(
-            gpr.kernel_.theta)
-        _, grad_lml_sk = super(
-            JaxGaussianProcessRegressor, gpr
-        ).log_marginal_likelihood(gpr.kernel_.theta, eval_gradient=True,
-                                  clone_kernel=True)
+            gpr.fitted_kernel.theta)
+        _, grad_lml_sk = _numpy_log_marginal_likelihood(
+            gpr, gpr.fitted_kernel.theta, eval_gradient=True, clone_kernel=True)
         np.testing.assert_allclose(grad_lml_jax, grad_lml_sk, rtol=1e-4, atol=1e-6)
         print(f"  5D gradients: mean_diff={np.max(np.abs(grad_jax - grad_np)):.2e}, "
               f"lml_diff={np.max(np.abs(grad_lml_jax - grad_lml_sk)):.2e}")
