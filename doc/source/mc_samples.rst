@@ -49,7 +49,7 @@ To plot the results of the MC sampler, you can load these samples into your favo
 
    runner.plot_mc(add_training=True)
 
-.. image:: images/simple_surrogate_triangle.svg
+.. figure:: images/intro_surrogate_corner.svg
    :width: 450
    :align: center
 

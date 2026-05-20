@@ -18,7 +18,7 @@ where the first term, which depends on the predicted value of the GP, favours la
 
 You can see the way active learning works in the following figure: the top plots show the current GP model, and the bottom ones the value of the acquisition function (for this simple example, the GP standard deviation times the exponential of the double of the GP mean); every column is an iteration of the algorithm. Notice how at every step an evaluation of the true function at the previous maximum of the acquisition function has been added:
 
-.. image:: images/active_learning.png
+.. figure:: images/active_learning.png
    :width: 100%
    :align: center
 
@@ -40,7 +40,7 @@ Obviously, this procedure only makes sense up to a certain amount of iterations,
 
 In the following figure, to be compared with the one above, we only evaluate the posterior every two steps. The red stars are the temporary kriging-believer evaluations that will be assigned their true values in the next iteration.
 
-.. image:: images/active_learning_kb.png
+.. figure:: images/active_learning_kb.png
    :width: 100%
    :align: center
 
@@ -56,11 +56,9 @@ GPry also introduces an alternative approach called NORA (Nested sampling Optimi
 
 In the following figure you can see in action the procedure of selecting a batch of candidates once a NS sample has been obtained: in the second row, the best candidate from the NS sample is selected according to their acquisition function, and used to condition the acquisition function in the following row, where the procedure is repeated. For comparison, we show the global optimum of the acquisition function, that the NS sample will have not reached, but will have approached significantly.
 
-.. image:: images/active_learning_nora.png
+.. figure:: images/active_learning_nora.png
    :width: 100%
    :align: center
-
-|
 
 This approach to active learning has better **scaling with dimensionality** than naive optimization of the acquisition function because:
 
@@ -112,6 +110,6 @@ The algorithm, putting everything together
 
 The following flowchart provides a simple representation of most of the steps in the GPry algorithm:
 
-.. image:: images/gpry_flow.svg
+.. figure:: images/gpry_flow.svg
    :width: 50%
    :align: center
