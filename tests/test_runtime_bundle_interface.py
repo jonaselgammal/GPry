@@ -11,8 +11,8 @@ from gpry.preprocessing import DummyPreprocessor
 
 
 def fit_gpr(gpr, X, y, **kwargs):
-    if gpr.kernel_ is None:
-        gpr.kernel_ = clone(gpr.kernel)
+    if gpr.fitted_kernel is None:
+        gpr.fitted_kernel = clone(gpr.kernel)
     return gpr.fit(X, y, validate=False, **kwargs)
 
 
@@ -25,7 +25,7 @@ def make_gpr(dim=2, random_state=0):
         length_scale_prior=length_scale_prior,
         noise_level=1e-2,
         noise_fixed=True,
-        n_restarts_optimizer=2,
+        n_hyperopt_restarts=2,
         random_state=random_state,
     )
 
@@ -66,13 +66,18 @@ def test_jax_backend_builds_transformed_loglikelihood():
     gpr = make_gpr()
     fit_gpr(gpr, X, y)
 
-    builder = gpr.make_ns_loglikelihood_builder(
+    def numpy_loglikelihood(X):
+        return gpr.predict(np.atleast_2d(X), validate=False)[0]
+
+    adapter = gpr.make_ns_loglikelihood_adapter(
+        numpy_loglikelihood,
         preprocessing_y=DummyPreprocessor,
         clip_factor=None,
         y_clip_min=float(y.min()),
         y_clip_max=float(y.max()),
     )
-    loglikelihood_fn = builder(["x_1", "x_2"])
+    assert adapter is not None
+    loglikelihood_fn = adapter.build_jax_loglikelihood(["x_1", "x_2"])
     params = {"x_1": 0.25, "x_2": -0.25}
 
     value_jax = float(loglikelihood_fn(params))
