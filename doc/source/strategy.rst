@@ -54,8 +54,10 @@ II. Incorporate known information to simplify the problem
 ---------------------------------------------------------
 
 - Cut the prior to more tightly contain the region where the mode is expected. To help you with this, you can :ref:`plot a slice of the posterior <help_plot_slice>`, but be careful not to cut to tight: degeneracies between parameters that are not visible in a slice can leave out parts of the mode.
+
 - If available, use a different parameterization for which the posterior may be more Gaussian and less correlated.
-- [TODO] Something about initialization
+
+- Provide a region of interest from where to draw the initial training set (see :doc:`initialization`).
 
 
 III. Try GPry on an easier version of the same problem
