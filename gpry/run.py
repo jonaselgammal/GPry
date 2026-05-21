@@ -1,32 +1,25 @@
 """
-This module implements the :class:`~run.Runner` class, which handles the Bayesian
-optimization loop, running it and getting MC samples from it. Furthermore some methods
-for plotting and diagnostics are provided.
+This module implements the :class:`~gpry.run.Runner` class, which handles the active
+learning loop (see :doc:`how_does_gpry_work`), and gets MC samples from the surrogate
+model after convergence (see :doc:`mc_samples`). It also includes some methods for
+plotting and diagnostics. A ``callback=[callable]`` function can also be passed (see
+:doc:`callback`).
 
-After intialization, a :class:`~run.Runner` instance possesse as attributes a wrapper
-of the true model (``Runner.truth``), the surrogate model instance (``Runner.surrogate``),
-the acquision engine (``Runner.acquisition``), and the convergence criterion
-(``Runner.convergence``). It also stores the general learning parameters
-(``Runner.options``) and an object containing progress information (``Runner.progress``).
+This class is initialized with information about the true model (the true likelihood, the
+prior bounds, optionally names and labels for the parameters), general ``options`` for
+the active learning loop (truth evaluation budget, number of candidates per iteration...),
+and the specification of the different components involved in the loop, which are then
+stored as attributes (see below). For an example call with some non-trivial parameter
+setting see the :doc:`adv_example`.
 
-Furthermore the :class:`run.Runner` object allows for checkpointing. The relevant
+The :class:`~gpry.run.Runner` also contains a table detailing progress information as
+``Runner.progress`` (see :class:`~gpry.progress.Progress`).
+
+Furthermore the :class:`~gpry.run.Runner` object allows for checkpointing. The relevant
 arguments are ``checkpoint="/path/to/checkpoint"``, defining where to save the current
 progress, and ``load_checkpoint="resume"|"overwrite"``, which decides what to do if a
 previous run with the specified checkpoint is found (raises an error if path given but
 action not specified, in order to avoid losing previous work).
-
-A ``callback=[callable]`` function can also be passed. It must take a :class:`run.Runner`
-instance as its single non-keyword argument, through which the current :class:`run.Runner`
-instance will be passed, e.g.:
-
-.. code:: python
-
-   def callback(runner):
-       # Print the current training set as a pandas DataFrame
-       print(runner.surrogate.training_set_as_df())
-
-If running with MPI, pass ``callback_is_MPI_aware=True`` (default ``False``) if the
-callback function is supposed to run on all process simultaneously.
 """
 
 import os

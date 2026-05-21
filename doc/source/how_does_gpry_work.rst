@@ -78,7 +78,7 @@ Finally, since a sample from the mean GP is produced together with the candidate
 Fitting the surrogate model
 ---------------------------
 
-Once optimal candidates have been selected, the true posterior is evaluated there (if possible, in parallel), and the surrogate model is updated. This update entails two distinct operations:
+Once optimal candidates have been selected, the true posterior is evaluated there (if possible, in parallel), and the surrogate model is updated. On the side of the GP regressor, which is the most expensive part of the surrogate model, this update entails two distinct operations:
 
 1. Conditioning the Gaussian Process Regressor on the new, enlarged set of training samples.
 
@@ -91,6 +91,26 @@ Because of this large scaling, and also because we do not expect the addition of
 .. note::
 
    At this step of the algorithm we also re-fit the pre-processors for the input and output data, as well as, if used, the SVM aimed at classifying regions of the parameter space as either interesting (if the posterior value is expected to be significantly high) or not (if the posterior value is expected to be very or infinitely low).
+
+
+The infinities classifier
+-------------------------
+
+Though in principle there is no lower limit to the log-posterior values that GPry can handle, there are reasons in practice for dealing with very small posterior values in a different way:
+
+- Large negative log-posteriors, especially those that are literally or effectively minus infinity, can create instabilities in the GP interpolation, even when regularised.
+- It is common that returning these values is the way likelihood implementations signify that somewhere along the computational pipeline a particular step failed, so it would not make sense to include it in the interpolation.
+- Especially for likelihoods of noisy data, very-low-likelihood values have numerical (deterministic) noise, which does not make sense to model with the GP regressor.
+
+Since GPry is an inference code, aiming at modelling probability density functions around their modes, it makes sense to censor such values, and, if possible, to predict them before evaluation of the true likelihood to prevent wasting time exploring a very-low-probability region and making the GP regressor model heavier.
+
+By default, GPry establishes as a *threshold* log-posterior value a large enough difference between the test log-posterior value and the maximum one achieved so far. This difference is scaled with dimensionality so that it corresponds to a certain amount of probability mass for a gaussian (see `arXiv:2211.02045 <https://arxiv.org/abs/2211.02045>`_ ).
+
+Only points classified as *finite* according to this criterion will form part of the GP regressor training set, whereas both point types will be used to retrain a *support vector machine* (SVM) classifier at each iteration. The SVM classifier partitions the parameter space into *finite* and *minus infinity* regions. Points in parameter space that fall in the *minus infinity* region are automatically discarded during the acquisition phase before their true posterior evaluation.
+
+.. figure:: images/svm_illustration.svg
+   :width: 50%
+   :align: center
 
 
 Convergence check

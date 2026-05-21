@@ -22,22 +22,24 @@ descending order:
 - Clipper: an optional post-processor that clips the output of the GP Regressor whenever
   it is above some factor of the maximum log-posterior difference in the training set.
 
-The :class:`surrogate.SurrogateModel` class provides the :meth:`SurrogateModel.append`
-method to add new data to the model and optionally fit its different components (including
-their hyperparameters if present).
+The :class:`~gpry.surrogate.SurrogateModel` class provides the
+:func:`~gpry.surrogate.SurrogateModel.append` method to add new data to the model and
+optionally fit its different components (including their hyperparameters if present).
 
-Surrogate model predictions can be obtained using the :meth:`SurrogateModel.logp` method,
-or more generally the :meth:`SurrogateModel.predict` method. Classification of finite
-vs infinite log-posterior values can be obtained with :meth:`SurrogateModel.is_finite_X`
-(for predicting with the classifier(s) based on some input) or
-:meth:`SurrogateModel.is_finite_y` (comparison against a set threshold). Do not call
-methods of the GP Regressor or the classifiers directly, since they need to be passed
-preprocessed input.
+Surrogate model predictions can be obtained using the
+:func:`~gpry.surrogate.SurrogateModel.logp` method, or more generally the
+:func:`~gpry.surrogate.SurrogateModel.predict` method. Classification of finite vs
+infinite log-posterior values can be obtained with
+:func:`~gpry.surrogate.SurrogateModel.is_finite_X` (for predicting with the classifier(s)
+based on some input) or :func:`~gpry.surrogate.SurrogateModel.is_finite_y` (comparison
+against a set threshold). Do not call methods of the GP Regressor or the classifiers
+directly, since they need to be passed preprocessed input.
 
 To extract the current training set there are a number of class properties defined,
 depending on whether one wants all the training points, just the last ones added, just the
 ones used (or not used) by the GP Regressor, etc. Alternatively, one can get a list of
-all the points and their properties with :meth:`SurrogateModel.training_set_as_df`.
+all the points and their properties with
+:func:`~gpry.surrogate.SurrogateModel.training_set_as_df`.
 """
 
 # Builtin
@@ -281,7 +283,8 @@ class SurrogateModel:
     def X_last_appended(self):
         """
         Coordinates of the training points added to the surrogate model in the last call
-        to :meth:`Surrogate.append`, regardless of classification (returns a copy).
+        to :func:`~gpry.surrogate.Surrogate.append`, regardless of classification
+        (returns a copy).
         """
         return np.copy(self._X[-self.n_last_appended :])
 
@@ -289,7 +292,8 @@ class SurrogateModel:
     def y_last_appended(self):
         """
         Log-posterior of the training points added to the surrogate model in the last call
-        to :meth:`Surrogate.append`, regardless of classification (returns a copy).
+        to :func:`~gpry.surrogate.Surrogate.append`, regardless of classification
+        (returns a copy).
         """
         return np.copy(self._y[-self.n_last_appended :])
 
@@ -341,7 +345,7 @@ class SurrogateModel:
     def X_last_appended_regress(self):
         """
         Coordinates of the training points added to the GP Regressor in the last call
-        to :meth:`Surrogate.append` (returns a copy).
+        to :func:`~gpry.surrogate.Surrogate.append` (returns a copy).
         """
         return np.copy(self._X[self._i_regress][-self.n_last_appended_finite :])
 
@@ -349,7 +353,7 @@ class SurrogateModel:
     def y_last_appended_regress(self):
         """
         Log-posterior of the training points added to the GP Regressor in the last call
-        to :meth:`Surrogate.append` (returns a copy).
+        to :func:`~gpry.surrogate.Surrogate.append` (returns a copy).
         """
         return np.copy(self._y[self._i_regress][-self.n_last_appended_finite :])
 
@@ -971,8 +975,8 @@ class SurrogateModel:
         ignore_classifier=None,
     ):
         """
-        Returns the surrogate log-posterior. Alias of :meth:`Surrogate.predict` for the
-        GP Regressor's mean only.
+        Returns the surrogate log-posterior. Alias of
+        :func:`~gpry.surrogate.Surrogate.predict` for the GP Regressor's mean only.
 
         Parameters
         ----------

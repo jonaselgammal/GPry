@@ -5,7 +5,7 @@ distribution and monitoring performance of the algorithm.
 (Other plots are in methods of some classes, e.g. Progress contains the timings plot.)
 
 Under normal circumstances you shouldn't have to use any of the methods in here if you use
-the :class:`run.Runner` class to run GPry.
+the :class:`~gpry.run.Runner` class to run GPry.
 """
 
 import warnings

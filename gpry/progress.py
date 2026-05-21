@@ -4,7 +4,7 @@ information about the performance of the algorithm (timing, number of GP evaluat
 etc.).
 
 Under normal circumstances you shouldn't have to use any of the methods in here if you use
-the :class:`run.Runner` class to run GPry.
+the :class:`~gpry.run.Runner` class to run GPry.
 """
 
 import time

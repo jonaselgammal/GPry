@@ -1,29 +1,30 @@
 """
 This module contains several classes and methods for calculating different
-convergence criterions which can be used to determine if the BO loop has
+convergence criteria which can be used to determine if the BO loop has
 converged.
 
-It implements a base :class:`convergence.ConvergenceCriterion` class
+It implements a base :class:`~gpry.convergence.ConvergenceCriterion` class
 of which several inbuilt convergence criteria inherit. Using this base class
 it is also possible to construct custom convergence criteria. All convergence criteria
-are passed a prior object which is part of the model instance and an options dict.
+are passed a list of prior bounds and a dictionary of options specific to each criterion.
 
-The fastest one, and reasonably accurate, is :class:`convergence.CorrectCounter`, a local
-criterion that checks that the difference between evaluated and predicted values is small
-enough, taking into account dimensional regularization.
+The fastest one, and reasonably accurate, is :class:`~gpry.convergence.CorrectCounter`,
+a local criterion that checks that the difference between evaluated and predicted values
+is small enough, taking into account dimensional regularization.
 
 If mean and covariance matrix of the surrogate posterior are available (e.g. when using
-the :class:`NORA` acquisition engine), it is a good idea to combine it with
-:class:`GaussianKL`, a global criterion checking stability of KL divergences between
-iterations in a Gaussian approximation.
+the :class:`~gpry.gp_acquisition.NORA` acquisition engine), it is a good idea to combine
+it with :class:`~gpry.convergence.GaussianKL`, a global criterion checking stability of KL
+divergences between iterations in a Gaussian approximation.
 
-There is also a self-explanatory :class:`DontConverge` criterion, that can be used in
-combination with a set training sample budget to ensure that this budget is always
-exhausted.
+There is also a self-explanatory :class:`~gpry.convergence.DontConverge` criterion, that
+can be used in combination with a set training sample budget to ensure that this budget is
+always exhausted.
 
-Finally, :class:`TrainAlignment` is a criterion run at the end of the learning loop, that
-checks that the result of an MC run on the surrogate posterior represents the mode
-described by the training set. This avoids converging on overshoots of the GP Regressor.
+Finally, :class:`~gpry.convergence.TrainAlignment` is a criterion run at the end of the
+learning loop, that checks that the result of an MC run on the surrogate posterior
+represents the mode described by the training set. This avoids converging on overshoots of
+the GP Regressor.
 
 Convergence policy
 ^^^^^^^^^^^^^^^^^^
@@ -151,7 +152,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         if len(values) == 0 or len(n_posterior_evals) == 0:
             raise ValueError(
                 "Make sure to call the convergence criterion "
-                "before getting it's history."
+                "before getting its history."
             )
         return values, n_posterior_evals, n_accepted_evals
 

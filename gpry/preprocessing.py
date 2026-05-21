@@ -10,7 +10,8 @@ be performed internally.
 
 You can build your own preprocessor if you want. This requires you to build a
 custom class. How to do that for X- and y-preprocessors is explained in the
-:class:`Pipeline_X` and :class:`Pipeline_y` classes respectively.
+:class:`~.gpry.preprocessing.PipelineX` and :class:`~.gpry.preprocessing.PipelineY`
+classes respectively.
 
 NB: all ``transform``-like methods should return a copy of the input, but avoid
 unnecessary ``copy`` statements.

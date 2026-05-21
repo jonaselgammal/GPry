@@ -1,7 +1,7 @@
 """
-Module implementing the main class :class:`truth.Truth` wrapping the true log-posterior
-and associated definitions: parameter names and labels, prior bounds and reference bounds
-for initialization (optional).
+Module implementing the main class :class:`~gpry.truth.Truth` wrapping the true
+log-posterior and associated definitions: parameter names and labels, prior bounds and
+reference bounds for initialization (optional).
 """
 
 from warnings import warn
