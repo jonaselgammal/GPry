@@ -98,11 +98,11 @@ Convergence check
 
 Since we do not have access in general to the target distribution, we base our criteria on stability of the current surrogate model (assuming it is converging towards the right target). By default, we use two criteria:
 
-- That we do not get any more *surprises* when evaluating the true posterior at the proposed candidate locations. We check this by comparing the true value of the log-posterior with the mean GP prediction, and testing the difference against the expected dynamical range of the function. This is implemented in :class:`convergence.CorrectCounter`.
+- That we do not get any more *surprises* when evaluating the true posterior at the proposed candidate locations. We check this by comparing the true value of the log-posterior with the mean GP prediction, and testing the difference against the expected dynamical range of the function. This is implemented in :class:`~gpry.convergence.CorrectCounter`.
 
-- That the current surrogate model does not diverge significantly from that of the previous iteration. For this last one, we need a Monte Carlo sample of the surrogate posterior at every iteration, which, :ref:`if we are using NORA <nora_explanation>`, we already have obtained at the acquisition level step. This is implemented in :class:`convergence.GaussianKL`.
+- That the current surrogate model does not diverge significantly from that of the previous iteration. For this last one, we need a Monte Carlo sample of the surrogate posterior at every iteration, which, :ref:`if we are using NORA <nora_explanation>`, we already have obtained at the acquisition level step. This is implemented in :class:`~gpry.convergence.GaussianKL`.
 
-On top of these criteria, we check that the region that concentrates most of the surrogate posterior mass corresponds to the location of the highest training samples. This is done to avoid converging on optimistic extrapolations (or overshootings) of the GP, where a temporary high expectation value is assigned to a region with no training support. This criterion, set as a necessary but not sufficient condition, is implemented in :class:`convergence.TrainAlignment`.
+On top of these criteria, we check that the region that concentrates most of the surrogate posterior mass corresponds to the location of the highest training samples. This is done to avoid converging on optimistic extrapolations (or overshootings) of the GP, where a temporary high expectation value is assigned to a region with no training support. This criterion, set as a necessary but not sufficient condition, is implemented in :class:`~gpry.convergence.TrainAlignment`.
 
 
 The algorithm, putting everything together

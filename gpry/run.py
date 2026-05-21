@@ -2173,7 +2173,7 @@ class Runner:
             # TODO: remove the block below in favour of a call to Runner.plot_mc
             mc_samples = {}
             filled = {}
-            add_logp, add_loglike = True, False
+            add_logp, add_loglike = False, False
             if fid_mc is not None:
                 mc_samples["Fiducial"] = fid_mc
                 # If fiducial present and it has loglikelihood, use it instead of logp,

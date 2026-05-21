@@ -1,5 +1,5 @@
-Introductory example to using GPry
-==================================
+Introductory example
+====================
 
 .. note::
    The code for the example is available at :download:`../../examples/introductory_example.ipynb` and :download:`../../examples/introductory_example.py`
@@ -36,7 +36,7 @@ We need to define a **log-likelihood** function, which is the modelling target f
 Step 2: Creating the Runner object
 ----------------------------------
 
-The :class:`run.Runner` object manages model specification and the active sampling loop of GPry up to convergence. A didactic intro to this process can be found in section :doc:`how_does_gpry_work`. The :`run.Runner` object also implements some post-processing and tests.
+The :class:`~gpry.run.Runner` object manages model specification and the active sampling loop of GPry up to convergence. A didactic intro to this process can be found in section :doc:`how_does_gpry_work`. The :class:`~gpry.run.Runner` object also implements some post-processing and tests.
 
 To initialize it, we pass it the log-likelihood function as first argument, and the prior bounds as the second argument (or via the ``bounds`` keyword). More complicated prior specification can be passed by defining and passing as first argument a `Cobaya model <https://cobaya.readthedocs.io/en/latest/models.html>`_ (see :doc:`module_cobaya`).
 
@@ -54,7 +54,7 @@ In this example we will leave to their default values all training parameters: t
 Step 3: Running the active learning loop
 ----------------------------------------
 
-Since all training parameters are chosen automatically all we have to do is to call the :meth:`run <run.Runner.run>` method of the :class:`Runner <run.Runner>` object:
+Since all training parameters are chosen automatically all we have to do is to call the :func:`~gpry.run.Runner.run` method of the :class:`~gpry.run.Runner` object:
 
 .. code:: python
 
@@ -67,7 +67,7 @@ Once converged, you can access the surrogate model and use it as a function for 
 .. note::
    Internally GPry models the **log-posterior**, not the log-likelihood.
 
-To get the surrogate log-posterior or log-likelihood you can call respectively :meth:`Runner.logp <run.Runner.logp>` or :meth:`Runner.logL <run.Runner.logL>`, passing each a single ``(nsamples, ndims)`` array with the locations where you want to evaluate the surrogate.
+To get the surrogate log-posterior or log-likelihood you can call respectively :func:`~gpry.run.Runner.logp` or :func:`~gpry.run.Runner.logL`, passing each a single ``(nsamples, ndims)`` array with the locations where you want to evaluate the surrogate.
 
 Let us compare the GPry surrogate model and the true likelihood at `(1, 2)`. Both evaluations should produce similar numbers.
 
@@ -87,13 +87,13 @@ If a checkpoint has been defined, samples are stored in that same folder, inside
 
 .. note::
 
-   If you would like to repeat this process to get a finer sample, you can generate a new one by calling the :meth:`run.Runner.generate_mc_sample` method with some options for the sampler:
+   If you would like to repeat this process to get a finer sample, you can generate a new one by calling the :func:`~gpry.run.Runner.generate_mc_sample` method with some options for the sampler:
 
    .. code:: python
 
        runner.generate_mc_sample(sampler={"nested": {"nlive": "50d"}})
 
-The last MC sample can be retrieved with the :meth:`run.Runner.last_mc_samples` method:
+The last MC sample can be retrieved with the :func:`~gpry.run.Runner.last_mc_samples` method:
 
 .. code:: python
 
@@ -121,7 +121,7 @@ It should produce something like:
 
 Now that we have MC samples, we can process and plot them the same way that we would do with any other MC samples.
 
-The easiest way to get a corner plot is to call the :meth:`run.Runner.plot_mc` method, which will generate a `GetDist` corner plot (it includes the training set unless passed ``add_training=False``).
+The easiest way to get a corner plot is to call the :func:`~gpry.run.Runner.plot_mc` method, which will generate a `GetDist` corner plot (it includes the training set unless passed ``add_training=False``).
 
 .. code:: python
 
@@ -143,7 +143,7 @@ You can do further plots about the progress of the active-learning loop using:
 If you call this method without any arguments it produces the following plots:
 
 * a histogram of the time spent at different parts of the code.
-* if the run has converged, a corner plot of the final MC sample showing the training set (the same one you get when calling :meth:`run.Runner.plot_mc`).
+* if the run has converged, a corner plot of the final MC sample showing the training set (the same one you get when calling :func:`~gpry.run.Runner.plot_mc`).
 * a convergence history ("trace") plot showing, as a function of posterior evaluations, the value(s) of all convergence criteria, the distribution of posterior values, and the distribution of samples per model parameter.
 
 .. figure:: images/intro_timing.svg
@@ -162,7 +162,7 @@ Validation
 
 **NB: This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would obviously not run a full MCMC on the likelihood**
 
-To compare our contours to the true Gaussian we draw 10000 samples from it, and set them as *fiducial samples* in the ``Runner``:
+To compare our contours to the true Gaussian we draw 10000 samples from it, and set them as *fiducial samples* in the :class:`~gpry.run.Runner`:
     
 Lastly we compare our result to the original gaussian:
 
