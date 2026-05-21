@@ -512,10 +512,7 @@ class Runner:
             initial_proposer_args = initial_proposer[initial_proposer_name]
             if "bounds" not in initial_proposer_args:
                 initial_proposer_args["bounds"] = self.prior_bounds
-            # TODO: at py 3.8 deprecation, use str.removesuffix("proposer")
-            propname_nosuffix = initial_proposer_name.lower()
-            if propname_nosuffix.endswith("proposer"):
-                propname_nosuffix = propname_nosuffix[: -len("proposer")]
+            propname_nosuffix = initial_proposer_name.lower().removesuffix("proposer")
             if propname_nosuffix == "reference":
                 self.initial_proposer = ReferenceProposer(
                     self.truth, **initial_proposer_args
@@ -2124,7 +2121,7 @@ class Runner:
 
         corner : bool (default: False)
             Creates a corner plot per iteration (contours for current GP shown only if
-            using NORA). Slow -- use for diagnosis only
+            using NORA). Slow -- use for diagnosis only.
 .
         corner_final : bool, optional (default: None)
             Whether the final corner plot is created. Needs a surrogate mc sample.
