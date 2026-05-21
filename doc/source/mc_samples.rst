@@ -7,9 +7,9 @@ Once the learning loop has converged, drawing Monte Carlo samples from the surro
 
    By default, an MC sampler will have already been run at convergence for diagnosis purposes.
 
-The simplest way to create an MC sample from the surrogate model is to call the :py:meth:`run.Runner.generate_mc_sample>` method of the :py:class:`Runner <run.Runner>` object. This method can be called any number of times, and the previous samples will be overwritten.
+The simplest way to create an MC sample from the surrogate model is to call the :func:`~gpry.run.Runner.generate_mc_sample` method of the :class:`~gpry.run.Runner` object. This method can be called any number of times, and the previous samples will be overwritten.
 
-The MC algorithms available are the same nested samplers used by the :class:`NORA acquisition engine <gp_acquisition.NORA>` (see :ref:`installing_nested_samplers`), as well as the MCMC sampler from `Cobaya <https://cobaya.readthedocs.io>`_.
+The MC algorithms available are the same nested samplers used by the :class:`~gpry.gp_acquisition.NORA` acquisition engine (see :ref:`installing_nested_samplers`), as well as the MCMC sampler from `Cobaya <https://cobaya.readthedocs.io>`_.
 
 To generate new MC samples with default settings (uses the best nested sampler available by default):
 
@@ -17,7 +17,7 @@ To generate new MC samples with default settings (uses the best nested sampler a
 
    runner.generate_mc_sample()
 
-To retrieve the last generated samples, use the :meth:`run.Runner.last_mc_samples>` method. By default, it returns the samples as a dictionary. A pandas DataFrame can be generated as:
+To retrieve the last generated samples, use the :func:`~gpry.run.Runner.last_mc_samples` method. By default, it returns the samples as a dictionary. A pandas DataFrame can be generated as:
 
 .. code:: python
 
@@ -43,7 +43,7 @@ To retrieve the last generated samples, use the :meth:`run.Runner.last_mc_sample
 
 Samples are also stored by default in the same folder as the checkpoint, inside a ``chains`` sub folder. The order of the columns in that file are ``weight log-posterior param_1 param_2 ...``.
 
-To plot the results of the MC sampler, you can load these samples into your favourite analysis/plotting package, or use the :meth:`run.Runner.plot_mc` method:
+To plot the results of the MC sampler, you can load these samples into your favourite analysis/plotting package, or use the :func:`~gpry.run.Runner.plot_mc` method:
 
 .. code:: python
 
@@ -80,6 +80,6 @@ with higher precision:
 Can one draw samples from the surrogate *likelihood* instead?
 -------------------------------------------------------------
 
-The :class:`run.Runner` class implements the :meth:`run.Runner.logL` method as the reconstructed log-likelihood from the surrogate log-posterior. This should return a close approximation to the true likelihood within the prior bounds, except, in the case of non-uniform priors, for regions where the prior density is very low.
+The :class:`~gpry.run.Runner` class implements the :func:`~gpry.run.Runner.logL` method as the reconstructed log-likelihood from the surrogate log-posterior. This should return a close approximation to the true likelihood within the prior bounds, except, in the case of non-uniform priors, for regions where the prior density is very low.
 
-Thus, conversely, if the targeted support is well contained within the prior bounds of the surrogate model, one can pass the :meth:`run.Runner.logL` method to an MC sampler to produce samples using a different prior.
+Thus, conversely, if the targeted support is well contained within the prior bounds of the surrogate model, one can pass the :func:`~gpry.run.Runner.logL` method to an MC sampler to produce samples using a different prior.
