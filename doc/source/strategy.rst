@@ -7,7 +7,7 @@ If GPry does not converge for your problem with the default settings, or does no
 
 .. note::
 
-   In general, if there are problems, it is recommended to use the :class:`NORA acquisition engine <gp_acquisition.NORA>`, since it allows for better diagnosis tools.
+   In general, if there are problems, it is recommended to use the :class:`~gpry.gp_acquisition.NORA` acquisition engine, since it allows for better diagnosis tools.
 
 
 .. _help_healthy:
@@ -15,9 +15,9 @@ If GPry does not converge for your problem with the default settings, or does no
 How does healthy convergence look like?
 ---------------------------------------
 
-In order to identify possible problems, it is useful to know how convergence looks like in a trace plot [TODO: reference to trace plots]. Here we show the trace for the target log-posterior and the first 2 variables of a 16-dimensional Gaussian for which GPry has successfully converged, and mark its difference stages:
+In order to identify possible problems, it is useful to know how convergence looks like in a trace plot (you can get a trace plot by calling the :func:`~gpry.run.Runner.plot_progress` method of the :class:`~gpry.run.Runner` class with default arguments). Here we show the trace for the target log-posterior and the first 2 variables of a 16-dimensional Gaussian for which GPry has successfully converged, and mark its difference stages:
 
-.. image:: images/help_trace.png
+.. figure:: images/help_trace.png
    :width: 550
    :align: center
 
@@ -34,16 +34,16 @@ If your run is not presenting this sort of progress, or seems stuck in one of th
 I. Learn more about your problem
 --------------------------------
 
-Usually, plotting a slice of the posterior/likelihood is useful to uncover features that may be spoiling the Gaussian Process modelling. To do this, you can use the slice plotter implemented in :func:`plots.plot_slices_func`, preferably using a point close to the posterior mode.
+Usually, plotting a slice of the posterior/likelihood is useful to uncover features that may be spoiling the Gaussian Process modelling. To do this, you can use the slice plotter implemented in :func:`~gpry.plot.plot_slices_func`, preferably using a point close to the posterior mode.
 
 For example, in the following slice we can see two different relevant features:
 
-.. image:: images/help_slice_noise_discont.png
+.. figure:: images/help_slice_noise_discont.png
    :width: 550
    :align: center
 
-- The likelihood seems to have some numerical noise. To deal with this, you should pass a non-null value for the ``noise_level`` to the :class:`gpr.GaussianProcessRegressor` as part of the :class:`surrogate.SurrogateModel` arguments, here approximately ``noise_level=0.1``.
-- There is a discontinuity at :math:`x_1\approx 0.75`. In general, this would spoil a GPR fit, that expects a nearly-continuous function. Ideally, this would persist in the rest of the dimensions, without presenting degeneracies, and a prior cut :math:`x_1 < 0.75` could be implemented. Otherwise, if the discontinuity leads to posterior values that are low enough, one can request an infinities classifier with some low threshold (e.g. an SVM, see :doc:`module_infinities_classifier`), here approximately ``inf_threshold=20`` would work.
+- The likelihood seems to have some numerical noise. To deal with this, you should pass a non-null value for the ``noise_level`` of the :class:`~gpry.gpr.GaussianProcessRegressor`, here approx.\ ``noise_level=0.1``.
+- There is a discontinuity at :math:`x_1\approx 0.75`. In general, this would spoil a GPR fit, that expects a nearly-continuous function. Ideally, this would persist in the rest of the dimensions, without presenting degeneracies, and a prior cut :math:`x_1 < 0.75` could be implemented. Otherwise, if the discontinuity leads to posterior values that are low enough, one can choose the ``inf_threshold`` of the surrogate model so that it always discards these values, here approx. ``inf_threshold=20``.
 
 .. note::
 
@@ -64,28 +64,28 @@ III. Try GPry on an easier version of the same problem
 - Simplify the likelihood computation (e.g. downgrading its precision, turning off contributions) to be able to iterate faster until the problem is solved.
 - Fix a number of parameters to their fiducial/expected value to test on a lower-dimensional version of the problem.
 
-In this simpler scenario, you may be able to get an approximate MCMC/Nested sample to compare with, and :ref:`use it as a reference <help_reference>`.
+In this simpler scenario, you may be able to get an approximate MCMC/Nested sample to compare with, and :ref:`use it as a fiducial sample <help_fiducial>`.
 
 
-.. _help_reference:
+.. _help_fiducial:
 
-IV. Supply a reference (approximate) MC sample if available
+IV. Supply a fiducial (approximate) MC sample if available
 -----------------------------------------------------------
 
-If you have a precise or approximate fiducial MC sample of the posterior, you can pass it to the :class:`run.Runner` instance before calling the :func:`~gpry.run.Runner.run`` method using the :meth:`run.Runner.set_fiducial_MC` method:
+If you have a precise or approximate fiducial MC sample of the posterior, you can pass it to the :class:`~gpry.run.Runner` instance before calling the :func:`~gpry.run.Runner.run` method using the :func:`~gpry.run.Runner.set_fiducial_mc` method:
 
 .. code:: python
 
    runner = Runner([...])
-   runner.set_fiducial_mc(X, logpost=..., weights=...)
+   runner.set_fiducial_MC(X, logpost=..., weights=...)
 
 Note that you can pass instead the loglikelihood (via the ``loglike`` arg), if you are letting GPry compute the prior density.
 
-Similarly, you can pass a single fiducial reference point (e.g. the expected MAP or best fit) using :meth:`run.Runner.set_fiducial_point` method (same arguments, this time scalars).
+Similarly, you can pass a single fiducial central point (e.g. the expected MAP or best fit) using :func:`~gpry.run.Runner.set_fiducial_point` method (same arguments, this time scalars).
 
-This fiducial MC and point will be shown in the :ref:`progress plots <turn_on_plots>` and those generated by :meth:`run.Runner.plot_mc`, and will let you learn about where GPry is mapping versus where the mode actually is.
+This fiducial MC and point will be shown in the :ref:`progress plots <turn_on_plots>`, and will let you learn about where GPry is mapping versus where the mode actually is.
 
-.. image:: images/help_fiducial_corner.png
+.. figure:: images/help_fiducial_corner.png
    :width: 550
    :align: center
 
@@ -95,12 +95,12 @@ This fiducial MC and point will be shown in the :ref:`progress plots <turn_on_pl
 IV. Turn on the debug output and progress plots
 -----------------------------------------------
 
-There are two settings of the Runner :class:`run.Runner` that can help with debugging deficient convergence:
+There are two settings of the Runner :func:`~gpry.run.Runner` that can help with debugging deficient convergence:
 
 - ``verbose``: if set to 4 (by default 3), GPry will produce much more output, including the exact coordinates of the proposed points and the true log-posterior density obtained at evaluation. This can sometimes reveal unexpected behaviour by the true model.
-- ``plots``: if set to ``True``, GPry will produce some plots at the end of every iteration. Plots that are particularly expensive are skipped by default, and need to be requested explicitly. For a full set of progress plots, instead of ``True``, set ``plots={[plot_type]: True, [...]}`` where plot types are the arguments of the :meth:`run.Runner.plot_progress` method.
+- ``plots``: if set to ``True``, GPry will produce some plots at the end of every iteration. Plots that are particularly expensive are skipped by default, and need to be requested explicitly. For a full set of progress plots, instead of ``True``, set ``plots={[plot_type]: True, [...]}`` where plot types are the arguments of the :func:`~gpry.run.Runner.plot_progress` method.
 
-  In particular, ``corner: True`` can reveal if GPry is mapping the right region, especially when a :ref:`reference MC sample <help_reference>` has been passed: if the acquisition MC sample seems stable through iterations and mostly on top of the training set, maybe the convergence criterion is too stringent, or the likelihood is more numerically noisy than the `noise_level` parameter accounts for.
+  In particular, ``corner: True`` can reveal if GPry is mapping the right region, especially when a :ref:`fiducial MC sample <help_fiducial>` has been passed: if the acquisition MC sample seems stable through iterations and mostly on top of the training set, maybe the convergence criterion is too stringent, or the likelihood is more numerically noisy than the `noise_level` parameter accounts for.
 
   Though also expensive, ``slice: True`` is particularly useful for diagnosing misbehaviour by the SVM infinities classifier.
 
@@ -110,6 +110,6 @@ V. Start with high-precision settings
 
 As expected, turning on the `precision paramters` of the algorithm can make it more likely to converge in exchange for additional computational costs. Two good starting points are:
 
-- If using :class:`gp_acquisition.NORA`, decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
+- If using :class:`~gpry.gp_acquisition.NORA`, decreasing ``mc_every`` to ``1``, so that a full NS is run at every iteration. This is specially recommended if a ladder-like progress with frequent jumps (see ) is observed in the trace plot (see :ref:`help_healthy`).
 
 - You can increase the frequency with which hyperparameters are fit with the ``fit_full_every`` option of the runner. This will make it more likely that the best GPR configuration is reached as soon as possible, but at a very high computational cost for dimensions larger than 10.
