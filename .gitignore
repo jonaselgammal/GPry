@@ -141,6 +141,7 @@ examples/*.png
 
 output/*
 tests/files/*
+doc/source/output
 
 # emacs backups
 *~
