@@ -848,9 +848,10 @@ class NORA(GenericGPAcquisition):
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
+        # NB: the atleast_2d slows down the code a bit, but allows us to drop validation
         X_mc, y_mc, w_mc = self.sampler_interface.run(
             lambda X: surrogate.predict(
-                X, return_std=False, validate=False
+                np.atleast_2d(X), return_std=False, validate=False
             )[0],
             out_dir=self._get_output_folder(),
             keep_all=False,
