@@ -118,7 +118,7 @@ class InterfacePolyChord(NSInterface):
                 "https://github.com/PolyChord/PolyChordLite "
                 "(or select an alternative nested sampler, e.g. UltraNest)."
             ) from excpt
-        bounds = check_and_return_bounds(bounds)
+        self.set_prior(bounds)
         self.dim = len(bounds)
         self.polychord_settings = PolyChordSettings(nDims=self.dim, nDerived=0)
         # Don't write unnecessary files: takes lots of space and wastes time
@@ -132,7 +132,6 @@ class InterfacePolyChord(NSInterface):
         for setting, value in self.settings.items():
             setattr(self.polychord_settings, setting, value)
         self.set_verbosity(verbosity)
-        self.set_prior(bounds)
         # Storage of last sample -- will only be defined for rank-0 MPI process
         self.X_all = None
         self.y_all = None

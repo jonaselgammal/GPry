@@ -189,6 +189,11 @@ def get_Xnumber(value, X_letter, X_value=None, dtype=int, varname=None):
     Reads a value out of an X-number, e.g.: "5X" as 5 times the value of X.
 
     If ``X_value`` is not defined, returns a tuple ``(value, has_X, X_power)``.
+
+    Raises
+    ------
+    ValueError
+        If the value cannot be converted into a number.
     """
     not_allowed = [" ", ".", "-", "+", "e", "E", ",", ";"]
     if X_letter in not_allowed:
@@ -433,8 +438,8 @@ def mean_covmat_from_samples(X, w=None, ddof=None):
     Returns an estimation of the mean and covariance of a set ``X`` of points, using the
     given weights.
     """
-    mean = np.average(X, weights=w, axis=0)
-    cov = np.cov(X.T, aweights=w, ddof=ddof)
+    mean = np.atleast_1d(np.average(X, weights=w, axis=0))
+    cov = np.atleast_2d(np.cov(X.T, aweights=w, ddof=ddof))
     return mean, cov
 
 

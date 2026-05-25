@@ -38,7 +38,7 @@ Step 2: Creating the Runner object
 
 The :class:`~gpry.run.Runner` object manages model specification and the active sampling loop of GPry up to convergence. A didactic intro to this process can be found in section :doc:`how_does_gpry_work`. The :class:`~gpry.run.Runner` object also implements some post-processing and tests.
 
-To initialize it, we pass it the log-likelihood function as first argument, and the prior bounds as the second argument (or via the ``bounds`` keyword). More complicated prior specification can be passed by defining and passing as first argument a `Cobaya model <https://cobaya.readthedocs.io/en/latest/models.html>`_ (see :doc:`module_cobaya`).
+To initialize it, we pass it the log-likelihood function as first argument, and the prior bounds as the second argument (or via the ``bounds`` keyword). More complicated prior specification can be passed by defining and passing as first argument a Cobaya :external+cobaya:class:`~model.Model` (see :doc:`module_cobaya`).
 
 Optionally, we can also pass a path where to save checkpoints via the ``checkpoint`` argument. If passed, in order to prevent loss of data, you **must** specify a checkpoint policy, either ``load_checkpoint="resume"`` or ``load_checkpoint="overwrite"``). If set to ``"resume"`` the runner object will try to load the checkpoint and resume the active sampling loop from there; if set to ``"overwrite"`` it will start from scratch and delete checkpoint files that may already exist.
 

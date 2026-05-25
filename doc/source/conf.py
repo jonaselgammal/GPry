@@ -334,13 +334,13 @@ texinfo_documents = [
 
 
 # Example configuration for intersphinx: refer to the Python standard library.
-intersphinx_mapping = {'https://docs.python.org/': None,
-                       'numpy': ('http://docs.scipy.org/doc/numpy/', None)}
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),
     'numpy': ('https://docs.scipy.org/doc/numpy/', None),
     'cobaya': ('https://cobaya.readthedocs.io/en/latest', None),
 }
+intersphinx_disabled_reftypes = ["*"]
+
 
 # Mock modules, so that readthedocs works!
-autodoc_mock_imports = ["cobaya", 'getdist']
+autodoc_mock_imports = ['getdist']

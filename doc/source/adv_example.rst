@@ -107,7 +107,7 @@ Below you can see the general structure for specifying options for sub-modules s
        # Just for diagnostics. It will severely slow down the run if uncommented
        # plots={
        #     # Let's do a corner plot per iteration
-       #    "corner": True, "timing": False, "convergence": False,
+       #     "corner": True, "timing": False, "convergence": False,
        #     "trace": False, "slices": False, "ext": "png"},
        checkpoint=checkpoint,
        load_checkpoint="overwrite")

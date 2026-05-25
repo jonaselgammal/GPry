@@ -803,7 +803,9 @@ class CorrectCounter(ConvergenceCriterion):
             # Remove warning case that does not trigger any condition below
             if yn == -np.inf:
                 continue
-            diff = np.abs(yl - yn)
+            # TODO: think about incorporating the noise level here (quite non-trivial!
+            #       but not very necessary since it's usually very small.
+            diff = np.abs(yl - yn) ### - gp.noise_level
             # rel_difference = np.abs((yl - surr.y_max) / (yn - surr.y_max) - 1.)
             thres = np.abs(yn - surr.y_max) * self.reltol + self.abstol
             if diff / thres > max_val:

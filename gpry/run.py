@@ -1086,7 +1086,8 @@ class Runner:
                     f"[EVALUATION] ({timer_truth.time:.2g} sec) {eval_msg}", level=3
                 )
             mpi.sync_processes()
-            # Add the newly evaluated truths to the surrogate model, and maybe refit hyperparameters.
+            # Add the newly evaluated truths to the surrogate model,
+            # and maybe refit hyperparameters.
             if mpi.is_main_process:
                 self.log("[FIT] Starting surrogate model fit...", level=4)
             with TimerCounter(self.surrogate) as timer_fit:

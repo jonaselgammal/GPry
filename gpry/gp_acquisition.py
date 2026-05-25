@@ -850,7 +850,7 @@ class NORA(GenericGPAcquisition):
         # Run and get products
         X_mc, y_mc, w_mc = self.sampler_interface.run(
             lambda X: surrogate.predict(
-                np.atleast_2d(X), return_std=False, validate=False
+                X, return_std=False, validate=False
             )[0],
             out_dir=self._get_output_folder(),
             keep_all=False,

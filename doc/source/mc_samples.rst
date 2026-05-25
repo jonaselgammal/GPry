@@ -9,7 +9,7 @@ Once the learning loop has converged, drawing Monte Carlo samples from the surro
 
 The simplest way to create an MC sample from the surrogate model is to call the :func:`~gpry.run.Runner.generate_mc_sample` method of the :class:`~gpry.run.Runner` object. This method can be called any number of times, and the previous samples will be overwritten.
 
-The MC algorithms available are the same nested samplers used by the :class:`~gpry.gp_acquisition.NORA` acquisition engine (see :ref:`installing_nested_samplers`), as well as the MCMC sampler from `Cobaya <https://cobaya.readthedocs.io>`_.
+The MC algorithms available are the same nested samplers used by the :class:`~gpry.gp_acquisition.NORA` acquisition engine (see :ref:`installing_nested_samplers`), as well as `the MCMC sampler from Cobaya <https://cobaya.readthedocs.io/en/latest/sampler_mcmc.html>`_.
 
 To generate new MC samples with default settings (uses the best nested sampler available by default):
 
