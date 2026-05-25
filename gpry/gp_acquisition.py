@@ -854,7 +854,6 @@ class NORA(GenericGPAcquisition):
                 np.atleast_2d(X), return_std=False, validate=False
             )[0],
             out_dir=self._get_output_folder(),
-            keep_all=False,
             seed=seed,
         )
         self.sampler_interface.delete_output()
@@ -882,7 +881,7 @@ class NORA(GenericGPAcquisition):
         prec_settings = {
             k: v
             for k, v in self.update_NS_precision(surrogate).items()
-            if k in ["nlive", "precision_criterion", "max_ncalls"]
+            if k in ["nlive", "precision_criterion", "num_repeats", "max_ncalls"]
         }
         self.sampler_interface.set_precision(**prec_settings)
         # Seeding -- for now UltraNest does not accept an rng or a seed, only setting the
@@ -893,7 +892,7 @@ class NORA(GenericGPAcquisition):
                 warnings.warn("Seeded runs are not supported for UltraNest.")
         # Run and get products
         X_mc, y_mc, w_mc = self.sampler_interface.run(
-            logp, out_dir=self._get_output_folder(), keep_all=False
+            logp, out_dir=self._get_output_folder()
         )
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
@@ -932,7 +931,6 @@ class NORA(GenericGPAcquisition):
         X_mc, y_mc, w_mc = self.sampler_interface.run(
             logp,
             out_dir=self._get_output_folder(),
-            keep_all=False,
             seed=seed,
         )
         self.sampler_interface.delete_output()
@@ -1183,7 +1181,7 @@ class NORA(GenericGPAcquisition):
             start_rank = time()
         args = (this_X, this_y, this_sigma_y, this_acq, n_points, surrogate)
         merged_pool = self._parallel_rank_and_merge(
-                *args, method=self.rank_method, merge_method=self.rank_merge_method
+            *args, method=self.rank_method, merge_method=self.rank_merge_method
         )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
@@ -1643,9 +1641,7 @@ class RankedPool:
         if i_new >= len(self):
             self.log(level=4, msg=logpref + "Discarded!")
             return
-        self.log(
-            level=4, msg=logpref + f"Final position: [{i_new + 1}] of {len(self)}"
-        )
+        self.log(level=4, msg=logpref + f"Final position: [{i_new + 1}] of {len(self)}")
         # Insert the new one in its place, and push the rest down one place.
         # We track the conditioned acq. value (but not the sigma), to retain the
         # information about whether each slot was empty (acq = -inf)
@@ -1663,9 +1659,7 @@ class RankedPool:
         # since -inf's from conditional acq cannot climb.
         assert self.acq_cond[i_new] > -np.inf
         self.log(level=4, msg=logpref + "Current unsorted pool:")
-        self.log_pool(
-            level=4, include_last=True, last_sorted=i_new, prefix=logpref
-        )
+        self.log_pool(level=4, include_last=True, last_sorted=i_new, prefix=logpref)
         # Sort the sublist below the new element
         self.sort(i_new + 1)
         self.log(level=4, msg=logpref + "The new pool, sorted:")

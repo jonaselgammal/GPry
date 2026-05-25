@@ -55,7 +55,7 @@ class NSInterface(ABC):
         """Sets precision parameters for the nested sampler."""
 
     @abstractmethod
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
+    def run(self, logp_func, param_names=None, out_dir=None, seed=None):
         """
         Runs the nested sampler.
 
@@ -133,8 +133,6 @@ class InterfacePolyChord(NSInterface):
             setattr(self.polychord_settings, setting, value)
         self.set_verbosity(verbosity)
         # Storage of last sample -- will only be defined for rank-0 MPI process
-        self.X_all = None
-        self.y_all = None
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
@@ -170,7 +168,7 @@ class InterfacePolyChord(NSInterface):
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
+    def run(self, logp_func, param_names=None, out_dir=None, seed=None):
         """
         Runs the nested sampler.
 
@@ -178,24 +176,10 @@ class InterfacePolyChord(NSInterface):
         parameter names, or a list of (name, label) tuples. Labels are interpreted as
         LaTeX but should not include '$' signs.
         """
-        # only for NORA, not at init!!! (true like)
-        #        # More efficient for const-eval-speed GP's (not very significant)
-        #        self.polychord_settings.synchronous = False
-        self.X_all, self.y_all = None, None
+        # TEST! (for NORA only)
+        # More efficient for const-eval-speed GP's (not very significant)
+        # self.polychord_settings.synchronous = False
         self.X_MC, self.y_MC, self.w_MC = None, None, None
-        if keep_all:
-            warn("keep_all is currently experimental. It may not work as intended.")
-            self.X_all = []
-            self.y_all = []
-
-            def logp_func_wrapped(*x):
-                logp = logp_func(*x)
-                self.X_all.append(x[0])
-                self.y_all.append(logp)
-                return logp, []
-
-        else:
-            logp_func_wrapped = logp_func
         # Configure folders and settings
         if mpi.is_main_process:
             base_dir, file_root = self.process_out_dir(
@@ -213,21 +197,13 @@ class InterfacePolyChord(NSInterface):
         sys.stdout.flush()
         with NumpyErrorHandling(all="ignore") as _:
             self.last_polychord_result = self.globals["run_polychord"](
-                lambda X: (ensure_scalar(logp_func_wrapped(X)), []),
+                lambda X: (ensure_scalar(logp_func(X)), []),
                 nDims=self.dim,
                 nDerived=0,
                 settings=self.polychord_settings,
                 prior=self.prior,
             )
         # Process results
-        if keep_all:
-            all_X_all = mpi.gather(self.X_all)
-            all_y_all = mpi.gather(self.y_all)
-            if mpi.is_main_process:
-                self.X_all = np.concatenate(all_X_all)
-                self.y_all = np.concatenate(all_y_all)
-            else:
-                self.X_all, self.y_all = None, None
         if mpi.is_main_process:
             if param_names is None:
                 param_names = list(zip(*(2 * [generic_params_names(self.dim)])))
@@ -309,8 +285,6 @@ class InterfaceNessai(NSInterface):
         # TODO: could still avoid dumping nested_sampler_resume.pkl and proposal/
         self.set_verbosity(verbosity)
         # Storage of last sample -- will only be defined for rank-0 MPI process
-        self.X_all = None
-        self.y_all = None
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
@@ -336,7 +310,7 @@ class InterfaceNessai(NSInterface):
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
+    def run(self, logp_func, param_names=None, out_dir=None, seed=None):
         """
         Runs the nested sampler.
 
@@ -344,8 +318,6 @@ class InterfaceNessai(NSInterface):
         parameter names, or a list of (name, label) tuples. Labels are interpreted as
         LaTeX but should not include '$' signs.
         """
-        if keep_all:
-            raise NotImplementedError("keep_all=True not yet possible for nessai.")
         NessaiModel = self.globals["NessaiModel"]
         FlowSampler = self.globals["FlowSampler"]
 
@@ -432,9 +404,8 @@ class InterfaceUltraNest(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            from ultranest import ReactiveNestedSampler  # type: ignore
+            import ultranest
 
-            self.globals = {"ReactiveNestedSampler": ReactiveNestedSampler}
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
                 "External nested sampler 'UltraNest' cannot be imported. "
@@ -452,8 +423,6 @@ class InterfaceUltraNest(NSInterface):
         self.run_settings = {"viz_callback": False, "show_status": False}
         self.set_verbosity(verbosity)
         # Storage of last sample -- will only be defined for rank-0 MPI process
-        self.X_all = None
-        self.y_all = None
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
@@ -473,7 +442,12 @@ class InterfaceUltraNest(NSInterface):
         self.uniform_prior_transform = lambda quantiles: quantiles * widths + lowers
 
     def set_precision(
-        self, nlive=None, precision_criterion=None, max_ncalls=None, **kwargs
+        self,
+        nlive=None,
+        precision_criterion=None,
+        num_repeats=None,
+        max_ncalls=None,
+        **kwargs,
     ):
         """Sets precision parameters for the nested sampler."""
         if nlive is not None:
@@ -486,10 +460,14 @@ class InterfaceUltraNest(NSInterface):
             self.precision_settings["max_ncalls"] = get_Xnumber(
                 max_ncalls, "d", self.dim, int, "max_ncalls"
             )
+        if num_repeats is not None:
+            self.precision_settings["nsteps"] = get_Xnumber(
+                num_repeats, "d", self.dim, int, "num_repeats"
+            )
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
 
-    def run(self, logp_func, param_names=None, out_dir=None, keep_all=False, seed=None):
+    def run(self, logp_func, param_names=None, out_dir=None, seed=None):
         """
         Runs the nested sampler.
 
@@ -497,17 +475,26 @@ class InterfaceUltraNest(NSInterface):
         parameter names, or a list of (name, label) tuples. Labels are interpreted as
         LaTeX but should not include '$' signs.
         """
-        if keep_all:
-            raise NotImplementedError("keep_all=True not yet possible for ultranest.")
+        from ultranest import ReactiveNestedSampler  # type: ignore
+        import ultranest.stepsampler as unst  # type: ignore
+        from ultranest.mlfriends import SimpleRegion  # type: ignore
+
         if mpi.is_main_process:
             self.output, _ = self.process_out_dir(out_dir, random_if_undefined=True)
-        sampler = self.globals["ReactiveNestedSampler"](
+        sampler = ReactiveNestedSampler(
             param_names or generic_params_names(self.dim),
             logp_func,
             self.uniform_prior_transform,
             log_dir=self.output,
             **self.sampler_settings,
         )
+        # Use slice sampling
+        nsteps = self.precision_settings.pop("nsteps")
+        sampler.stepsampler = unst.SliceSampler(
+            nsteps=nsteps,
+            generate_direction=unst.generate_mixture_random_direction,
+        )
+        self.run_settings["region_class"] = SimpleRegion
         with NumpyErrorHandling(all="ignore") as _:
             self.last_ultranest_result = sampler.run(
                 **self.precision_settings,
