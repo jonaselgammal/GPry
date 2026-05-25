@@ -1,3 +1,13 @@
+# 4.0 – 2026-xx-yy (unreleased)
+
+- API changes for the surrogate model: now a `surrogate.SurrogateModel` super-object manages both a `gpr.GaussianProcessRegressor` and an `infinities_classifier.InfinitiesClassifier` (also the preprocessors and clipping). The infinities classifier itself has been revamped: SVM and trust bounds check are now work at the same level.
+- NORA promoted to default acquisition engine.
+- Added `run.Runner` kwarg `mc` to pass options for the final and diagnosis MC samplers.
+- Kernel white noise can now easily be varied (as opposed to a fixed `alpha` diagonal term) with kwargs, without needing to define a custom kernel (still fixed by default).
+- Documentation has been reworked, separating explanations and module documentation.
+- Cobaya wrapper updated, and better defaults added.
+- Improved UltraNest defaults: switched to slice sampler to mimic PolyChord. More stable.
+
 # 3.0 – 2025-03-30
 
 - In general implements necessary changes for inference runs in [arXiv:2503.21871](https://arxiv.org/abs/2503.21871).
