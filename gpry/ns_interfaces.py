@@ -6,6 +6,7 @@ import os
 import sys
 import glob
 import shutil
+import logging
 import tempfile
 from warnings import warn
 from abc import ABC, abstractmethod
@@ -404,7 +405,7 @@ class InterfaceUltraNest(NSInterface):
 
     def __init__(self, bounds, verbosity=3):
         try:
-            import ultranest
+            import ultranest  # type: ignore
 
         except ModuleNotFoundError as excpt:
             raise NestedSamplerNotInstalledError(
@@ -431,8 +432,7 @@ class InterfaceUltraNest(NSInterface):
 
     def set_verbosity(self, verbose):
         """Sets the verbosity of the sampler at run time."""
-        # TODO
-        pass
+        self.verbosity = verbose
 
     def set_prior(self, bounds):
         """Sets the prior used by the nested sampler."""
@@ -488,6 +488,13 @@ class InterfaceUltraNest(NSInterface):
             log_dir=self.output,
             **self.sampler_settings,
         )
+        if mpi.is_main_process:
+            if self.verbosity >= 5:
+                sampler.logger.setLevel(logging.DEBUG)
+            elif self.verbosity == 4:
+                sampler.logger.setLevel(logging.INFO)
+            else:
+                sampler.logger.setLevel(logging.WARNING)
         # Use slice sampling
         nsteps = self.precision_settings.pop("nsteps")
         sampler.stepsampler = unst.SliceSampler(
