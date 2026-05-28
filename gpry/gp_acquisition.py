@@ -725,6 +725,16 @@ class NORA(GenericGPAcquisition):
         # → schedule next call as cadence-fresh). High count means reweight is
         # chronically unable to fill the pool with the current X_mc / GP state.
         self._n_adaptive_bumps = 0
+        # T001a diagnostic: per-multi_add log. Off by default; enabled by
+        # env var GPRY_NORA_DIAG=1 or by setting `acq._diag_log_enabled = True`
+        # and `acq._diag_log = []` before .run(). Each entry is a small dict
+        # (≤ 200 bytes). Runner writes back pool_size_post_runner and
+        # next_force_resample after check_candidates. Measurement only —
+        # no behavior change.
+        import os as _os
+        self._diag_log_enabled = bool(int(_os.environ.get("GPRY_NORA_DIAG", "0")))
+        self._diag_log = [] if self._diag_log_enabled else None
+        self._nora_call_index = 0
         self.tmpdir = tmpdir
         self.i = 0
         self.acq_func_y_sigma = None
@@ -1413,6 +1423,27 @@ class NORA(GenericGPAcquisition):
         self.pool.reset_cache()  # reduces size of pickled object
         if mpi.is_main_process:
             self.log(f"({(time() - start_rank):.2g} sec) Ranked pool of candidates.")
+        # T001a diagnostic: per-multi_add record. pool_size_post_runner and
+        # next_force_resample are filled in by the Runner after check_candidates.
+        if self._diag_log is not None and mpi.is_main_process:
+            n_train = -1
+            try:
+                n_train = int(getattr(surrogate, "n_total", -1))
+            except Exception:
+                pass
+            self._diag_log.append({
+                "nora_call": self._nora_call_index,
+                "mc_sample_this_time": bool(mc_sample_this_time),
+                "force_resample_input": bool(force_resample),
+                "pool_size_raw": int(len(merged_pool)),
+                "pool_size_post_runner": None,
+                "next_force_resample": None,
+                "n_total": n_train,
+                "adaptive_bumped": bool(
+                    (not mc_sample_this_time) and len(merged_pool) < n_points
+                ),
+            })
+        self._nora_call_index += 1
         return self._to_external_X(X_pool), y_pool, acq_pool
 
     def _split_and_compute_acq(self, X, y, sigma_y):

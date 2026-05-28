@@ -1054,6 +1054,15 @@ class Runner:
                     new_X = new_X[keep]
                     y_pred = y_pred[keep]
                     acq_vals = acq_vals[keep]
+                # T001a diagnostic: write back post-Runner pool size into the
+                # acquisition's last diag entry (if logging enabled). No behavior
+                # change. Wrapped in try/except to never break a run.
+                try:
+                    diag = getattr(self.acquisition, "_diag_log", None)
+                    if diag is not None and len(diag) > 0:
+                        diag[-1]["pool_size_post_runner"] = int(len(y_pred))
+                except Exception:
+                    pass
             self.progress.add_acquisition(timer_acq.time, timer_acq.evals)
             if mpi.is_main_process:
                 self.log(
@@ -1108,6 +1117,15 @@ class Runner:
                             level=3,
                         )
                     self.resamples = 0
+                    # T001a diag: random fallback path → next multi_add has
+                    # force_resample=False (resamples just zeroed).
+                    try:
+                        diag = getattr(self.acquisition, "_diag_log", None)
+                        if diag is not None and len(diag) > 0:
+                            diag[-1]["next_force_resample"] = False
+                            diag[-1]["runner_branch"] = "random_fallback"
+                    except Exception:
+                        pass
                     # Fall through to truth evaluation below
                 else:
                     if mpi.is_main_process:
@@ -1118,7 +1136,25 @@ class Runner:
                             "tries remaining)",
                             level=2,
                         )
+                    # T001a diag: continue branch → next multi_add will see
+                    # force_resample=True (self.resamples > 0).
+                    try:
+                        diag = getattr(self.acquisition, "_diag_log", None)
+                        if diag is not None and len(diag) > 0:
+                            diag[-1]["next_force_resample"] = True
+                            diag[-1]["runner_branch"] = "force_resample_retry"
+                    except Exception:
+                        pass
                     continue
+            # T001a diag: normal pass (or post-fallback) → next multi_add sees
+            # force_resample=False.
+            try:
+                diag = getattr(self.acquisition, "_diag_log", None)
+                if diag is not None and len(diag) > 0 and diag[-1].get("next_force_resample") is None:
+                    diag[-1]["next_force_resample"] = False
+                    diag[-1]["runner_branch"] = "normal"
+            except Exception:
+                pass
             self.resamples = 0
             if mpi.is_main_process:
                 self.log(
