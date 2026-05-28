@@ -717,6 +717,14 @@ class NORA(GenericGPAcquisition):
         self.log_header = f"[ACQUISITION : {self.__class__.__name__}] "
         self.mc_every = get_Xnumber(mc_every, "d", self.n_d, int, "mc_every")
         self.mc_every_i = 0
+        # T001: counters so callers / benches can audit fresh-vs-reweight cadence
+        # without grepping logs. mc_every targets `_n_fresh_mc / total ≈ 1/mc_every`.
+        self._n_fresh_mc = 0
+        self._n_reweight_mc = 0
+        # T001 Approach 1: count adaptive cadence bumps (underfilled-reweight
+        # → schedule next call as cadence-fresh). High count means reweight is
+        # chronically unable to fill the pool with the current X_mc / GP state.
+        self._n_adaptive_bumps = 0
         self.tmpdir = tmpdir
         self.i = 0
         self.acq_func_y_sigma = None
@@ -1292,8 +1300,10 @@ class NORA(GenericGPAcquisition):
                 *mc_output, ensure_y_sigma_y=True, surrogate=surrogate, internal=True
             )
             self._X_already_proposed = np.empty(shape=(0, surrogate.d))
+            self._n_fresh_mc += 1  # T001 instrumentation
         else:
             self._reweight_last_mc_sample(surrogate, bounds=bounds, ensure_sigma_y=True)
+            self._n_reweight_mc += 1  # T001 instrumentation
         self.mc_every_i += 1
         X_mc = (
             self._X_mc_reweight_internal
@@ -1378,6 +1388,16 @@ class NORA(GenericGPAcquisition):
             #    )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
+        # T001 Approach 1: adaptive cadence trigger. If a reweight call ends up
+        # with an underfilled pool, the current X_mc is no longer a good support
+        # for top-K selection — schedule the NEXT call as cadence-fresh by
+        # rolling mc_every_i to a multiple of mc_every (current value was already
+        # `+1`-ed near the top of this function; setting to `self.mc_every` makes
+        # `mc_every_i % mc_every == 0` on entry of the next call → fresh-NS).
+        # Leaves the Runner-side force_resample threshold intact (user-mandated).
+        if (not mc_sample_this_time) and len(merged_pool) < n_points:
+            self.mc_every_i = self.mc_every
+            self._n_adaptive_bumps += 1
         X_pool = merged_pool.X[:n_points]
         y_pool = merged_pool.y[:n_points]
         sigma_pool = merged_pool.sigma[:n_points]
