@@ -721,10 +721,13 @@ class NORA(GenericGPAcquisition):
         # without grepping logs. mc_every targets `_n_fresh_mc / total ≈ 1/mc_every`.
         self._n_fresh_mc = 0
         self._n_reweight_mc = 0
-        # T001 Approach 1: count adaptive cadence bumps (underfilled-reweight
-        # → schedule next call as cadence-fresh). High count means reweight is
-        # chronically unable to fill the pool with the current X_mc / GP state.
-        self._n_adaptive_bumps = 0
+        # T001 reserve-pool fallback: number of fallback fills appended after
+        # KB ranking + drop_empty would have left the pool short. High count
+        # means KB-conditioning was draining the high-acq region of X_mc and
+        # the fallback (raw-acq, ε-deduped) kept the pool whole. See multi_add
+        # for the mechanism and the inline rationale.
+        self._n_reserve_fill = 0
+        self._n_reserve_fill_calls = 0
         # T001a diagnostic: per-multi_add log. Off by default; enabled by
         # env var GPRY_NORA_DIAG=1 or by setting `acq._diag_log_enabled = True`
         # and `acq._diag_log = []` before .run(). Each entry is a small dict
@@ -1398,16 +1401,69 @@ class NORA(GenericGPAcquisition):
             #    )
         # In case the pool is not full (not enough "good" points added), drop empty slots
         merged_pool = merged_pool.copy(drop_empty=True)
-        # T001 Approach 1: adaptive cadence trigger. If a reweight call ends up
-        # with an underfilled pool, the current X_mc is no longer a good support
-        # for top-K selection — schedule the NEXT call as cadence-fresh by
-        # rolling mc_every_i to a multiple of mc_every (current value was already
-        # `+1`-ed near the top of this function; setting to `self.mc_every` makes
-        # `mc_every_i % mc_every == 0` on entry of the next call → fresh-NS).
-        # Leaves the Runner-side force_resample threshold intact (user-mandated).
-        if (not mc_sample_this_time) and len(merged_pool) < n_points:
-            self.mc_every_i = self.mc_every
-            self._n_adaptive_bumps += 1
+        # T001 reserve-pool fallback (Option 1).
+        #
+        # Why this exists: `RankedPool.add` ranks each slot via Kriging-Believer
+        # (KB) conditioning — slot i's acq is computed on a surrogate that has
+        # been augmented with the mean predictions of slots 0..i-1. After 5-7
+        # KB-conditioned slots, sigma collapses in the high-acq region of
+        # X_mc; remaining MC points score ``acq_cond = -inf`` and the pool
+        # truncates via ``drop_empty=True``.  Truncated pool → Runner's
+        # ``len(y_pred) < n_points_per_acq//2`` check at run.py:1073 fires →
+        # ``force_resample=True`` → wasted fresh-NS, undermining ``mc_every``.
+        #
+        # Fix: top up the pool from the leftover X_mc by *raw* (non-KB-
+        # conditioned) acquisition value, skipping any candidate within ε of
+        # an already-filled slot. The first k slots keep the KB diversity
+        # guarantee; slots k..n-1 are best-non-KB candidates. The Runner sees
+        # a full pool and follows its normal training-set-duplicate path.
+        #
+        # MPI: rank 0 owns the merged_pool and full (X_mc, y_mc, sigma_y_mc).
+        # Other ranks bcast X_pool below.
+        if mpi.is_main_process:
+            n_filled = int(merged_pool.X.shape[0])  # len() is off-by-one post drop_empty
+            if n_filled < n_points and X_mc.shape[0] > 0:
+                n_missing = n_points - n_filled
+                with np.errstate(divide="ignore"):
+                    acq_full = self.acq_func_y_sigma(y_mc, sigma_y_mc)
+                order = np.argsort(np.asarray(acq_full))[::-1]
+                pool_X_existing = (
+                    np.asarray(merged_pool.X)
+                    if n_filled > 0
+                    else np.empty((0, surrogate.d))
+                )
+                eps_sq = 1e-24  # ~1e-12 in coord distance; X_mc entries are byte-distinct
+                add_X, add_y, add_sigma = [], [], []
+                for i in order:
+                    if len(add_X) >= n_missing:
+                        break
+                    x = X_mc[i]
+                    if pool_X_existing.shape[0] > 0:
+                        d2_pool = np.sum((pool_X_existing - x) ** 2, axis=1)
+                        if float(d2_pool.min()) <= eps_sq:
+                            continue
+                    if add_X:
+                        d2_add = np.sum((np.asarray(add_X) - x) ** 2, axis=1)
+                        if float(d2_add.min()) <= eps_sq:
+                            continue
+                    add_X.append(x)
+                    add_y.append(y_mc[i])
+                    add_sigma.append(sigma_y_mc[i])
+                if add_X:
+                    add_X_arr = np.asarray(add_X)
+                    merged_pool.X = (
+                        np.vstack([pool_X_existing, add_X_arr])
+                        if pool_X_existing.shape[0] > 0
+                        else add_X_arr
+                    )
+                    merged_pool.y = np.concatenate(
+                        [np.asarray(merged_pool.y), np.asarray(add_y)]
+                    )
+                    merged_pool.sigma = np.concatenate(
+                        [np.asarray(merged_pool.sigma), np.asarray(add_sigma)]
+                    )
+                    self._n_reserve_fill += len(add_X)
+                    self._n_reserve_fill_calls += 1
         X_pool = merged_pool.X[:n_points]
         y_pool = merged_pool.y[:n_points]
         sigma_pool = merged_pool.sigma[:n_points]
