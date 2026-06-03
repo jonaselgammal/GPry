@@ -378,8 +378,8 @@ def mc_sample_from_gp_ns(
 
     Returns
     -------
-    (X_mc, y_mc, w_mc) : arrays of samples parameters, surrogate posteriors and weights
-                         (None if equal weights).
+    (X_mc, y_mc, w_mc, logZ, logZstd) : arrays of samples parameters, surrogate posteriors
+        and weights (None if equal weights), and log-evidence and its standard deviation.
     """
     # Prepare surrogate model
     _, surrogate, _, _, _, _, _ = ensure_surrogate(surrogate)
@@ -440,7 +440,9 @@ def mc_sample_from_gp_ns(
     if isinstance(sampler, nsint.InterfaceUltraNest):
         prev_min = surrogate.minus_inf_value
         surrogate.minus_inf_value = -1e-300
-    X_mc, y_mc, w_mc = sampler.run(logp, param_names=params, out_dir=out_dir_raw)
+    X_mc, y_mc, w_mc, logZ, logZstd = sampler.run(
+        logp, param_names=params, out_dir=out_dir_raw
+    )
     if isinstance(sampler, nsint.InterfaceUltraNest):
         surrogate.minus_inf_value = prev_min
     # Delete the "raw" output and write the unified-format one
@@ -467,7 +469,7 @@ def mc_sample_from_gp_ns(
             np.concatenate([np.atleast_2d(w_mc_write), np.atleast_2d(-y_mc), X_mc.T]).T,
             header="w minuslogp " + " ".join(params),
         )
-    return X_mc, y_mc, w_mc
+    return X_mc, y_mc, w_mc, logZ, logZstd
 
 
 def process_gdsamples(gdsamples_dict):

@@ -63,6 +63,8 @@ class NSInterface(ABC):
         param_names (optional, otherwise x_[i] will be used) should be a list of sampled
         parameter names, or a list of (name, label) tuples. Labels are interpreted as
         LaTeX but should not include '$' signs.
+
+        Must return a tuple (X_MC, y_MC, w_MC, logZ, logZstd).
         """
 
     @abstractmethod
@@ -181,6 +183,7 @@ class InterfacePolyChord(NSInterface):
         # More efficient for const-eval-speed GP's (not very significant)
         # self.polychord_settings.synchronous = False
         self.X_MC, self.y_MC, self.w_MC = None, None, None
+        self.logZ, self.logZstd = None, None
         # Configure folders and settings
         if mpi.is_main_process:
             base_dir, file_root = self.process_out_dir(
@@ -216,7 +219,15 @@ class InterfacePolyChord(NSInterface):
             # PolyChord stores chi**2 in 2nd col (contrary to getdist: -logp)
             self.y_MC = -0.5 * samples_T[1]
             self.w_MC = samples_T[0]
-        return self.X_MC, self.y_MC, self.w_MC
+            with open(self.last_polychord_result.root + ".stats", "r") as f:
+                for line in f:
+                    if line.startswith("log(Z)"):
+                        self.logZ, self.logZstd = [
+                            float(n) for n in line.split("=")[1].split("+/-")
+                        ]
+            # Correct for the effect of the prior volume
+            self.logZ += np.log(np.prod(self.prior.b - self.prior.a))
+        return self.X_MC, self.y_MC, self.w_MC, self.logZ, self.logZstd
 
     def delete_output(self, out_dir=None):
         """
@@ -289,6 +300,8 @@ class InterfaceNessai(NSInterface):
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
+        self.logZ = None
+        self.logZstd = None
         self.output = None
         self.last_nessai_result = None
 
@@ -379,7 +392,11 @@ class InterfaceNessai(NSInterface):
         posterior_samples = x.view(np.float64).reshape(x.shape[0], -1)
         self.X_MC = posterior_samples[:, :-3]
         self.y_MC = posterior_samples[:, -2]
-        return self.X_MC, self.y_MC, None
+        self.logZ = self.last_nessai_result["log_evidence"]
+        # Correct for the effect of the prior volume
+        self.logZ += np.log(np.prod(self.bounds[:, 1] - self.bounds[:, 0]))
+        self.logZstd = self.last_nessai_result["log_evidence_error"]
+        return self.X_MC, self.y_MC, None, self.logZ, self.logZstd
 
     def delete_output(self, out_dir=None):
         """
@@ -427,6 +444,8 @@ class InterfaceUltraNest(NSInterface):
         self.X_MC = None
         self.y_MC = None
         self.w_MC = None
+        self.logZ = None
+        self.logZstd = None
         self.output = None
         self.last_ultranest_result = None
 
@@ -513,7 +532,11 @@ class InterfaceUltraNest(NSInterface):
             X = self.last_ultranest_result["weighted_samples"]["points"]
             y = self.last_ultranest_result["weighted_samples"]["logl"]
             self.w_MC, self.X_MC, self.y_MC = remove_0_weight_samples(w, X, y)
-        return self.X_MC, self.y_MC, self.w_MC
+            self.logZ = self.last_ultranest_result["logz"]
+            # Correct for the effect of the prior volume
+            self.logZ += np.log(np.prod(self.bounds[:, 1] - self.bounds[:, 0]))
+            self.logZstd = self.last_ultranest_result["logzerr"]
+        return self.X_MC, self.y_MC, self.w_MC, self.logZ, self.logZstd
 
     def delete_output(self, out_dir=None):
         """

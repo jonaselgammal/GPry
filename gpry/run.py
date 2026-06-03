@@ -50,6 +50,7 @@ from gpry.progress import Progress, Timer, TimerCounter
 from gpry.io import create_path, check_checkpoint, read_checkpoint, save_checkpoint
 from gpry import mc
 import gpry.plots as gpplt
+from gpry.ns_interfaces import _ns_interfaces
 from gpry.tools import (
     get_Xnumber,
     check_candidates,
@@ -366,6 +367,7 @@ class Runner:
         self._last_mc_bounds = None
         self._last_mc_sampler_type = None
         self._last_mc_samples = None
+        self._last_mc_evidence = None
         self._last_mc_cobaya_info = None
         self._last_mc_cobaya_sampler = None
         # Placeholders for fiducial quantities
@@ -1772,21 +1774,28 @@ class Runner:
                 "the 'sampler' argument as a dictionary."
             )
         self._last_mc_bounds = self.truth.prior_bounds
+        frac_trust_bounds = 1
         if self.surrogate.trust_bounds is not None:
             self._last_mc_bounds = self.surrogate.trust_bounds
-        if sampler_name.lower() == "nested":
+            frac_trust_bounds = (
+                np.prod(self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]) /
+                np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
+            )
+        if sampler_name.lower() in ["nested"] + list(_ns_interfaces):
             if resume:
                 warnings.warn(
                     "Resuming not possible for nested sampler. Starting from scratch."
                 )
             if "nlive" not in sampler_options:
                 sampler_options["nlive"] = 50 * self.d
+            if "num_repeats" not in sampler_options:
+                sampler_options["num_repeats"] = 5 * self.d
             self._last_mc_sampler_type = "nested"
-            X_mc, y_mc, w_mc = mc.mc_sample_from_gp_ns(
+            X_mc, y_mc, w_mc, logZ, logZstd = mc.mc_sample_from_gp_ns(
                 self.surrogate,
                 bounds=self._last_mc_bounds,
                 params=self.params,
-                sampler=None,
+                sampler=sampler_name.lower(),
                 sampler_options=sampler_options,
                 output=output,
                 verbose=self.verbose,
@@ -1800,6 +1809,21 @@ class Runner:
                     mc._name_logprior: logprior_mc,
                     mc._name_loglike: y_mc - logprior_mc,
                 }
+                # Correct for sampling within reduced bounds
+                logZ -= np.log(frac_trust_bounds)
+                # Correct for finite prior fraction
+                log_frac_finite_prev = -np.inf
+                n_prior = 100 * self.d
+                for _ in range(5):
+                    log_frac_finite = np.log(
+                        self.surrogate.fraction_prior_finite(n_prior)
+                    )
+                    if abs(log_frac_finite - log_frac_finite_prev) < 0.01:
+                        break
+                    log_frac_finite_prev = log_frac_finite
+                    n_prior *= 10
+                logZ += log_frac_finite
+                self._last_mc_logZ = logZ, logZstd
         else:  # assume Cobaya sampler
             (
                 self._last_mc_cobaya_info,
@@ -1869,6 +1893,18 @@ class Runner:
         if copy:
             return deepcopy(self._last_mc_samples)
         return self._last_mc_samples
+
+    def last_mc_logZ(self):
+        """
+        Returns the log-evidence of the last MC sample from the surrogate model, together
+        with its standard deviation, as ``(logZ, std(logZ))``.
+
+        Returns ``None`` if no MC samples from the surrogate model have been obtained, or
+        if no evidence has been computed from them.
+        """
+        if self._last_mc_logZ is None:
+            return None
+        return deepcopy(self._last_mc_logZ)
 
     def diagnose_last_mc_sample(self):
         """

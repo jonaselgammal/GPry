@@ -2,11 +2,12 @@
 
 - API changes for the surrogate model: now a `surrogate.SurrogateModel` super-object manages both a `gpr.GaussianProcessRegressor` and an `infinities_classifier.InfinitiesClassifier` (also the preprocessors and clipping). The infinities classifier itself has been revamped: SVM and trust bounds check are now work at the same level.
 - NORA promoted to default acquisition engine.
+- Log-evidence can now be retrieved from the last MC sampler run if a nested sampler is used (default). NB: the associated uncertainty is that of the nested sampler integration, not including surrogate modelling errors.
 - Added `run.Runner` kwarg `mc` to pass options for the final and diagnosis MC samplers.
 - Kernel white noise can now easily be varied (as opposed to a fixed `alpha` diagonal term) with kwargs, without needing to define a custom kernel (still fixed by default).
 - Documentation has been reworked, separating explanations and module documentation.
-- Cobaya wrapper updated, and better defaults added.
-- Improved UltraNest defaults: switched to slice sampler to mimic PolyChord. More stable.
+- [Cobaya](https://cobaya.readthedocs.io) wrapper updated, and better defaults added.
+- Improved [UltraNest](https://johannesbuchner.github.io/UltraNest/) interface defaults: switched to slice sampler to mimic [PolyChord](https://github.com/PolyChord/PolyChordLite) (more stable).
 
 # 3.0 – 2025-03-30
 
@@ -20,11 +21,11 @@
   - Reworked `GaussianKL` criterion and created `GaussianKLTrain` criterion for alignment between current MS sample and training set.
 - Acquisition engines:
   - `bounds` can now be passed to `multi_add()` method to restrict candidates search.
-  - Interfaces to [ultranest](https://johannesbuchner.github.io/UltraNest/) and [nessai](https://nessai.readthedocs.io) added to NORA.
+  - Interfaces to [UltraNest](https://johannesbuchner.github.io/UltraNest/) and [nessai](https://nessai.readthedocs.io) added to NORA.
 - Trust region prior restriction added to `GaussianProcessRegressor`.
 - The `SVM` is now passed pre-processed points and thresholds, which simplifies its code.
 - Changed treatment of true model: created `Truth` class that abstracts Cobaya dependence.
-- [ultranest](https://johannesbuchner.github.io/UltraNest/) and [nessai](https://nessai.readthedocs.io) can now be used for MC runs of the surrogate posterior.
+- Added interfaces for [UltraNest](https://johannesbuchner.github.io/UltraNest/) and [nessai](https://nessai.readthedocs.io) for NORA. Both of them and [PolyChord](https://github.com/PolyChord/PolyChordLite) can now also be used for MC runs of the surrogate posterior.
 - Created plots for logp and parameter traces and surrogate model parameter slices.
 - Changes to `Runner`:
   - Can specify a dict of options for `plots` kwarg.
@@ -37,7 +38,7 @@
 
 # 2.0 – 2023-09-14
 
-- Added the NORA `GPAcquisition` engine, as described in [arXiv:2305.19267](https://arxiv.org/abs/2305.19267).
+- Added the NORA `GPAcquisition` engine, as described in [arXiv:2305.19267](https://arxiv.org/abs/2305.19267), using [PolyChord](https://github.com/PolyChord/PolyChordLite).
 - Custom `hyperparameter_bounds` can be passed to the `GaussianProcessRegressor.fit()` method.
 - Performance improvements in `GaussianProcessRegressor.fit()` and `SVM.predict()`.
 - Reworked input for the `Runner`, and added diagnosis method for overshoots.

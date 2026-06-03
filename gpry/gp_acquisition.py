@@ -812,7 +812,7 @@ class NORA(GenericGPAcquisition):
 
         Returns
         -------
-        X, y, sigma_y, weights
+        X, y, sigma_y, weights, logZ, logZstd
             May return None for any of y, sigma_y, weights
         """
         if sampler is None:
@@ -837,7 +837,7 @@ class NORA(GenericGPAcquisition):
         X = np.empty(shape=(n_total, surrogate.d))
         for i in range(n_total):
             X[i] = proposer.get(rng=rng)
-        return X, None, None, None
+        return X, None, None, None, None, None
 
     def _do_mc_sample_polychord(self, surrogate, bounds=None, rng=None):
         # Update prior bounds
@@ -849,7 +849,7 @@ class NORA(GenericGPAcquisition):
         # Output (PolyChord needs a "/" at the end).
         # Run and get products
         # NB: the atleast_2d slows down the code a bit, but allows us to drop validation
-        X_mc, y_mc, w_mc = self.sampler_interface.run(
+        X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
             lambda X: surrogate.predict(
                 np.atleast_2d(X), return_std=False, validate=False
             )[0],
@@ -860,10 +860,9 @@ class NORA(GenericGPAcquisition):
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
         y_mc = None
-        return X_mc, y_mc, None, w_mc
+        return X_mc, y_mc, None, w_mc, logZ, logZstd
 
     def _do_mc_sample_ultranest(self, surrogate, bounds=None, rng=None):
-
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
@@ -891,14 +890,14 @@ class NORA(GenericGPAcquisition):
             if mpi.is_main_process:
                 warnings.warn("Seeded runs are not supported for UltraNest.")
         # Run and get products
-        X_mc, y_mc, w_mc = self.sampler_interface.run(
+        X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
             logp, out_dir=self._get_output_folder()
         )
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
         y_mc = None
-        return X_mc, y_mc, None, w_mc
+        return X_mc, y_mc, None, w_mc, logZ, logZstd
 
     def _do_mc_sample_nessai(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
@@ -928,7 +927,7 @@ class NORA(GenericGPAcquisition):
         # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Run and get products
-        X_mc, y_mc, w_mc = self.sampler_interface.run(
+        X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
             logp,
             out_dir=self._get_output_folder(),
             seed=seed,
@@ -937,9 +936,11 @@ class NORA(GenericGPAcquisition):
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
         y_mc = None
-        return X_mc, y_mc, None, w_mc
+        return X_mc, y_mc, None, w_mc, logZ, logZstd
 
-    def _set_mc_sample(self, X, y, sigma_y, w, ensure_y_sigma_y=False, surrogate=None):
+    def _set_mc_sample(
+        self, X, y, sigma_y, w, logZ, logZstd, ensure_y_sigma_y=False, surrogate=None
+    ):
         """
         Stores the MC sample as attributes.
 
@@ -947,7 +948,9 @@ class NORA(GenericGPAcquisition):
         calculation (in parallel) with `ensure_y_sigma=True`. In that case, a
         ``surrogate`` is needed.
 
-        Use ``last_mc_sample[_getdist]`` to retrieve it.
+        Use ``last_mc_sample[_getdist]`` to retrieve the sample arrays. The last
+        log-evidence calculation and its uncertainty as available as attributes ``logZ``
+        and ``logZstd``, respectively.
         """
         self.is_last_mc_reweighted = False
         self._X_mc, self._y_mc, self._sigma_y_mc, self._w_mc = X, y, sigma_y, w
@@ -955,6 +958,7 @@ class NORA(GenericGPAcquisition):
             self._y_mc, self._sigma_y_mc = mpi.compute_y_parallel(
                 surrogate, self._X_mc, self._y_mc, self._sigma_y_mc, ensure_sigma_y=True
             )
+        self._logZ, self._logZstd = logZ, logZstd
 
     def _reweight_last_mc_sample(self, surrogate, bounds=None, ensure_sigma_y=False):
         """Stores the MC sample as attributes. Use ``last_mc_sample`` to retrieve it."""

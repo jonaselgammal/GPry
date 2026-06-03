@@ -56,7 +56,7 @@ from sklearn.utils.validation import check_array  # type: ignore
 # Local
 from gpry.gpr import GaussianProcessRegressor
 from gpry.preprocessing import DummyPreprocessor
-from gpry.tools import delta_logp_of_1d_nstd, generic_params_names
+from gpry.tools import delta_logp_of_1d_nstd, generic_params_names, get_Xnumber
 from gpry.infinities_classifier import InfinitiesClassifiers
 
 
@@ -1056,6 +1056,32 @@ class SurrogateModel:
         std_ = self.gpr.predict_std(X_[finite], validate=validate)
         std[finite] = self.preprocessing_y.inverse_transform_scale(std_)
         return std
+
+    def fraction_prior_finite(self, n_prior="100d"):
+        """
+        Returns the faction of the prior that is classified as finite, assuming uniform
+        density. Performs the calculation by drawing and classifying ``n`` uniform prior
+        samples.
+
+        Parameters
+        ----------
+        n_prior: int, str
+            Number of samples to be drawn from the prior for getting the finite fraction.
+
+        Returns
+        -------
+        fraction_prior_finite: float
+            The fraction of the prior volume classified as finite.
+        """
+        if not self.infinities_classifier:
+            return 1
+        n_prior = get_Xnumber(n_prior, "d", X_value=self.d, dtype=int, varname="n_prior")
+        X = self.gpr.random_state.uniform(
+            self.bounds[:, 0], self.bounds[:, 1], (n_prior, self.d)
+        )
+        X_ = self.preprocessing_X.transform(X)
+        n_finite = np.sum(self.infinities_classifier.is_finite_X(X_, validate=False))
+        return n_finite / n_prior
 
 
 class Clipper:
