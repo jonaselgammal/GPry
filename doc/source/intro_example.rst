@@ -131,6 +131,25 @@ The easiest way to get a corner plot is to call the :func:`~gpry.run.Runner.plot
    :width: 450
    :align: center
 
+
+Step 5: Bayesian evidence
+-------------------------
+
+When a nested sampler is used to generate samples from the surrogate model (it is, by default), GPry can provide an estimation of the Bayesian evidence of the model as the evidence of the mean of the Gaussian Process regressor. The associated standard deviation is that of the log-evidence computation using the nested sampler, and it does not include possible modelling errors by the GPR or the infinities classifier. For well-converged cases, it should be a reliable estimate regardless.
+
+Let us compare the current estimate with the actual value (here the inverse of the prior volume, since the likelihood is normalized in parameter space):
+
+.. code:: python
+
+   print(f"NS log-evidence     = {runner.last_mc_logZ()[0]} +/- {runner.last_mc_logZ()[1]}")
+   print(f"Actual log-evidence = {np.log(1 / np.prod(bounds[:, 1] - bounds[:, 0]))}")
+
+.. code::
+
+   NS log-evidence     = -5.823306518451101 +/- 0.180457722963657
+   Actual log-evidence = -5.991464547107982
+
+
 Bonus: Getting some extra insights
 ----------------------------------
 
@@ -154,6 +173,7 @@ If you call this method without any arguments it produces the following plots:
    :width: 500
    :align: center
 
+
 Validation
 ----------
 
@@ -163,7 +183,7 @@ Validation
 **NB: This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would obviously not run a full MCMC on the likelihood**
 
 To compare our contours to the true Gaussian we draw 10000 samples from it, and set them as *fiducial samples* in the :class:`~gpry.run.Runner`:
-    
+
 Lastly we compare our result to the original gaussian:
 
 .. code:: python

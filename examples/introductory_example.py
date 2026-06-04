@@ -29,7 +29,7 @@ rv = multivariate_normal(mean, cov)
 def logLkl(x_1, x_2):
     return rv.logpdf(np.array([x_1, x_2]).T)
 
-bounds = [[-10, 10], [-10, 10]]
+bounds = np.array([[-10, 10], [-10, 10]])
 
 # ### Step 2: Creating the Runner object
 #
@@ -112,6 +112,21 @@ print(runner.last_mc_samples(as_pandas=True))
 
 p = runner.plot_mc(ext="svg")
 plt.show(block=False)
+
+# ### Step 5: Bayesian evidence
+#
+# When a nested sampler is used to generate samples from the surrogate model (it is, by
+# default), GPry can provide an estimation of the Bayesian evidence of the model as the
+# evidence of the mean of the Gaussian Process regressor. The associated standard
+# deviation is that of the log-evidence computation using the nested sampler, and it does
+# not include possible modelling errors by the GPR or the infinities classifier. For well-
+# converged cases, it should be a reliable estimate regardless.
+#
+# Let us compare the current estimate with the actual value (here the inverse of the prior
+# volume, since the likelihood is normalized in parameter space):
+
+print(f"NS log-evidence     = {runner.last_mc_logZ()[0]} +/- {runner.last_mc_logZ()[1]}")
+print(f"Actual log-evidence = {np.log(1 / np.prod(bounds[:, 1] - bounds[:, 0]))}")
 
 # ### Bonus: Getting some extra insights
 #

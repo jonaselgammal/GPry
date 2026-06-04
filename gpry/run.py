@@ -367,7 +367,7 @@ class Runner:
         self._last_mc_bounds = None
         self._last_mc_sampler_type = None
         self._last_mc_samples = None
-        self._last_mc_evidence = None
+        self._last_mc_logZ = None, None
         self._last_mc_cobaya_info = None
         self._last_mc_cobaya_sampler = None
         # Placeholders for fiducial quantities
@@ -1898,6 +1898,10 @@ class Runner:
         """
         Returns the log-evidence of the last MC sample from the surrogate model, together
         with its standard deviation, as ``(logZ, std(logZ))``.
+
+        The standard deviation corresponds to the uncertainty of the nested sampling
+        calculation of the evidence of the mean GPR, not including the uncertainty
+        associated with the GPR modelling and the infinities classifier.
 
         Returns ``None`` if no MC samples from the surrogate model have been obtained, or
         if no evidence has been computed from them.

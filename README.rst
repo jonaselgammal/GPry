@@ -13,9 +13,9 @@
 
 :Installation: ``pip install gpry`` (for MPI and nested samplers, see `here <https://gpry.readthedocs.io/en/latest/installation.html>`_)
 
-GPry is a drop-in alternative to traditional Monte Carlo samplers (such as MCMC or Nested Sampling), for likelihood-based inference. It is aimed at speeding up posterior exploration and inference of marginal quantities from computationally expensive likelihoods, reducing the cost of inference by a factor of 100 or more.
+GPry is a drop-in alternative to traditional Monte Carlo samplers (such as MCMC or Nested Sampling), for likelihood-based inference. It is aimed at speeding up posterior exploration and inference of marginal quantities from computationally expensive likelihoods, reducing the cost of inference by a factor of 100 or more. GPry can also provide an estimation of the model evidence.
 
-GPry can be installed with pip (``python -m pip install gpry``), and needs only a callable likelihood and some bounds:
+GPry can be installed with pip (``python -m pip install gpry``), and needs only a callable log-likelihood and some bounds:
 
 .. code:: python
 
