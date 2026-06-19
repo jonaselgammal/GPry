@@ -36,7 +36,7 @@ However, simultaneously optimizing the acquisition function for a set of candida
 
 But there is one way to give up some effectiveness (total information gained) of the solution in exchange for the possibility to turn simultaneous optimization into a sequential problem: we can find the global maximum, assume an evaluation of the true model there, to which the **mean of the GP** is assigned, create with it an *augmented model*, and repeat this procedure using the augmented model, as many times as desired. This approach is called *kriging-believer* (KB), and though suboptimal, it at least includes the effect of the *exploration* term of the acquisition function, reducing the amount of redundant information with respect to a naive multiple-candidate solution.
 
-Obviously, this procedure only makes sense up to a certain amount of iterations, or we risk assuming completely false information about the model. In GPry, we recommend at most a number of KB steps equals to the dimensionality of the problem (times some factor smaller or equal the number of expected posterior modes, if more than one).
+Obviously, this procedure only makes sense up to a certain amount of iterations, or we risk assuming completely false information about the model. In GPry, we recommend at most a number of KB steps equal to the dimensionality of the problem (times some factor smaller or equal the number of expected posterior modes, if more than one).
 
 In the following figure, to be compared with the one above, we only evaluate the posterior every two steps. The red stars are the temporary kriging-believer evaluations that will be assigned their true values in the next iteration.
 
@@ -52,7 +52,7 @@ The NORA acquisition engine
 
 Above, we assume that active learning involves a direct optimization of the acquisition function. GPry provides an acquisition engine that does precisely that, with some parallelization involved (:class:`~gpry.gp_acquisition.BatchOptimizer`).
 
-GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquistion), presented in `arXiv:2305.19267 <https://arxiv.org/abs/2305.19267>`_ and implemented in the :class:`~gpry.gp_acquisition.NORA` class. NORA swaps the optimization of the acquisition function for a Nested Sampling (NS) exploration of the mean of the surrogate GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list.
+GPry also introduces an alternative approach called NORA (Nested sampling Optimization for Ranked Acquisition), presented in `arXiv:2305.19267 <https://arxiv.org/abs/2305.19267>`_ and implemented in the :class:`~gpry.gp_acquisition.NORA` class. NORA swaps the optimization of the acquisition function for a Nested Sampling (NS) exploration of the mean of the surrogate GP. The resulting sample is then ranked according to their acquisition function values, and subsequently re-ranked after sequentially augmenting the GP with the point at the top of the list.
 
 In the following figure you can see in action the procedure of selecting a batch of candidates once a NS sample has been obtained: in the second row, the best candidate from the NS sample is selected according to their acquisition function, and used to condition the acquisition function in the following row, where the procedure is repeated. For comparison, we show the global optimum of the acquisition function, that the NS sample will have not reached, but will have approached significantly.
 
@@ -63,16 +63,16 @@ In the following figure you can see in action the procedure of selecting a batch
 This approach to active learning has better **scaling with dimensionality** than naive optimization of the acquisition function because:
 
 - NS scales better with dimensionality than optimization (in general), and it is extremely efficiently parallelizable.
-- The raking of the NS sample is also parallelizable (less efficiently so, but it is also cheaper than obtaining the NS sample).
+- The ranking of the NS sample is also parallelizable (less efficiently so, but it is also cheaper than obtaining the NS sample).
 - We only need a large number of evaluations of the mean of the GP, and not the standard deviation, which we would need if we were optimising the acquisition function (the ranking step only involves a small number of computations of the standard deviation).
 
 On top of that, this approach provides a better exploration of the parameter space, since NS probes the tails of the (surrogate) posterior, whereas in a direct optimization approach the problem of proposing good starting points for optimization is non-trivial.
 
-Finally, since a sample from the mean GP is produced together with the candidates, better diagnosis and convergence tools, such as KL divergencies, are available at every iteration at no extra cost.
+Finally, since a sample from the mean GP is produced together with the candidates, better diagnosis and convergence tools, such as KL divergences, are available at every iteration at no extra cost.
 
 .. note::
 
-   For this to work, you need to have installed one of the nested samplers, preferable PolyChord with MPI for greater performance (see :doc:`installation`).
+   For this to work, you need to have installed one of the nested samplers, preferably PolyChord with MPI for greater performance (see :doc:`installation`).
 
 
 Fitting the surrogate model

@@ -6,7 +6,7 @@ Advanced example
 
 The goal of this example is to show how to pass to the :class:`~gpry.run.Runner` options for the different components, as well as to discuss how GPry can be tuned for more complicated posteriors.
 
-As before, let us define out likelihood, here as a gaussian mixture with 4 components:
+As before, let us define our likelihood, here as a gaussian mixture with 4 components:
 
 .. code:: python
 
@@ -60,7 +60,7 @@ We will draw some samples from the true distribution to use them as a fiducial r
 
 Let us now create the :class:`~gpry.run.Runner` object.
 
-We assume that we expect the likelihood to be multimodal, so we will tune some parameters to explore the distribution more efficiently and ensure convergence without missing any more (e.g. by making GPry more exploratory).
+We expect the likelihood to be multimodal, so we will tune some parameters to explore the distribution more efficiently and ensure convergence without missing any modes (e.g. by making GPry more exploratory).
 
 Below you can see the general structure for specifying options for sub-modules such as the surrogate model, the acquisition engine, and the convergence criteria. For example, for the acquisition engine we find in the :class:`~gpry.run.Runner` documentation that it is set with the ``gp_acquisition`` keyword. Then we look into the documentation of the :doc:`module_gp_acquisition` module to find the arguments that can be passed when initializing the :class:`~gpry.gp_acquisition.NORA` class, and specify them as ``gp_acquisition={"NORA": {option: value}}``.
 

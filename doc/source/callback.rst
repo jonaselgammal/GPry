@@ -51,10 +51,10 @@ The following snippet shows a very simple example of an MPI-aware callback funct
        print(f"I am process {mpi.RANK} of {mpi.SIZE}")
        if mpi.is_main_process:
            print("This is only printed by the main process")
-      # Share something from the main process to the rest
-      if mpi.is_main_process:
-           something = value
-      something = mpi.bcast(something if is_main_process else None)
+       # Share something from the main process to the rest
+       if mpi.is_main_process:
+           something = value  # some object to broadcast
+       something = mpi.bcast(something if mpi.is_main_process else None)
 
    run = Runner(
        ...

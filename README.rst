@@ -26,14 +26,14 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
           
    from gpry import Runner
 
-   runner = Runner(log_likelihood, bounds, checkpoint="output/")
+   runner = Runner(log_likelihood, bounds, checkpoint="output/", load_checkpoint="overwrite")
    runner.run()
 
-.. image:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
+.. image:: https://github.com/jonaselgammal/GPry/blob/main/doc/source/images/readme_animation.gif?raw=true
    :width: 400px
    :align: center
 
-An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
+An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model specification, and direct access to some physical likelihood pipelines.
 
 GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
 
@@ -49,7 +49,7 @@ GPry introduces some innovations with respect to previous similar approaches:
 
 - It introduces a parallelizable batch acquisition algorithm (NORA) which increases robustness, reduces overhead and enables the evaluation of the likelihood/posterior in parallel using multiple cores.
 
-- Complementing the GP model, it implements an SVM classifier that learns the shape of uninteresting regions, where proposal are discarded, wherever the value of the likelihood is very-low (for increased efficiency) or undefined (for increased robustness).
+- Complementing the GP model, it implements an SVM classifier that learns the shape of uninteresting regions, where proposals are discarded, wherever the value of the likelihood is very-low (for increased efficiency) or undefined (for increased robustness).
 
 At the moment, GPry utilizes a modification of the CPU-based `scikit-learn GP implementation <https://scikit-learn.org/stable/modules/gaussian_process.html>`_.
 
@@ -69,7 +69,7 @@ What may not work so well:
 
 - Highly non-Gaussian posteriors, that would not be well modelled by orthogonal constant correlation lengths.
 
-**GPry is under active developing, in order to mitigate some of those issues, so look out for new versions!**
+**GPry is under active development, in order to mitigate some of those issues, so look out for new versions!**
 
 
 It does not work!

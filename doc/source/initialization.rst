@@ -5,7 +5,7 @@ In some problems, a good initialization can be key to efficient convergence. The
 
 - Difficulty localizing the mode, if it is very small with respect to the prior, or if the prior is not significantly sloped towards it.
 
-- Difficulty detecting multiple modes, if they are too separated (see the :doc:`adv_example` for setting that would also help in those cases).
+- Difficulty detecting multiple modes, if they are too separated (see the :doc:`adv_example` for settings that would also help in those cases).
 
 This section is aimed at giving some general pointers for good initialization, relying on a priori information about the posterior. This a priori information can be gathered from physical intuition, simplified versions of the problem, or other less-accurate but faster (amortized) ML approaches which can produce fast estimates of the maxima a posteriori of regions of interest, and which often exist in real-world problems where GPry is an attractive tool because of the low inference costs.
 
@@ -16,12 +16,12 @@ Prior size
 .. hint::
    **The most immediately-helpful measure is to crop the prior as close as possible around the position of the expected mode.**
 
-As long as one has some confidence that the center of the mode is captured, and that the distribution is not expected to have secondary modes outside that region, be multi-modal, this is usually a safe approach.
+As long as one has some confidence that the center of the mode is captured, and that the distribution is not expected to have secondary modes outside that region (i.e. be multi-modal), this is usually a safe approach.
 
 If the full mode is not contained within the cropped prior, this will show up in the final corner plot as the mode not fully vanishing towards the edge of the prior, indicating that it should be enlarged.
 
 
-Initial proposals for  training points
+Initial proposals for training points
 --------------------------------------
 
 If one really does not know how far along the parameters the mode extends, but does know a region where part of the mode would be located, we can use this region to propose the initial set of training points. To do that, pass ``initial_proposer="reference"`` to the :class:`~gpry.run.Runner`, and pass that region as a list of bounds as ``ref_bounds=[[min,  max], [min, max], ...]``.
@@ -33,7 +33,7 @@ For example, if we expect the region ``[0, 1]`` for the second parameter to be h
 .. code:: python
 
    runner = Runner(
-       logLkl=...,
+       loglike=...,
        bounds=[[-10, 10], [-10, 10]],
        ref_bounds=[None, [0, 1]],
        initial_proposer="reference",
@@ -45,7 +45,7 @@ If that knowledge is better expressed as a gaussian or ellipsoidal region define
 .. code:: python
 
    runner = Runner(
-       logLkl=...,
+       loglike=...,
        bounds=[[-10, 10], [-10, 10]],
        initial_proposer={"meancov": {"mean": [mean], "cov": [covmat]}},
        ...

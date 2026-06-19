@@ -67,7 +67,7 @@ Once converged, you can access the surrogate model and use it as a function for 
 .. note::
    Internally GPry models the **log-posterior**, not the log-likelihood.
 
-To get the surrogate log-posterior or log-likelihood you can call respectively :func:`~gpry.run.Runner.logp` or :func:`~gpry.run.Runner.logL`, passing each a single ``(nsamples, ndims)`` array with the locations where you want to evaluate the surrogate.
+To get the surrogate log-posterior or log-likelihood you can call respectively :func:`~gpry.run.Runner.logp` or :func:`~gpry.run.Runner.logL`, passing each a single point, or a ``(nsamples, ndims)`` array of locations where you want to evaluate the surrogate.
 
 Let us compare the GPry surrogate model and the true likelihood at `(1, 2)`. Both evaluations should produce similar numbers.
 
@@ -83,7 +83,7 @@ Step 4: Monte Carlo samples from the surrogate posterior
 
 As part of a final test before convergence, GPry will have run a Monte Carlo sampler on the surrogate model. If everything went well, you can use that sample as you would with one obtained with a traditional MC sampler: to extract marginalized quantities, create a corner plot of it, etc.
 
-If a checkpoint has been defined, samples are stored in that same folder, inside a ``chains`` sub folder, in one or mode ``.txt`` files. In those files, the order of the columns is ``weight log-posterior param_1 param_2 ...``.
+If a checkpoint has been defined, samples are stored in that same folder, inside a ``chains`` sub folder, in one or more ``.txt`` files. In those files, the order of the columns is ``weight log-posterior param_1 param_2 ...``.
 
 .. note::
 
@@ -142,7 +142,7 @@ Let us compare the current estimate with the actual value (here the inverse of t
 .. code:: python
 
    print(f"NS log-evidence     = {runner.last_mc_logZ()[0]} +/- {runner.last_mc_logZ()[1]}")
-   print(f"Actual log-evidence = {np.log(1 / np.prod(bounds[:, 1] - bounds[:, 0]))}")
+   print(f"Actual log-evidence = {np.log(1 / np.prod(np.array(bounds)[:, 1] - np.array(bounds)[:, 0]))}")
 
 .. code::
 
@@ -180,11 +180,7 @@ Validation
 .. note::
     This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would obviously not run a full MCMC on the likelihood and would need to follow the validation guidelines at :ref:`strategy-troubleshooting`.
 
-**NB: This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would obviously not run a full MCMC on the likelihood**
-
-To compare our contours to the true Gaussian we draw 10000 samples from it, and set them as *fiducial samples* in the :class:`~gpry.run.Runner`:
-
-Lastly we compare our result to the original gaussian:
+Lastly, to compare our contours to the true Gaussian, we draw 10000 samples from it, set them as *fiducial samples* in the :class:`~gpry.run.Runner`, and plot the result:
 
 .. code:: python
 

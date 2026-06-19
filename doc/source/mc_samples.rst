@@ -41,7 +41,7 @@ To retrieve the last generated samples, use the :func:`~gpry.run.Runner.last_mc_
 
    [242 rows x 6 columns]
 
-Samples are also stored by default in the same folder as the checkpoint, inside a ``chains`` sub folder. The order of the columns in that file are ``weight log-posterior param_1 param_2 ...``.
+Samples are also stored by default in the same folder as the checkpoint, inside a ``chains`` sub folder. The order of the columns in that file is ``weight log-posterior param_1 param_2 ...``.
 
 To plot the results of the MC sampler, you can load these samples into your favourite analysis/plotting package, or use the :func:`~gpry.run.Runner.plot_mc` method:
 
@@ -68,7 +68,7 @@ with higher precision:
          sampler={"nested": {"nlive": "100d", "num_repeats": "10d", "precision_criterion": 0.005}}
      )
 
-- If using Cobaya's MCMC sampler (faster, produces more samples), decreasing the Gelmann-Rubin ``R-1`` test limits for means and covariances:
+- If using Cobaya's MCMC sampler (faster, produces more samples), decreasing the Gelman-Rubin ``R-1`` test limits for means and covariances:
 
   .. code:: python
 
