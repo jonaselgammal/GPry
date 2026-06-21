@@ -157,3 +157,6 @@ doc/gpry_jax_summary.*
 CLAUDE_PROMPTS.md
 CLAUDE_INSIGHTS.md
 CLAUDE_CHECKPOINT.md
+
+# Agent handoff + PoC scratch (local only, not for the repo)
+AGENTS/
