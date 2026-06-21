@@ -971,7 +971,7 @@ class NORA(GenericGPAcquisition):
         prec_settings = {
             k: v
             for k, v in self.update_NS_precision(surrogate).items()
-            if k in ["nlive", "precision_criterion", "max_ncalls"]
+            if k in ["nlive", "precision_criterion", "num_repeats", "max_ncalls"]
         }
         self.sampler_interface.set_precision(**prec_settings)
         # Seeding -- for now UltraNest does not accept an rng or a seed, only setting the

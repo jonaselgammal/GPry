@@ -538,7 +538,12 @@ class InterfaceUltraNest(NSInterface):
         self.uniform_prior_transform = lambda quantiles: quantiles * widths + lowers
 
     def set_precision(
-        self, nlive=None, precision_criterion=None, max_ncalls=None, **kwargs
+        self,
+        nlive=None,
+        precision_criterion=None,
+        num_repeats=None,
+        max_ncalls=None,
+        **kwargs,
     ):
         """Sets precision parameters for the nested sampler."""
         if nlive is not None:
@@ -550,6 +555,11 @@ class InterfaceUltraNest(NSInterface):
         if max_ncalls is not None:
             self.precision_settings["max_ncalls"] = get_Xnumber(
                 max_ncalls, "d", self.dim, int, "max_ncalls"
+            )
+        if num_repeats is not None:
+            # Maps to the slice-sampler's number of steps (see run()).
+            self.precision_settings["nsteps"] = get_Xnumber(
+                num_repeats, "d", self.dim, int, "num_repeats"
             )
         if kwargs:
             warn(f"Some precision parameters not recognized; ignored: {kwargs}")
@@ -564,6 +574,14 @@ class InterfaceUltraNest(NSInterface):
         """
         if keep_all:
             raise NotImplementedError("keep_all=True not yet possible for ultranest.")
+        # Robust configuration (ported from surrogate_gpr_split f8e2b2e):
+        # PolyChord-like slice sampling + SimpleRegion. The default MLFriends
+        # region + region-based stepper is fragile in higher dimensions and on
+        # multimodal targets (produced broken posteriors); slice sampling with
+        # mixed hit-and-run directions is the robust choice.
+        import ultranest.stepsampler as unst  # type: ignore
+        from ultranest.mlfriends import SimpleRegion  # type: ignore
+
         if mpi.is_main_process:
             self.output, _ = self.process_out_dir(out_dir, random_if_undefined=True)
         sampler = self.globals["ReactiveNestedSampler"](
@@ -573,6 +591,17 @@ class InterfaceUltraNest(NSInterface):
             log_dir=self.output,
             **self.sampler_settings,
         )
+        # ``nsteps`` is set from ``num_repeats`` via set_precision. Fall back to a
+        # PolyChord-like 2*dim default if a caller did not provide it, so non-NORA
+        # UltraNest paths do not crash (more defensive than the original port).
+        nsteps = self.precision_settings.pop("nsteps", None)
+        if nsteps is None:
+            nsteps = 2 * self.dim
+        sampler.stepsampler = unst.SliceSampler(
+            nsteps=nsteps,
+            generate_direction=unst.generate_mixture_random_direction,
+        )
+        self.run_settings["region_class"] = SimpleRegion
         with NumpyErrorHandling(all="ignore") as _:
             self.last_ultranest_result = sampler.run(
                 **self.precision_settings,
