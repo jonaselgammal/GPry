@@ -225,8 +225,16 @@ class SurrogateModel:
         # This is the default "noise_level" of the regressor, understood as the common
         # sigma_y of the training samples.
         self._noise_level = float(regressor["noise_level"])
-        # For now, the y preprocessor is not fitted
-        self._noise_level_ = preprocessing_y.transform_scale(self._noise_level)
+        # On this first construction the y-preprocessor is typically not fitted
+        # yet; its scale is identity until fitted, so transform the default
+        # noise level with a DummyPreprocessor when unfit. Done unconditionally
+        # here (independent of the local ``preprocessing_y`` rebinding in the
+        # classifier branch above, which is skipped when
+        # ``infinities_classifier`` is None).
+        if self.preprocessing_y.fitted:
+            self._noise_level_ = self.preprocessing_y.transform_scale(self._noise_level)
+        else:
+            self._noise_level_ = DummyPreprocessor.transform_scale(self._noise_level)
         kwargs_regressor = deepcopy(regressor)
         kwargs_regressor["noise_level"] = self._noise_level_
         kwargs_regressor["random_state"] = random_state
@@ -829,6 +837,16 @@ class SurrogateModel:
         # NB: which points are finite does not change after classifier is refit (as long
         #     as the y-preprocessor is a linear transf.), so we can select them now.
         if self.infinities_classifier is None:
+            # No classifier: every point is used for regression. We still need
+            # ``_i_y_sorted`` populated (it was reset to None above and is read
+            # downstream, e.g. by the ``y_max`` getter), so compute it here
+            # before copying it as the regression index set. Mirrors the
+            # ``use_y`` selection of the classifier branch below.
+            if self.preprocessing_y.fitted:
+                use_y = self.preprocessing_y.transform(self._y)
+            else:  # first call, preprocessors not fit yet.
+                use_y = self._y
+            self._i_y_sorted = np.argsort(use_y)
             self._i_regress = self._i_y_sorted.copy()
         else:
             # The point of this: select points early, even before fitting preprocessors!
@@ -1081,9 +1099,14 @@ class SurrogateModel:
         #       Could be checked even before calling classifier, if validate=True.
         #       Idem for predict_std
         # First check if either SVM or the trust region say that the value should be -inf
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        # (mirrors the None-classifier handling already present in the native
+        # path ``predict_transformed_native``: no classifier => all finite).
+        if self.infinities_classifier is None or ignore_classifier == "all":
+            finite = np.ones(n_samples, dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
             if len(return_dict) == 1:
@@ -1172,9 +1195,13 @@ class SurrogateModel:
             return_dict["mean_grad"] = np.full((X_.shape[0], self.d), self.inf_value)
         if return_std_grad:
             return_dict["std_grad"] = np.zeros((X_.shape[0], self.d))
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        # No classifier => all points finite (mirrors native path).
+        if self.infinities_classifier is None or ignore_classifier == "all":
+            finite = np.ones(X_.shape[0], dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         if np.all(~finite):
             if len(return_dict) == 1:
                 return return_dict["mean"]
@@ -1545,9 +1572,13 @@ class SurrogateModel:
         X_ = self.preprocessing_X.transform(X)
         std = np.zeros(n_samples)  # std is zero when mu is -inf
         # First check if either SVM or the trust region say that the value should be -inf
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        # (no classifier => all points finite, as in the native path).
+        if self.infinities_classifier is None or ignore_classifier == "all":
+            finite = np.ones(n_samples, dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
             return std
@@ -1570,9 +1601,12 @@ class SurrogateModel:
         else:
             X_ = np.asarray(X_)
         std = np.zeros(X_.shape[0])
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        if self.infinities_classifier is None or ignore_classifier == "all":
+            finite = np.ones(X_.shape[0], dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         if np.all(~finite):
             return std
         std_ = self.gpr.predict_std(X_[finite], validate=validate)

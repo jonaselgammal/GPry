@@ -432,7 +432,13 @@ class Runner:
             for k, default_value in surrogate_defaults.items():
                 if k not in surrogate:
                     surrogate[k] = default_value
-                elif isinstance(default_value, Mapping):
+                elif isinstance(default_value, Mapping) and isinstance(
+                    surrogate[k], Mapping
+                ):
+                    # Only deep-merge when the user value is itself a mapping.
+                    # If the user explicitly disabled an option (e.g.
+                    # ``infinities_classifier=None``), respect it instead of
+                    # iterating a non-mapping.
                     for k2, default_value2 in default_value.items():
                         if k2 not in surrogate[k]:
                             surrogate[k][k2] = default_value2
