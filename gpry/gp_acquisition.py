@@ -783,6 +783,11 @@ class NORA(GenericGPAcquisition):
         self._X_mc_reweight_internal = None
         self._sigma_y_mc_reweight, self._w_mc_reweight = None, None
         self.is_last_mc_reweighted = None
+        # Minimum number of reused particles for a reweight to be considered
+        # viable. Below this the caller falls back to a fresh cold NS. ``1``
+        # only guards the degenerate empty case (0 particles within the new
+        # bounds), which previously raised in ``max(weights)``.
+        self._min_reweight_particles = 1
         self.pool = None
         self._acq_mc = None
 
@@ -1105,7 +1110,22 @@ class NORA(GenericGPAcquisition):
                 )
 
     def _reweight_last_mc_sample(self, surrogate, bounds=None, ensure_sigma_y=False):
-        """Stores the MC sample as attributes. Use ``last_mc_sample`` to retrieve it."""
+        """Reweight the stored MC sample for the current surrogate / bounds.
+
+        Reuses the previous (cold-NS) MC positions, re-evaluates the surrogate
+        there and importance-reweights by ``exp(y_new - y_old)``. Stores the
+        result as attributes (use ``last_mc_sample`` to retrieve it).
+
+        Returns
+        -------
+        bool
+            ``True`` if a usable reweighted sample was produced; ``False`` if
+            reweighting is not viable (e.g. fewer than
+            ``self._min_reweight_particles`` previous particles fall within the
+            new bounds, or all weights collapsed to zero). On ``False`` the
+            caller should fall back to a fresh cold NS. The return value is
+            identical on all MPI ranks.
+        """
         self.is_last_mc_reweighted = True
         X_excpt, y_excpt = None, None
         if mpi.is_main_process and self._X_mc is None:
@@ -1121,6 +1141,7 @@ class NORA(GenericGPAcquisition):
         # Ensure y and sigma_y (optional) are computed
         self._X_mc_reweight = None
         self._X_mc_reweight_internal = None
+        reweight_viable = True
         if mpi.is_main_process:
             self._X_mc_reweight_internal = np.copy(self._X_mc_internal)
             if bounds is not None:
@@ -1131,8 +1152,19 @@ class NORA(GenericGPAcquisition):
                     validate=False,
                 )
                 self._X_mc_reweight_internal = self._X_mc_reweight_internal[i_within]
+                # If (almost) no previous particles fall within the new bounds,
+                # reweighting cannot produce a usable sample. Signal the caller
+                # to fall back to a fresh cold NS instead of reaching the
+                # ``max(weights)`` over an empty array below (previously an
+                # unhandled TODO).
+                if self._X_mc_reweight_internal.shape[0] < self._min_reweight_particles:
+                    reweight_viable = False
             self._X_mc_reweight = self._to_external_X(self._X_mc_reweight_internal)
-                # TODO: not handled: there could be 0 points within new bounds
+        # Agree across ranks before the collective ``compute_y_parallel`` below,
+        # so all ranks return together and none deadlocks on the collective.
+        reweight_viable = mpi.bcast(reweight_viable)
+        if not reweight_viable:
+            return False
         if mpi.multiple_processes:
             self._y_mc_reweight, self._sigma_y_mc_reweight = mpi.compute_y_parallel(
                 surrogate,
@@ -1190,6 +1222,14 @@ class NORA(GenericGPAcquisition):
                 self._y_mc_reweight,
                 self._sigma_y_mc_reweight,
             )
+        # If dropping zero-weight particles emptied the sample, reweighting is
+        # not viable either; fall back to a fresh cold NS.
+        reweight_viable = True
+        if mpi.is_main_process:
+            n_final = 0 if self._X_mc_reweight is None else self._X_mc_reweight.shape[0]
+            reweight_viable = n_final >= self._min_reweight_particles
+        reweight_viable = mpi.bcast(reweight_viable)
+        return reweight_viable
 
     def last_mc_sample(self, copy=False, warn_reweight=True):
         """
@@ -1252,6 +1292,31 @@ class NORA(GenericGPAcquisition):
                 sampler_type="nested",
             )
 
+    def _draw_fresh_mc_sample(self, surrogate, bounds, rng):
+        """Draw and store a fresh cold MC (nested-sampling) sample.
+
+        Runs the configured nested sampler on the current surrogate, falling
+        back to uniform prior sampling if it errors, and resets the
+        already-proposed tracker. Shared by the ``mc_every`` cadence and by the
+        reweight-not-viable fallback in :meth:`multi_add`.
+        """
+        try:
+            mc_output = self.do_mc_sample(surrogate, bounds=bounds, rng=rng)
+        except Exception as excpt:
+            self.log(
+                level=0,
+                msg=f"Error when finding new acquisition optima with {self.sampler}: "
+                f"{excpt}. Attempting uniform prior sampling.",
+            )
+            mc_output = self.do_mc_sample(
+                surrogate, bounds=bounds, rng=rng, sampler="uniform"
+            )
+        self._set_mc_sample(
+            *mc_output, ensure_y_sigma_y=True, surrogate=surrogate, internal=True
+        )
+        self._X_already_proposed = np.empty(shape=(0, surrogate.d))
+        self._n_fresh_mc += 1  # T001 instrumentation
+
     def multi_add(
         self, surrogate, n_points=1, bounds=None, rng=None, force_resample=False
     ):
@@ -1308,25 +1373,23 @@ class NORA(GenericGPAcquisition):
             not bool(self.mc_every_i % self.mc_every) or force_resample
         )
         if mc_sample_this_time:
-            try:
-                mc_output = self.do_mc_sample(surrogate, bounds=bounds, rng=rng)
-            except Exception as excpt:
-                self.log(
-                    level=0,
-                    msg=f"Error when finding new acquisition optima with {self.sampler}: "
-                    f"{excpt}. Attempting uniform prior sampling.",
-                )
-                mc_output = self.do_mc_sample(
-                    surrogate, bounds=bounds, rng=rng, sampler="uniform"
-                )
-            self._set_mc_sample(
-                *mc_output, ensure_y_sigma_y=True, surrogate=surrogate, internal=True
-            )
-            self._X_already_proposed = np.empty(shape=(0, surrogate.d))
-            self._n_fresh_mc += 1  # T001 instrumentation
+            self._draw_fresh_mc_sample(surrogate, bounds, rng)
         else:
-            self._reweight_last_mc_sample(surrogate, bounds=bounds, ensure_sigma_y=True)
-            self._n_reweight_mc += 1  # T001 instrumentation
+            reweight_ok = self._reweight_last_mc_sample(
+                surrogate, bounds=bounds, ensure_sigma_y=True
+            )
+            if reweight_ok:
+                self._n_reweight_mc += 1  # T001 instrumentation
+            else:
+                # Reweighting was not viable (e.g. no previous particles within
+                # the new bounds). Fall back to a fresh cold NS so the
+                # acquisition step still has a usable sample.
+                if mpi.is_main_process:
+                    self.log(
+                        "Reweighting not viable; drawing a fresh MC sample instead."
+                    )
+                self._draw_fresh_mc_sample(surrogate, bounds, rng)
+                mc_sample_this_time = True
         self.mc_every_i += 1
         X_mc = (
             self._X_mc_reweight_internal

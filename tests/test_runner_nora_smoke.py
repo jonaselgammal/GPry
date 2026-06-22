@@ -110,3 +110,49 @@ def test_nora_blackjax_2d_anisotropic_gaussian():
         )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.slow
+def test_nora_reweight_falls_back_when_no_particles_in_bounds():
+    """``_reweight_last_mc_sample`` returns False (not raise) on an empty pool.
+
+    Reweighting reuses the previous MC positions; if (almost) none fall within
+    the new bounds the importance reweight is undefined (``max`` over an empty
+    array). The fix returns False so ``multi_add`` falls back to a fresh cold
+    NS. With the original bounds, reweighting stays viable (returns True).
+    """
+    from gpry.run import Runner
+
+    logLkl, bounds, _, _ = _anisotropic_gaussian_2d()
+    tmpdir = tempfile.mkdtemp(prefix="gpry_reweight_fallback_")
+    try:
+        runner = Runner(
+            logLkl, bounds,
+            surrogate={"regressor": {"kernel": "RBF", "use_jax": True}},
+            gp_acquisition={"NORA": {"sampler": "blackjax"}},
+            options={"max_finite": 40},  # only max_finite; let max_total default
+            checkpoint=os.path.join(tmpdir, "run"),
+            load_checkpoint="overwrite", verbose=0, seed=1,
+        )
+        runner.run()
+        acq = runner.acquisition
+        # The run must have populated a stored (fresh) MC sample to reweight.
+        assert acq._X_mc_internal is not None and acq._X_mc_internal.shape[0] > 0
+
+        # Bounds far outside any sampled point -> 0 particles within -> not
+        # viable -> False (and crucially, no exception).
+        far_bounds = np.array([[1e6, 1e6 + 1.0]] * len(bounds))
+        ok_far = acq._reweight_last_mc_sample(
+            runner.surrogate, bounds=far_bounds, ensure_sigma_y=True
+        )
+        assert ok_far is False
+
+        # With the original bounds the previous particles are all inside, so
+        # reweighting remains viable.
+        ok_ok = acq._reweight_last_mc_sample(
+            runner.surrogate, bounds=np.array(bounds, dtype=float), ensure_sigma_y=True
+        )
+        assert ok_ok is True
+        assert acq._X_mc_reweight is not None and acq._X_mc_reweight.shape[0] > 0
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
