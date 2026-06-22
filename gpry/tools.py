@@ -2,6 +2,8 @@
 This module contains general tools used in different parts of the code.
 """
 
+import os
+import contextlib
 from copy import deepcopy
 import inspect
 from warnings import warn
@@ -13,6 +15,24 @@ from scipy.linalg import eigh  # type: ignore
 from scipy.special import gamma, erfc  # type: ignore
 from scipy.stats import chi2  # type: ignore
 from sklearn.utils import check_random_state as check_random_state_sklearn  # type: ignore
+
+
+@contextlib.contextmanager
+def suppress_stdout():
+    """Temporarily redirect ``sys.stdout`` to ``os.devnull``.
+
+    Used to silence unconditional ``jax.debug.print`` output emitted by
+    jaxopt's line search: jaxopt passes ``verbose=int(solver.verbose) - 1``
+    to the line search, so even with ``solver.verbose=False`` the line search
+    receives ``-1`` (truthy) and prints an ``INFO: jaxopt.*`` line on every
+    iteration. There is no jaxopt ``verbose`` value that silences both the
+    solver and the line search, and the messages bypass ``logging``, so the
+    only robust suppression is to redirect stdout around the solver run.
+    Only stdout is redirected, leaving stderr (warnings, errors) intact.
+    """
+    with open(os.devnull, "w") as devnull:
+        with contextlib.redirect_stdout(devnull):
+            yield
 
 
 def kl_norm(mean_0, cov_0, mean_1, cov_1):

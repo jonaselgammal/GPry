@@ -29,6 +29,7 @@ from gpry.tools import (
     get_Xnumber,
     remove_0_weight_samples,
     is_in_bounds,
+    suppress_stdout,
 )
 import gpry.ns_interfaces as nsint
 from gpry.mc import samples_dict_to_getdist, _name_logp, _name_loglike, _name_logprior
@@ -602,13 +603,14 @@ class BatchOptimizer(GenericGPAcquisition):
                     )
                     self._cached_native_acq_solver_fn_id = fn_id
 
-                result = self._cached_native_acq_solver.run(
-                    jnp.array(initial_X, dtype=jnp.float64),
-                    bounds=(
-                        jnp.array(bounds[:, 0], dtype=jnp.float64),
-                        jnp.array(bounds[:, 1], dtype=jnp.float64),
-                    ),
-                )
+                with suppress_stdout():
+                    result = self._cached_native_acq_solver.run(
+                        jnp.array(initial_X, dtype=jnp.float64),
+                        bounds=(
+                            jnp.array(bounds[:, 0], dtype=jnp.float64),
+                            jnp.array(bounds[:, 1], dtype=jnp.float64),
+                        ),
+                    )
                 return np.asarray(result.params), float(result.state.value)
             except Exception as excpt:
                 warnings.warn(

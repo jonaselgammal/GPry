@@ -29,6 +29,8 @@ from jax import jit, grad, value_and_grad
 from jax.scipy.linalg import cho_solve, solve_triangular
 import numpy as np
 
+from gpry.tools import suppress_stdout
+
 # Ensure JAX uses 64-bit floats for numerical accuracy
 jax.config.update("jax_enable_x64", True)
 
@@ -1499,7 +1501,14 @@ class JaxGaussianProcessMixin:
         for theta0 in start_points:
 
             try:
-                result = solver.run(theta0, *data_args, bounds=bounds_jax)
+                # ``bounds`` is the second positional arg of jaxopt's
+                # ``LBFGSB.init_state``/``update`` (signature
+                # ``(init_params, bounds, *args)``). It must be passed
+                # positionally before ``*data_args``; passing it as a keyword
+                # after ``*data_args`` collides with the first fun-arg and
+                # raises "got multiple values for argument 'bounds'".
+                with suppress_stdout():
+                    result = solver.run(theta0, bounds_jax, *data_args)
                 val = float(result.state.value)
                 if val < best_val:
                     best_val = val
@@ -1582,8 +1591,12 @@ class JaxGaussianProcessMixin:
         )
 
         try:
-            result = self._cached_acq_solver.run(
-                x0_jax, *acq_args, bounds=bounds_jax)
+            # ``bounds`` must be passed positionally before ``*acq_args`` —
+            # see the note in ``optimize_hyperparameters``: jaxopt's LBFGSB
+            # takes ``bounds`` as the second positional of init_state/update.
+            with suppress_stdout():
+                result = self._cached_acq_solver.run(
+                    x0_jax, bounds_jax, *acq_args)
             x_opt = np.asarray(result.params)
             func_min = float(result.state.value)
         except Exception as excpt:
