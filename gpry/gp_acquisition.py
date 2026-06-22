@@ -338,7 +338,11 @@ class BatchOptimizer(GenericGPAcquisition):
                 self._native_acq_objective = surrogate.make_native_acquisition_objective(
                     self.acq_func
                 )
-            except Exception:
+            except Exception as excpt:
+                warnings.warn(
+                    "Could not build native acquisition objective; falling "
+                    f"back to the generic (slower) acquisition path: {excpt!r}"
+                )
                 self._native_acq_objective = None
 
         # If we do a first-time run, use this
@@ -606,7 +610,11 @@ class BatchOptimizer(GenericGPAcquisition):
                     ),
                 )
                 return np.asarray(result.params), float(result.state.value)
-            except Exception:
+            except Exception as excpt:
+                warnings.warn(
+                    "JAX native acquisition optimization failed; falling back "
+                    f"to scipy fmin_l_bfgs_b: {excpt!r}"
+                )
                 pass  # Fall back to scipy
         if self.acq_optimizer == "fmin_l_bfgs_b":
             opt_res = scipy.optimize.fmin_l_bfgs_b(

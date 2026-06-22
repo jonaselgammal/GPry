@@ -1488,7 +1488,11 @@ class JaxGaussianProcessMixin:
                         val = float(neg_lml(theta0, *data_args))
                         if not np.isfinite(val):
                             continue
-                    except Exception:
+                    except Exception as excpt:
+                        warnings.warn(
+                            "JAX hyperopt start-point screening failed; "
+                            f"skipping candidate: {excpt!r}"
+                        )
                         continue
                 start_points.append(theta0)
 
@@ -1500,7 +1504,11 @@ class JaxGaussianProcessMixin:
                 if val < best_val:
                     best_val = val
                     best_theta = np.asarray(result.params)
-            except Exception:
+            except Exception as excpt:
+                warnings.warn(
+                    "JAX hyperopt restart failed; skipping this start point: "
+                    f"{excpt!r}"
+                )
                 continue
 
         if best_theta is None:
@@ -1578,7 +1586,11 @@ class JaxGaussianProcessMixin:
                 x0_jax, *acq_args, bounds=bounds_jax)
             x_opt = np.asarray(result.params)
             func_min = float(result.state.value)
-        except Exception:
+        except Exception as excpt:
+            warnings.warn(
+                "JAX acquisition optimization failed; returning the "
+                f"un-optimized start point x0 (acquisition not improved): {excpt!r}"
+            )
             x_opt = np.asarray(x0)
             func_min = float(self._neg_acq_fn(x0_jax, *acq_args))
 
