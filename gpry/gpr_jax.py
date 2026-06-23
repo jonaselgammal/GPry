@@ -66,10 +66,16 @@ class JaxGaussianProcessRegressor(BaseGaussianProcessRegressor, JaxGaussianProce
     """JAX-backed GP implementation with runtime state stored directly on self."""
 
     def __init__(self, *args, **kwargs):
+        # Mixed-precision predictive variance (Step 4). JAX-only; popped here so
+        # the base/sklearn constructors never see it. Set the ``_predict_f32``
+        # attribute directly to toggle at runtime (it is read when the
+        # single-point acq kernel is (re)built and on each batched predict).
+        predict_f32 = kwargs.pop("predict_f32", False)
         BaseGaussianProcessRegressor.__init__(self, *args, **kwargs)
         JaxGaussianProcessMixin.__init__(self)
         self.use_jax = True
         self._native_acceleration_enabled = True
+        self._predict_f32 = bool(predict_f32)
 
     @property
     def array_contract(self):

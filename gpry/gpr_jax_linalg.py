@@ -25,7 +25,7 @@ from copy import deepcopy
 
 import jax
 import jax.numpy as jnp
-from jax import jit, grad, value_and_grad
+from jax import jit, grad, value_and_grad, lax
 from jax.scipy.linalg import cho_solve, solve_triangular
 import numpy as np
 
@@ -217,6 +217,51 @@ def _gp_predict_mean_and_var(K_trans, alpha_, V, k_diag):
     M = V @ K_trans.T
     y_var = k_diag - jnp.sum(M ** 2, axis=0)
     y_var = jnp.maximum(y_var, 0.0)
+    return y_mean, y_var
+
+
+# Guard threshold: predictive variances at or below this are recomputed in
+# float64 (they sit in the catastrophic-cancellation zone near training points
+# where the f32 ``k_diag - sum(M**2)`` can go negative). See PoC
+# ``AGENTS/poc/mixed_precision_kernel.py``.
+_PREDICT_F32_GUARD_EPS = 1e-10
+
+
+def _var_diag_mixed(V, K_trans, k_diag):
+    """Predictive variance diagonal, mixed precision (f32 matmul / f64 reduce).
+
+    ``var = k_diag - sum_i (V @ K_trans.T)_i**2``. The expensive O(n^2) matmul
+    ``V @ K_trans.T`` runs in float32 (the GPU-accelerable part); the reduction
+    and subtraction (which suffer catastrophic cancellation near training
+    points) stay in float64. A per-batch guard recomputes the whole batch in
+    float64 if any entry lands at or below ``_PREDICT_F32_GUARD_EPS`` -- the
+    static-shape JAX analogue of the PoC's per-point f64 recompute. In the safe
+    regime (moderate cond(K) / higher d) the guard never fires and this equals
+    the full-f64 result.
+    """
+    M32 = jnp.matmul(V.astype(jnp.float32), K_trans.T.astype(jnp.float32))
+    var = k_diag - jnp.sum(M32.astype(jnp.float64) ** 2, axis=0)
+
+    def _recompute_f64(_):
+        M64 = V @ K_trans.T
+        return k_diag - jnp.sum(M64 ** 2, axis=0)
+
+    return lax.cond(
+        jnp.any(var <= _PREDICT_F32_GUARD_EPS), _recompute_f64, lambda _: var, None
+    )
+
+
+@jit
+def _gp_predict_var_mixed(K_trans, V, k_diag):
+    """Mixed-precision variant of :func:`_gp_predict_var`."""
+    return jnp.maximum(_var_diag_mixed(V, K_trans, k_diag), 0.0)
+
+
+@jit
+def _gp_predict_mean_and_var_mixed(K_trans, alpha_, V, k_diag):
+    """Mixed-precision variant of :func:`_gp_predict_mean_and_var`."""
+    y_mean = K_trans @ alpha_
+    y_var = jnp.maximum(_var_diag_mixed(V, K_trans, k_diag), 0.0)
     return y_mean, y_var
 
 
@@ -429,7 +474,7 @@ def _make_predict_mean_single_padded_fn(kernel_fn):
     return predict_mean_single_pad
 
 
-def _make_predict_std_single_padded_fn(kernel_fn):
+def _make_predict_std_single_padded_fn(kernel_fn, use_f32=False):
     """Single-point predict std operating on padded buffers.
 
     ``V_padded`` is the full Cholesky inverse of the padded ``K``; on the
@@ -437,6 +482,10 @@ def _make_predict_std_single_padded_fn(kernel_fn):
     a fixed identity-scaled block (see ``_refresh_padded_state``). The mask
     zeros out invalid columns of ``K_trans``, which kills the
     invalid-block's contribution to ``M @ M``.
+
+    With ``use_f32=True`` the ``V_padded @ K_trans`` matvec runs in float32 and
+    the ``k_diag - dot(M, M)`` reduction in float64, with a scalar float64
+    guard (mixed-precision, Step 4).
     """
     @jit
     def predict_std_single_pad(x, X_padded, V_padded, mask,
@@ -448,8 +497,20 @@ def _make_predict_std_single_padded_fn(kernel_fn):
         mask_f = mask.astype(K_trans.dtype)
         K_trans = K_trans * mask_f[None, :]
         k_diag = output_scale_sq + white_noise_level
-        M = V_padded @ K_trans[0]
-        y_var = k_diag - jnp.dot(M, M)
+        if use_f32:
+            kt = K_trans[0]
+            M32 = jnp.matmul(V_padded.astype(jnp.float32), kt.astype(jnp.float32))
+            M64 = M32.astype(jnp.float64)
+            y_var = k_diag - jnp.dot(M64, M64)
+            y_var = lax.cond(
+                y_var <= _PREDICT_F32_GUARD_EPS,
+                lambda _: k_diag - jnp.dot(V_padded @ kt, V_padded @ kt),
+                lambda _: y_var,
+                None,
+            )
+        else:
+            M = V_padded @ K_trans[0]
+            y_var = k_diag - jnp.dot(M, M)
         y_var = jnp.maximum(y_var, 1e-30)
         return jnp.sqrt(y_var)
 
@@ -553,6 +614,13 @@ class JaxGaussianProcessMixin:
         self._V_padded = None
         self._L_padded = None
         self._mask = None
+        # Mixed-precision predictive variance (speed-levers Step 4). When True,
+        # the O(n^2) ``V @ K_trans.T`` matmul runs in float32 (GPU tensor-core
+        # accelerable) and the cancellation-prone ``k_diag - sum(.**2)``
+        # reduction stays in float64, with a per-batch float64 guard for any
+        # var <= eps. Default False (full float64) -- opt-in, since the win is
+        # on GPU/high-d and float32 is only safe at moderate cond(K).
+        self._predict_f32 = False
         self._capacity = 0
         self._n_valid = 0
         self._alpha_noise_padded = None  # scalar or shape-(capacity,) array
@@ -904,7 +972,9 @@ class JaxGaussianProcessMixin:
             # below feed the padded arrays. JIT traces are keyed on the
             # padded capacity, not on n_valid -- stable across acq iters.
             predict_mean_single = _make_predict_mean_single_padded_fn(self._kernel_fn)
-            predict_std_single = _make_predict_std_single_padded_fn(self._kernel_fn)
+            predict_std_single = _make_predict_std_single_padded_fn(
+                self._kernel_fn, use_f32=self._predict_f32
+            )
             self._predict_mean_single_fn = predict_mean_single
             self._predict_std_single_fn = predict_std_single
             self._predict_mean_grad_fn = jit(grad(predict_mean_single, argnums=0))
@@ -956,7 +1026,11 @@ class JaxGaussianProcessMixin:
                      else jnp.array(X_new, dtype=jnp.float64))
         K_trans = self._compute_K_trans(X_new_jax)
         k_diag = self._compute_k_diag(X_new_jax)
-        y_mean, y_var = _gp_predict_mean_and_var(
+        _mean_and_var = (
+            _gp_predict_mean_and_var_mixed if self._predict_f32
+            else _gp_predict_mean_and_var
+        )
+        y_mean, y_var = _mean_and_var(
             K_trans, self._alpha_padded, self._V_padded, k_diag
         )
         return y_mean, jnp.sqrt(y_var)
@@ -974,7 +1048,8 @@ class JaxGaussianProcessMixin:
                      else jnp.array(X_new, dtype=jnp.float64))
         K_trans = self._compute_K_trans(X_new_jax)
         k_diag = self._compute_k_diag(X_new_jax)
-        y_var = _gp_predict_var(K_trans, self._V_padded, k_diag)
+        _var_fn = _gp_predict_var_mixed if self._predict_f32 else _gp_predict_var
+        y_var = _var_fn(K_trans, self._V_padded, k_diag)
         return jnp.sqrt(y_var)
 
     def predict_mean(self, X_new):
