@@ -1870,10 +1870,16 @@ class RankedPool:
             acq_cond = acq if isinstance(acq, np.ndarray) else np.array(acq)
         else:
             surrogate = self.cache_model(i_start - 1)
+            # Classifier invariant during ranking; candidates already finite ->
+            # skip the redundant per-candidate is_finite_X.
             if self._transformed_input:
-                sigma_cond = surrogate.predict_std_transformed(X, validate=False)
+                sigma_cond = surrogate.predict_std_transformed(
+                    X, validate=False, ignore_classifier="all"
+                )
             else:
-                sigma_cond = surrogate.predict_std(X, validate=False)
+                sigma_cond = surrogate.predict_std(
+                    X, validate=False, ignore_classifier="all"
+                )
             acq_cond = self._acq_func(y, sigma_cond)
         if acq_cond.size == 0:
             self.log(
@@ -2007,13 +2013,18 @@ class RankedPool:
                 break
             # Otherwise, compute conditioned acquisition value, using point above,
             # and continue to the next iteration to re-rank
+            # Skip the redundant per-candidate is_finite_X: the classifier is
+            # invariant during ranking (``cache_model`` appends with
+            # ``fit_classifier=False``) and the candidate already passed the
+            # classifier to be in the pool, so re-running it per conditioning
+            # step is pure overhead. (Cleaner / vectorized; timing-neutral.)
             if self._transformed_input:
                 sigma_cond = self.surrogate_cond[i_new - 1].predict_std_transformed(
-                    X, validate=False
+                    X, validate=False, ignore_classifier="all"
                 )[0]
             else:
                 sigma_cond = self.surrogate_cond[i_new - 1].predict_std(
-                    X, validate=False
+                    X, validate=False, ignore_classifier="all"
                 )[0]
             # New acquisition should not be higher than the old one, since the new one
             # corresponds to a model with more training points (though fake ones).
