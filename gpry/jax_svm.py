@@ -213,17 +213,49 @@ class JaxBinaryRBFSVC:
             ],
             dtype=np.int32,
         )
+        # Precompute the padded support set HERE, at fit time (never inside a
+        # JAX trace), so the hot decision_function never writes instance state
+        # mid-trace (that side effect leaks tracers out of the NS jit).
+        self._support_vectors_padded, self._signed_dual_coef_padded = (
+            self._build_padded_support()
+        )
         return self
+
+    def _build_padded_support(self):
+        """Support vectors / signed dual-coef padded to a doubling capacity.
+
+        The support-vector count changes on nearly every refit, which made
+        ``_decision_function_jax`` recompile per fit. Padding to a power-of-two
+        capacity with **zero** dual-coef rows -- which contribute exactly
+        nothing to ``kernel @ signed_dual_coef`` (numerically exact) -- keys the
+        jit on a capacity that only changes at doublings, so it compiles
+        O(log n) times instead of once per fit.
+        """
+        n_sv, d = self.support_vectors_.shape
+        cap = max(8, 1 << max(0, n_sv - 1).bit_length())  # next pow2 >= n_sv
+        sv = np.zeros((cap, d), dtype=np.float64)
+        sv[:n_sv] = self.support_vectors_
+        dc = np.zeros((cap,), dtype=np.float64)
+        dc[:n_sv] = self._signed_dual_coef
+        return jnp.asarray(sv), jnp.asarray(dc)
 
     def decision_function_jax(self, X) -> jnp.ndarray:
         self._check_is_fitted()
         X = to_jax(X)
         if X.ndim != 2:
             raise ValueError(f"Expected a 2D array, got shape {X.shape}.")
+        # Read the fit-time padded support set (pure read -> trace-safe). The
+        # fallback builds a local copy without writing self, for objects loaded
+        # from a checkpoint predating this attribute.
+        if hasattr(self, "_support_vectors_padded"):
+            support_vectors = self._support_vectors_padded
+            signed_dual_coef = self._signed_dual_coef_padded
+        else:
+            support_vectors, signed_dual_coef = self._build_padded_support()
         return _decision_function_jax(
             X,
-            jnp.asarray(self.support_vectors_),
-            jnp.asarray(self._signed_dual_coef),
+            support_vectors,
+            signed_dual_coef,
             float(self.intercept_[0]),
             float(self._gamma),
         )
