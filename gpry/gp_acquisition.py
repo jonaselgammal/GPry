@@ -18,6 +18,8 @@ from time import time
 from copy import deepcopy
 from typing import Mapping
 from functools import partial
+from warnings import warn
+
 import numpy as np
 import scipy.optimize  # type: ignore
 
@@ -825,6 +827,8 @@ class NORA(GenericGPAcquisition):
             return self._do_mc_sample_ultranest(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "nessai":
             return self._do_mc_sample_nessai(surrogate, bounds=bounds, rng=rng)
+        if sampler.lower() == "blackjax":
+            return self._do_mc_sample_blackjax(surrogate, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
@@ -935,6 +939,27 @@ class NORA(GenericGPAcquisition):
         self.sampler_interface.delete_output()
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
+        y_mc = None
+        return X_mc, y_mc, None, w_mc, logZ, logZstd
+
+    def _do_mc_sample_blackjax(self, surrogate, bounds=None, rng=None):
+        warn("Support for BlackJax is experimental (and slow).")
+        # Update prior bounds
+        self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
+        # Update precision settings
+        self.sampler_interface.set_precision(**self.update_NS_precision(surrogate))
+        # Prepare seed for reproducibility (positive integer < 2^31); only rank 0 used.
+        seed = rng.integers(2**31 - 1) if rng is not None else None
+        # Run and get products
+        X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
+            lambda X: surrogate.predict(
+                np.atleast_2d(X), return_std=False, validate=False
+            )[0],
+            out_dir=self._get_output_folder(),
+            seed=seed,
+        )
+        self.sampler_interface.delete_output()
+        # For safety, and since it is very cheap, we will recompute y values later.
         y_mc = None
         return X_mc, y_mc, None, w_mc, logZ, logZstd
 
