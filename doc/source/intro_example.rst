@@ -178,7 +178,7 @@ Validation
 ----------
 
 .. note::
-    This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would obviously not run a full MCMC on the likelihood and would need to follow the validation guidelines at :ref:`strategy-troubleshooting`.
+    This part is optional and only relevant for validating the contours that GPry produces. In a realistic scenario you would probably not be able to run a full MCMC/NS on the likelihood, and would need to follow instead the validation guidelines at :ref:`strategy-troubleshooting`.
 
 Lastly, to compare our contours to the true Gaussian, we draw 10000 samples from it, set them as *fiducial samples* in the :class:`~gpry.run.Runner`, and plot the result:
 

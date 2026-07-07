@@ -54,7 +54,7 @@ If successful, you should be able to run the following command and get ``MPI is 
 Installing Nested Samplers
 --------------------------
 
-In order to use the highly parallelizable and more exploratory NORA acquisition engine (`arXiv:2305.19267 <https://arxiv.org/abs/2305.19267>`_), you will need to install one of the following nested samplers:
+In order to use the highly parallelizable and more exploratory :ref:`NORA acquisition engine <nora_explanation>`, you will need to install one of the following nested samplers:
 
 - `PolyChord <https://github.com/PolyChord/PolyChordLite>`_: it is the preferred option, since in combination with MPI it is very fast. To install it, follow the instructions at `https://github.com/PolyChord/PolyChordLite <https://github.com/PolyChord/PolyChordLite>`_. Try the MPI example mentioned there to make sure it works.
 

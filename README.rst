@@ -23,20 +23,31 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
        return [...]
 
    bounds = [[..., ...], [..., ...]]
-          
+
    from gpry import Runner
 
    runner = Runner(log_likelihood, bounds, checkpoint="output/", load_checkpoint="overwrite")
    runner.run()
 
+<<<<<<< Updated upstream
 .. image:: https://github.com/jonaselgammal/GPry/blob/main/doc/source/images/readme_animation.gif?raw=true
    :width: 400px
    :align: center
 
 An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model specification, and direct access to some physical likelihood pipelines.
+=======
+.. figure:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
+   :width: 400px
+   :align: center
 
-GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
+   Animated progress for the `advanced example <https://gpry.readthedocs.io/en/latest/adv_example.html>`_
 
+An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
+>>>>>>> Stashed changes
+
+GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. theses projects.
+
+# TODO: link to some personal whebpage/github profile?
 
 How it works
 ^^^^^^^^^^^^
@@ -53,13 +64,13 @@ GPry introduces some innovations with respect to previous similar approaches:
 
 At the moment, GPry utilizes a modification of the CPU-based `scikit-learn GP implementation <https://scikit-learn.org/stable/modules/gaussian_process.html>`_.
 
-  
+
 What kinds of likelihoods/posteriors should work with GPry?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Non-stochastic log-probability density functions, smooth up to a small amount of (deterministic) numerical noise (less than 0.1 in log posterior).
 
-- Large evaluation times, so that the GPry overhead is subdominant with respect to posterior evaluation. How slow depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if an MCMC takes longer to converge than you're willing to wait you should give it a shot.
+- Log-likelihoods with large evaluation times, so that the GPry overhead is subdominant with respect to posterior evaluation. How slow depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if an MCMC takes longer to converge than you're willing to wait, you should give it a shot.
 
 - The parameter space needs to be *low-dimensional* (less than 20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
 

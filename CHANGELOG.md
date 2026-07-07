@@ -8,6 +8,7 @@
 - Documentation has been reworked, separating explanations and module documentation.
 - [Cobaya](https://cobaya.readthedocs.io) wrapper updated, and better defaults added.
 - Improved [UltraNest](https://johannesbuchner.github.io/UltraNest/) interface defaults: switched to slice sampler to mimic [PolyChord](https://github.com/PolyChord/PolyChordLite) (more stable).
+- Added experimental interface for [BlackJax](https://blackjax-devs.github.io/blackjax/)'s nested sampler.
 
 # 3.0 – 2025-03-30
 
