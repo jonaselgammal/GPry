@@ -659,7 +659,7 @@ class NORA(GenericGPAcquisition):
         acq_func="LogExp",
         # Class-specific:
         sampler=None,
-        mc_every="1d",
+        mc_every="2",
         nlive_per_training=3,
         nlive_max="25d",
         nlive_per_dim_max=None,  # deprecated
