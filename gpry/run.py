@@ -1755,8 +1755,6 @@ class Runner:
                 "You have to have added points to the surrogate model before you can "
                 "generate an MC sample. Call the run() method first."
             )
-        if sampler is None:
-            sampler = self._mc_options
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, _default_mc_samples_filename)
         if sampler is None:
@@ -2158,7 +2156,7 @@ class Runner:
         corner : bool (default: False)
             Creates a corner plot per iteration (contours for current GP shown only if
             using NORA). Slow -- use for diagnosis only.
-.
+
         corner_final : bool, optional (default: None)
             Whether the final corner plot is created. Needs a surrogate mc sample.
             If undefined, it is created only if the run has converged.

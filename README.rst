@@ -29,21 +29,13 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
    runner = Runner(log_likelihood, bounds, checkpoint="output/", load_checkpoint="overwrite")
    runner.run()
 
-<<<<<<< Updated upstream
-.. image:: https://github.com/jonaselgammal/GPry/blob/main/doc/source/images/readme_animation.gif?raw=true
-   :width: 400px
-   :align: center
-
-An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model specification, and direct access to some physical likelihood pipelines.
-=======
-.. figure:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
+.. figure:: https://github.com/jonaselgammal/GPry/blob/main/doc/source/images/adv_animation.gif?raw=true
    :width: 400px
    :align: center
 
    Animated progress for the `advanced example <https://gpry.readthedocs.io/en/latest/adv_example.html>`_
 
 An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
->>>>>>> Stashed changes
 
 GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. theses projects.
 
@@ -98,3 +90,9 @@ If you use GPry, please cite the following papers:
 
 - `arXiv:2211.02045 <https://arxiv.org/abs/2211.02045>`_ for the core algorithm.
 - `arXiv:2305.19267 <https://arxiv.org/abs/2305.19267>`_ for the NORA Nested-Sampling acquisition engine.
+
+Some papers using GPry
+^^^^^^^^^^^^^^^^^^^^^^
+
+- `arXiv:2501.11320 <https://arxiv.org/abs/2501.11320>`_
+- `arXiv:2503.21871 <https://arxiv.org/abs/2503.21871>`_
