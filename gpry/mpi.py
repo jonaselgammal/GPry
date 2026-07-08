@@ -1,5 +1,12 @@
+"""
+This module contains a number of handy functions for MPI functionality.
+
+Under normal circumstances you shouldn't have to use any of the methods in here if you use
+the :class:`~gpry.run.Runner` class to run GPry.
+"""
+
 # Defining some helpers for parallelisation.
-import dill
+import dill  # type:  ignore
 import numpy as np
 from warnings import warn
 from numpy.random import SeedSequence, default_rng, Generator
@@ -8,7 +15,7 @@ try:
     from mpi4py import MPI
 
     # Use dill pickler (can seriealize more stuff, e.g. lambdas)
-    MPI.pickle.__init__(dill.dumps, dill.loads)
+    MPI.pickle.__init__(dill.dumps, dill.loads)  # type: ignore
     # Define some interfaces
     comm = MPI.COMM_WORLD
     SIZE = comm.Get_size()
@@ -21,7 +28,7 @@ except ImportError:
         "It is optional but recommended for faster running in parallel."
     )
     # Define dummy interfaces
-    comm = None
+    comm = None  # type: ignore
     SIZE = 1
     RANK = 0
     is_main_process = True
@@ -179,7 +186,7 @@ def share_attr(instance, attr_name, root=0):
     )
 
 
-def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
+def compute_y_parallel(surrogate, X, y, sigma_y, ensure_sigma_y=False):
     """
     Computes the GPR mean (and std if `do_sigma_y=True`) in parallel.
 
@@ -192,11 +199,11 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
         this_X = step_split(X)
         if len(this_X) > 0:
             if ensure_sigma_y:
-                this_y, this_sigma_y = gpr.predict(
+                this_y, this_sigma_y = surrogate.predict(
                     this_X, return_std=True, validate=False
                 )
             else:
-                this_y = gpr.predict(this_X, return_std=False, validate=False)
+                this_y = surrogate.predict(this_X, return_std=False, validate=False)
         else:
             this_y = np.array([], dtype=float)
             this_sigma_y = np.array([], dtype=float) if ensure_sigma_y else None
@@ -208,7 +215,7 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
     if sigma_y is None and ensure_sigma_y:
         this_X = step_split(X)
         if len(this_X) > 0:
-            this_sigma_y = gpr.predict_std(this_X, validate=False)
+            this_sigma_y = surrogate.predict_std(this_X, validate=False)
         else:
             this_sigma_y = np.array([], dtype=float)
         return (
@@ -216,3 +223,24 @@ def compute_y_parallel(gpr, X, y, sigma_y, ensure_sigma_y=False):
             merge_step_split(this_sigma_y),
         )
     return (y, sigma_y) if is_main_process else (None, None)
+
+
+def round_MPI(n, up=True, warn_rounding=True, name=None):
+    """
+    Rounds up (default) or down the value of the first argument to an integer multiple
+    of the number of MPI processes.
+
+    Does never round down ``n < mpi.SIZE`` to 0.
+    """
+    if n < SIZE and up:
+        new_n = SIZE
+    elif n > SIZE and n % SIZE:
+        new_n = n // SIZE * (SIZE + (1 if up else 0))
+    else:
+        new_n = n
+    if new_n != n and warn_rounding:
+        warn(
+            f"{name or 'Variable'} has been rounded {'up' if up else 'down'} from {n} "
+            f"to {new_n} to better exploit parallelization."
+        )
+    return new_n

@@ -1,0 +1,596 @@
+"""
+Module implementing a wrapper for the Cobaya inference framework.
+"""
+
+import logging
+from copy import deepcopy
+from inspect import cleandoc
+from typing import Union
+
+import getdist  # type: ignore
+import numpy as np
+from cobaya.yaml import yaml_load  # type: ignore
+from cobaya.sampler import Sampler  # type: ignore
+from cobaya.log import LoggedError  # type: ignore
+from cobaya.output import load_samples  # type: ignore
+from cobaya.tools import get_external_function, recursive_update  # type: ignore
+from cobaya.collection import SampleCollection  # type: ignore
+from cobaya.conventions import OutPar, minuslogprior_names  # type: ignore
+
+from gpry import mpi
+from gpry.run import Runner, _default_mc_sampler
+import gpry.mc as gprymc
+
+__min_cobaya_version__ = "3.6"
+
+yaml_info = """
+# Options regarding the Bayesian optimization loop.
+# NB: 'd' after a number means the dimensionality of the sampling space,
+#     and a number following 'd' means the power of the dimensionality factor.
+
+# General options for the main loop
+options:
+  # Number of finite initial truth evaluations before starting the learning loop
+  n_initial: 3d
+  # Maximum number of truth evaluations at initialization. If it is reached before
+  # `n_initial` finite points have been found, the run will fail. To avoid that, try
+  # decreasing the prior volume.
+  max_initial: 30d1.5
+  # Maximum number of truth evaluations before the run stops. This is useful for e.g.
+  # restricting the maximum computation resources.
+  max_total: 70d1.5
+  # Maximum number of sampling points accepted into the GP training set before the run
+  # stops. If this limit is frequently saturated, try decreasing the prior volume.
+  max_finite:  # default (undefined) = max_total
+  # Number of points which are acquired with Kriging believer for every acquisition step.
+  # Gets adjusted (with 20% tol.) to match a multiple of the num. of parallel processes.
+  n_points_per_acq: d
+  # Number of iterations between full GP hyperparameters fits, including several
+  # restarts of the optimizer. If 'np.inf' or a large number, never refit with restarts.
+  fit_full_every: 2
+  # Similar to `fit_full_every`, but with a single optimizer run from the last optimum.
+  # Overridden by `fit_full_every` if it applies. Pass np.inf or a large number to never
+  # refit from last optimum (hyperparameters kept constant in that iteration).
+  fit_simple_every: 1  # every iteration
+
+# The surrogate GP regressor used for interpolating the posterior
+surrogate:
+  regressor:
+    # Spatial correlation kernel and params, e.g. RBF, Matern, {Matern: {nu: 2.5}}, ...
+    kernel: RBF
+    # Priors for the output and length scale, in normalised logp units
+    output_scale_prior: [1e-2, 1e3]
+    length_scale_prior: [1e-3, 1e1]
+    # Noise level in logp units; increase for numerically noisy likelihoods
+    noise_level: 1e-1
+    # Whether to fix the noise or to fit for a white-noise additive kernel term
+    noise_fixed: False
+    # Hyperparameter fitting: optimizer (from scipy) and number of restarts for full fits
+    optimizer: fmin_l_bfgs_b
+    # Number of restarts of the hyperparameter optimizer
+    n_restarts_optimizer: 20d
+  # Treatment of infinities and large negative values; False for no classifier
+  infinities_classifier:
+    svm:
+      # Difference in standard deviations ('s') for considering a value as -infinity
+      threshold: 20s
+    trust_region:
+      # Difference in standard deviations ('s') for considering a value as -infinity
+      threshold: 30s
+      # Factor by which to multiply the sides of the hyperrectangular trust region
+      factor: 2  # none for 1
+  # Factor used to clip the GPR from above, to avoid overshoots (undefined to disable)
+  clip_factor: 1.1  # none: no clipping
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+
+# The acquisition class, function and their options
+gp_acquisition:
+  # Acquisition function and its arguments (if passed as dict)
+  acq_func:
+    LogExp:
+      zeta_scaling: 0.85  # larger z_scaling for more exploratory acquisition
+  # Verbosity (set only if different from the overall verbosity)
+  verbose:
+  # Acquisition engine: NORA or BatchOptimizer
+  engine: NORA
+  # Options for the engine
+  options_NORA:
+    # nested sampler used for acquisition
+    sampler:  # undefined: in order, of available: polychord > ultranest > nessai
+    mc_every: 2  # number of iterations between full NS runs
+    nlive_per_training: 3  # number of live points per training sample
+    nlive_max: 25d  # cap for the number of live points
+    num_repeats: 5d  # number of steps of slice chains (polychord only)
+    precision_criterion_target: 0.01  # precision criterion for the NS
+    nprior_per_nlive: 10  # number of prior points in the initial sample, times nlive
+    max_ncalls:  # maximum number of calls to the GPR model during NS (none: infinite)
+  options_BatchOptimizer:
+    proposer:  # default (undefined): a mixture of uniform and centroids
+    acq_optimizer: fmin_l_bfgs_b  # scipy optimizer to use
+    n_restarts_optimizer: 5d  # number of restarts during hyperparameter fitting
+    n_repeats_propose: 10  # number of starting points drawn from the proposer
+
+# Proposer used for drawing the initial training samples before running
+# the acquisition loop. One of [reference, prior, uniform].
+# Can be specified as dict with args, e.g. {reference: {max_tries: 1000}}
+initial_proposer: reference
+
+# Convergence criterion.
+# (add or replace by DontConverge to run until evaluation budget exhausted)
+# `policy` can be [n]ecessary (default), [s]ufficient, both ([ns]), or [m]onitoring
+convergence_criterion:
+  CorrectCounter: {policy: s}
+  GaussianKL: {policy: n, limit: 5e-02}  # ignored if NORA not used
+  TrainAlignment: {policy: n}  # ignored if NORA not used
+
+# Sampler used to generate intermediate and final samples from the surrogate model
+mc_options: nested  # pass as a dict for options
+
+# Produce progress plots (inside the gpry_output dir).
+# One can specify options detailing which plots will be made, and in which format, e.g.:
+# {timing: True, convergence: True, trace: False, slices: False, format: svg}
+# (Adds significant overhead for fast likelihoods.)
+plots: False
+
+# Fiducial point and/or MC samples
+fiducial_point: # dict of {parameters: values}; can use keys 'logpost' and 'loglike'.
+fiducial_mc: # path to MC samples in Cobaya-compatible format
+
+# Function run each iteration after adapting the recently acquired points and
+# the computation of the convergence criterion. See docs for implementation.
+callback:
+
+# Whether the callback function handles MPI-parallelization internally
+# Otherwise run only by the rank-0 process
+callback_is_MPI_aware:
+
+# Change to increase or reduce verbosity. If None, it is handled by Cobaya.
+# '3' produces general progress output (default for Cobaya if None),
+# and '4' debug-level output
+verbose:
+"""
+
+
+class CobayaWrapper(Sampler):
+    """GPry: a package for Bayesian inference of expensive likelihoods using GPs."""
+
+    sampler_type: str = _default_mc_sampler
+    _gpry_output_dir: str = "gpry_output"
+
+    # Resume:
+    _at_resume_prefer_new = [
+        "plots",
+        "callback",
+        "callback_is_MPI_aware",
+        "verbose",
+        "mc_options",
+    ]
+
+    @classmethod
+    def get_class_options(cls, **kwargs):
+        return yaml_load(yaml_info)
+
+    def initialize(self):
+        """
+        Initializes GPry.
+        """
+        # Set some args for the Runner that are derived from Cobaya
+        if self.verbose is None:
+            if self.log.getEffectiveLevel() == logging.NOTSET:
+                self.verbose = 3
+            elif self.log.getEffectiveLevel() <= logging.DEBUG:
+                self.verbose = 4
+            elif self.log.getEffectiveLevel() <= logging.INFO:
+                self.verbose = 3
+            else:
+                self.verbose = 2
+        # Prepare output
+        self.path_checkpoint = self.get_checkpoint_dir(self.output)
+        self.output_strategy = "resume" if self.output.is_resuming() else "overwrite"
+        # Do a manual recursive update, since the depth of some settings here is >2:
+        defaults = self.get_class_options()
+        for attr in ["surrogate", "gp_acquisition"]:
+            upd_values = recursive_update(defaults[attr], getattr(self, attr, {}))
+            setattr(self, attr, upd_values)
+        # Grab the relevant acq options, merge them, and kick out the unused ones
+        gp_acq_input = deepcopy(self.gp_acquisition)
+        gp_acq_engine = gp_acq_input.pop("engine", "BatchOptimizer")
+        gp_acq_engine_options = None
+        for k in list(gp_acq_input):
+            if k.startswith("options_"):
+                gp_acq_engine_options = gp_acq_input.pop(k)
+                if k.lower().endswith(gp_acq_engine.lower()):
+                    gp_acq_input.update(gp_acq_engine_options or {})
+        gp_acq_input = {gp_acq_engine: gp_acq_input}
+        # Initialize the runner
+        try:
+            self.gpry_runner = Runner(
+                loglike=self.model,
+                surrogate=self.surrogate,
+                gp_acquisition=gp_acq_input,
+                initial_proposer=self.initial_proposer,
+                convergence_criterion=self.convergence_criterion,
+                mc=self.mc_options,
+                options=self.options,
+                callback=(
+                    get_external_function(self.callback) if self.callback else None
+                ),
+                callback_is_MPI_aware=self.callback_is_MPI_aware,
+                checkpoint=self.path_checkpoint,
+                load_checkpoint=self.output_strategy,
+                seed=self._rng,
+                plots=self.plots,
+                verbose=self.verbose,
+            )
+        except (ValueError, TypeError) as excpt:
+            raise LoggedError(
+                self.log, f"Error when initializing GPry: {str(excpt)}"
+            ) from excpt
+        # Set sampler type. Update info too, so that the output gets updated.
+        self.sampler_type = list(self.gpry_runner._mc_options)[0].lower()
+        self._updated_info["sampler_type"] = self.sampler_type
+        # Where the Cobaya-compatible samples will be stored
+        self.collection = None
+        # Fiducial quantities and samples, for comparison plots
+        if self.fiducial_point is not None:
+            self.set_fiducial_point(self.fiducial_point)
+        if self.fiducial_mc is not None:
+            self.set_fiducial_mc(self.fiducial_mc)
+
+    def set_fiducial_point(self, fiducial_point):
+        """
+        Sets a fiducial point for the GPry runner.
+
+        Parameters
+        ----------
+        fiducial_point: dict
+            Dict containing the sampled parameters as keys with their fiducial values.
+            May containg ``logpost`` or ``loglike`` keys.
+        """
+        try:
+            X = [
+                fiducial_point.get(p)
+                for p in self.model.parameterization.sampled_params()
+            ]
+            logpost = fiducial_point.pop("logpost", None)
+            loglike = fiducial_point.pop("loglike", None)
+            self.gpry_runner.set_fiducial_point(X, logpost=logpost, loglike=loglike)
+        except (TypeError, AttributeError, KeyError) as excpt:
+            raise LoggedError(
+                self.log, f"Error when setting fiducial point {fiducial_point}: {excpt}"
+            ) from excpt
+
+    def set_fiducial_mc(self, path_to_fiducial_mc):
+        """
+        Sets fiducial MC samples for the GPry runner.
+
+        Parameters
+        ----------
+        path_to_fiducial_mc: str
+            Path to Cobaya-loadable MC samples with a compatible model.
+        """
+        try:
+            fiducial_mc = load_samples(path_to_fiducial_mc, combined=True)
+        except FileNotFoundError as excpt:
+            raise LoggedError(
+                self.log,
+                f"Error when loading fiducial MC samples from {path_to_fiducial_mc}: "
+                f"{excpt}",
+            ) from excpt
+        try:
+            X = fiducial_mc[
+                list(self.model.parameterization.sampled_params())
+            ].to_numpy()
+            # Prefer likelihood in case priors are different
+            if "chi2" in fiducial_mc.columns:
+                logpost = None
+                loglike = -0.5 * fiducial_mc["chi2"].to_numpy()
+            else:
+                logpost = -fiducial_mc["minuslogpost"].to_numpy()
+                loglike = None
+            weights = fiducial_mc["weight"]
+            self.gpry_runner.set_fiducial_mc(
+                X, logpost=logpost, loglike=loglike, weights=weights
+            )
+        except Exception as excpt:
+            raise LoggedError(
+                self.log, f"Error when setting fiducial MC samples: {excpt}"
+            ) from excpt
+
+    def run(self):
+        """
+        Gets the initial training points and starts the acquisition loop.
+        """
+        if mpi.is_main_process:
+            self.log.info("Starting GPry learning loop...")
+        try:
+            self.gpry_runner.run()
+        except Exception as excpt:
+            raise LoggedError(
+                self.log,
+                f"GPry failed during learning: {excpt.__class__.__name__}: {excpt}",
+            ) from excpt
+        if mpi.is_main_process:
+            if self.gpry_runner.has_converged:
+                self.log.info("Learning stage finished successfully!")
+            else:
+                self.log.info(
+                    "Learning stage failed to converge! MC sample produced anyway."
+                )
+                # Plot surrogate triangle anyway
+                plot_mc_kwargs = {"output_dpi": 200}
+                if "ext" in self.plots:
+                    plot_mc_kwargs["ext"] = self.plot["ext"]
+                try:
+                    self.gpry_runner.plot_mc(**plot_mc_kwargs)
+                except Exception as excpt:
+                    self.mpi_warning(
+                        f"Could not do final corner plot for unconverged run: {excpt}"
+                    )
+        # Preparing Cobaya-compatible samples
+        if mpi.is_main_process:
+            self.collection = self.last_mc_samples_as_collection()
+            # Write them, if applicable
+            if self.collection is not None:
+                self.collection.out_update()
+
+    def last_mc_samples_as_collection(self):
+        """
+        Creates a cobaya SampleCollection out of the last MC samples of GPry.
+
+        Fills individual likelihoods and derived parameters with nan's.
+
+        Returns
+        -------
+        SampleCollection
+        """
+        last_mc_samples = self.gpry_runner.last_mc_samples(copy=True)
+        if last_mc_samples is None:
+            return None
+        collection = SampleCollection(
+            self.model,
+            output=self.output,
+            name="1",
+            resuming=False,
+            sample_type=self.sampler_type,
+        )
+        # Hack -- create contents directly, since checks for individual likelihoods,
+        # etc would fail.
+        collection._data[OutPar.weight] = last_mc_samples["w"]
+        collection._data[OutPar.minuslogpost] = -last_mc_samples[gprymc._name_logp]
+        for i, param in enumerate(self.model.parameterization.sampled_params()):
+            collection._data[param] = last_mc_samples["X"][:, i]
+        # Add prior and likelihood
+        logpriors = np.array(
+            [self.model.logpriors(X_i) for X_i in last_mc_samples["X"]]
+        )
+        collection._data[minuslogprior_names(self.model.prior)] = -logpriors
+        collection._data[OutPar.minuslogprior] = -np.sum(logpriors, axis=1)
+        collection._data[OutPar.chi2] = 2 * (
+            collection._data[OutPar.minuslogpost]
+            - collection._data[OutPar.minuslogprior]
+        )
+        return collection
+
+    def samples(
+        self,
+        combined: bool = False,
+        skip_samples: float = 0,
+        to_getdist: bool = False,
+    ) -> Union[SampleCollection, "getdist.MCSamples"]:
+        """
+        Returns the last sample from the surrogate posterior.
+
+        Parameters
+        ----------
+        combined: bool, default: False
+            If ``True`` returns the same, single posterior for all processes. Otherwise,
+            it is only returned for the root process.
+        skip_samples: int or float, default: 0
+            Skips some amount of initial samples (if ``int``), or an initial fraction of
+            them (if ``float < 1``). If concatenating (``combined=True``), skipping is
+            applied before concatenation. Forces the return of a copy.
+            If the sampler used to draw from the surrogate model is a nested sampler,
+            this setting has no effect, and raises a warning if greater than 0.
+        to_getdist: bool, default: False
+            If ``True``, returns a single :class:`getdist.MCSamples` instance, containing
+            all samples, for all MPI processes (``combined`` is ignored).
+
+        Returns
+        -------
+        SampleCollection, getdist.MCSamples
+           The sample from the surrogate posterior.
+        """
+        if skip_samples and self.sampler_type.lower() == "nested":
+            self.mpi_warning(
+                "Initial samples should not be skipped in nested sampling. "
+                "Ignoring 'skip_samples' keyword."
+            )
+        collection = self.collection
+        if not combined and not to_getdist:
+            return collection  # None for MPI ranks > 0
+        # In all remaining cases, we return the same for all ranks
+        if to_getdist:
+            if mpi.is_main_process:
+                collection = collection.to_getdist()
+        return mpi.bcast(collection)
+
+    def products(
+        self,
+        combined: bool = False,
+        skip_samples: float = 0,
+        to_getdist: bool = False,
+    ) -> dict:
+        """
+        Returns the products of the run: an MC sample of the surrogate posterior under
+        ``sample``, and the GPRy ``Runner`` object under ``runner``.
+
+        Parameters
+        ----------
+        combined: bool, default: False
+            If ``True`` returns the same, single posterior for all processes. Otherwise,
+            it is only returned for the root process.
+        skip_samples: int or float, default: 0
+            Skips some amount of initial samples (if ``int``), or an initial fraction of
+            them (if ``float < 1``). If concatenating (``combined=True``), skipping is
+            applied before concatenation. Forces the return of a copy.
+            If the sampler used to draw from the surrogate model is a nested sampler,
+            this setting has no effect, and raises a warning if greater than 0.
+        to_getdist: bool, default: False
+            If ``True``, returns a single :class:`getdist.MCSamples` instance, containing
+            all samples, for all MPI processes (``combined`` is ignored).
+        """
+        return {
+            "runner": self.gpry_runner,
+            "sample": self.samples(
+                combined=combined, skip_samples=skip_samples, to_getdist=to_getdist
+            ),
+        }
+
+    def plot(
+            self,
+            ext="png",
+            timing=True,
+            convergence=True,
+            trace=True,
+            slices=False,
+            corner=False,
+            corner_final=None,
+    ):
+        """
+        Creates some progress plots and saves them at the ``gpry_output`` path.
+
+        Parameters
+        ----------
+        ext : str (default ``"png"``)
+            Format for the plots, among the available ones in ``matplotlib``.
+
+        timing : bool (default: True)
+            Plot histogram of timing per iteration (totals in legend).
+
+        convergence : bool (default: True)
+            Plot the evolution of the convergence criterion (included in ``trace`` plot).
+
+        trace : bool (default: True)
+            Plot the evolution of the run: convergence criterion, surrogate log(p) and
+            parameters.
+
+        slices : bool (default: False)
+            Plots slices per training samples.
+            Slow -- use for diagnosis only.
+
+        corner : bool (default: False)
+            Creates a corner plot per iteration (contours for current GP shown only if
+            using NORA). Slow -- use for diagnosis only.
+
+        corner_final : bool, optional (default: None)
+            Whether the final corner plot is created. Needs a surrogate mc sample.
+            If undefined, it is created only if the run has converged.
+        """
+        self.gpry_runner.plot_progress(
+            ext=ext,
+            timing=timing,
+            convergence=convergence,
+            trace=trace,
+            slices=slices,
+            corner=corner,
+            corner_final=corner_final,
+        )
+
+    @classmethod
+    def get_checkpoint_dir(cls, output=None):
+        """
+        Folder where the checkpoint output of GPry is going to be saved, given a Cobaya
+        ``OutputReadOnly`` instance.
+
+        Parameters
+        ----------
+        output: cobaya.output.Output, cobaya.output.DummyOutput, optional
+            Cobaya output instance. Can be a dummy one or None, in which case a temporary
+            folder will be created.
+
+        Returns
+        -------
+        checkpoint_dir: str|None
+            Relative folder where the GPry checkpoint will be saved (None if dummy output)
+
+        Examples
+        --------
+        Assuming that ``cls._gpry_output_dir = "gpry_output"``:
+
+        >>> from cobaya.output import get_output
+        >>> cls.get_checkpoint_dir(get_output("folder/"))
+        'folder/gpry_output'
+        >>> cls.get_checkpoint_dir(get_output("folder/prefix"))
+        'folder/prefix_gpry_output'
+        >>> cls.get_checkpoint_dir(get_output())  # dummy output
+        None
+        """
+        if output:
+            return output.add_suffix(cls._gpry_output_dir, separator="_")
+        return None
+
+    @classmethod
+    def output_files_regexps(cls, output, info=None, minimal=False):
+        """
+        Returns a list of tuples `(regexp, root)` of output files potentially produced.
+        If `root` in the tuple is `None`, `output.folder` is used.
+
+        If `minimal=True`, returns regexp's for the files that should really not be there
+        when we are not resuming: GPry checkpoint products and the MC sample from the
+        surrogate.
+        """
+        return [
+            (None, cls.get_checkpoint_dir(output)),
+            (output.collection_regexp(name="1"), None),
+        ]
+
+    @staticmethod
+    def is_nora(info):
+        """Returns True if NORA is being used."""
+        acq_method = list((info or {}).get("gp_acquisition", {}) or {})
+        return (
+            len(acq_method) > 0
+            and isinstance(acq_method[0], str)
+            and acq_method[0].lower() == "nora"
+        )
+
+    @classmethod
+    def get_desc(cls, info=None):
+        nora_string = (
+            r"using the NORA parallelised acquisition approach \cite{Torrado:2023cbj}"
+        )
+        if info is None:
+            # Unknown case (no info passed)
+            nora_string = f" [(if gp_acquisition: NORA) {nora_string}]"
+        else:
+            nora_string = " " + nora_string if cls.is_nora(info) else ""
+        return (
+            "GPry: a package for Bayesian inference of expensive likelihoods "
+            r"with Gaussian Processes \cite{Gammal:2022eob}" + nora_string + "."
+        )
+
+    @classmethod
+    def get_bibtex(cls):
+        return cleandoc(r"""
+            @article{Gammal:2022eob,
+                author = {{El Gammal}, Jonas and Sch\"oneberg, Nils and Torrado, Jes\'us and Fidler, Christian},
+                title = "{Fast and robust Bayesian Inference using Gaussian Processes with GPry}",
+                eprint = "2211.02045",
+                archivePrefix = "arXiv",
+                primaryClass = "astro-ph.CO",
+                month = "11",
+                year = "2022"
+
+            # Cite only if using NORA as gp_acquisition (see desc.)
+            # Do not forget to cite the nested sampler used too.
+            @article{Torrado:2023cbj,
+                author = {Torrado, Jes\'us and Sch\"oneberg, Nils and Gammal, Jonas El},
+                title = "{Parallelized Acquisition for Active Learning using Monte Carlo Sampling}",
+                eprint = "2305.19267",
+                archivePrefix = "arXiv",
+                primaryClass = "stat.ML",
+                month = "5",
+                year = "2023"
+           }""")

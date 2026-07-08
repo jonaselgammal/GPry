@@ -22,7 +22,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -30,10 +29,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-requires-python = ">=3.8.0"
+requires-python = ">=3.9.0"
 dependencies = [
     "scikit-learn", "dill", "tqdm", "ultranest", "pandas",
-    "getdist", "numpy", "scipy", "matplotlib", "h5py"
+    "getdist>=1.7.4", "numpy", "scipy", "matplotlib",
 ]
 
 [project.optional-dependencies]
@@ -43,9 +42,6 @@ docs = ["sphinx", "sphinx_book_theme", "sphinx-favicon"]
 
 [tool.setuptools.dynamic]
 version = { attr = "gpry.__version__" }
-
-[tool.setuptools.package-data]
-"*" = ["*.yaml"]
 
 [tool.setuptools.packages.find]
 exclude = ["docs", "tests", "examples"]
@@ -63,3 +59,10 @@ per-file-ignores = [
 ]
 max-line-length = 88
 count = true
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+
+[tool.ruff.lint]
+ignore = ['E731']

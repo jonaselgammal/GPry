@@ -1,7 +1,44 @@
 """
 This module contains several classes and methods for calculating different
-convergence criterions which can be used to determine if the BO loop has
+convergence criteria which can be used to determine if the BO loop has
 converged.
+
+It implements a base :class:`~gpry.convergence.ConvergenceCriterion` class
+of which several inbuilt convergence criteria inherit. Using this base class
+it is also possible to construct custom convergence criteria. All convergence criteria
+are passed a list of prior bounds and a dictionary of options specific to each criterion.
+
+The fastest one, and reasonably accurate, is :class:`~gpry.convergence.CorrectCounter`,
+a local criterion that checks that the difference between evaluated and predicted values
+is small enough, taking into account dimensional regularization.
+
+If mean and covariance matrix of the surrogate posterior are available (e.g. when using
+the :class:`~gpry.gp_acquisition.NORA` acquisition engine), it is a good idea to combine
+it with :class:`~gpry.convergence.GaussianKL`, a global criterion checking stability of KL
+divergences between iterations in a Gaussian approximation.
+
+There is also a self-explanatory :class:`~gpry.convergence.DontConverge` criterion, that
+can be used in combination with a set training sample budget to ensure that this budget is
+always exhausted.
+
+Finally, :class:`~gpry.convergence.TrainAlignment` is a criterion run at the end of the
+learning loop, that checks that the result of an MC run on the surrogate posterior
+represents the mode described by the training set. This avoids converging on overshoots of
+the GP Regressor.
+
+Convergence policy
+^^^^^^^^^^^^^^^^^^
+
+You can define a ``policy`` for each convergence criterion:
+
+- ``'n'``: necessary (default if not specified)
+- ``'s'``: sufficient
+- ``'ns'``: necessary and sufficient
+- ``'m'``: monitoring (tracked, but will not affect convergence)
+
+If there are no criteria specified as *necessary* or *sufficient*, i.e. all criteria are
+set to *monitor*, the run will never converge (but it will stop at evaluation budget
+exhaustion).
 """
 
 import sys
@@ -12,9 +49,14 @@ from abc import ABCMeta, abstractmethod
 
 import numpy as np
 
-from gpry.mc import cobaya_generate_gp_model_input, mcmc_info_from_run
-from gpry.tools import kl_norm, is_valid_covmat, nstd_of_1d_nstd, mean_covmat_from_evals, \
-    credibility_of_nstd
+from gpry.mc import cobaya_generate_surr_model_input, mcmc_info_from_run
+from gpry.tools import (
+    kl_norm,
+    is_valid_covmat,
+    nstd_of_1d_nstd,
+    mean_covmat_from_evals,
+    credibility_of_nstd,
+)
 from gpry import mpi
 
 # Policies and default ("necessary") for convergence criteria
@@ -50,8 +92,8 @@ def builtin_names():
 
 class ConvergenceCriterion(metaclass=ABCMeta):
     """Base class for all convergence criteria (CCs). A CC quantifies the
-    convergence of the GP surrogate model. If this value goes below a certain,
-    user-set value we consider the GP to have converged to the true posterior
+    convergence of the surrogate model. If this value goes below a certain,
+    user-set value we consider the surrogate to have converged to the true posterior
     distribution.
 
     Currently several CCs are supported which should be versatile enough for
@@ -75,7 +117,7 @@ class ConvergenceCriterion(metaclass=ABCMeta):
                 self.n_accepted_evals = []
                 self.limit = ... # stores the limit for convergence
 
-            def is_converged(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
+            def is_converged(self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None):
                 # Basically a wrapper for the 'criterion_value' method which
                 # returns True if the convergence criterion is met and False
                 # otherwise.
@@ -110,25 +152,25 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         if len(values) == 0 or len(n_posterior_evals) == 0:
             raise ValueError(
                 "Make sure to call the convergence criterion "
-                "before getting it's history."
+                "before getting its history."
             )
         return values, n_posterior_evals, n_accepted_evals
 
     @abstractmethod
     def is_converged(
-        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+        self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
     ):
         """
         Returns False if the algorithm hasn't converged and True if it has.
 
-        If gp_2 is None the last GP is taken from the model instance.
+        If surr_2 is None the last surrogate is taken from the model instance.
         """
 
     @abstractmethod
-    def criterion_value(self, gp, gp_2=None):
+    def criterion_value(self, surr, surr_2=None):
         """
         Returns the value of the convergence criterion for the current
-        gp. If gp_2 is None the last GP is taken from the model instance.
+        surrogate. If surr_2 is None the last surrogate is taken from the model instance.
         """
 
     @property
@@ -145,7 +187,6 @@ class ConvergenceCriterion(metaclass=ABCMeta):
         return False
 
     def _set_convergence_policy(self, params):
-        # pylint: disable=attribute-defined-outside-init
         self._convergence_policy = (params or {}).get(
             "policy", _default_convergence_policy
         )
@@ -241,17 +282,17 @@ class DontConverge(ConvergenceCriterion):
         # Explicitly set "necessary" as policy
         self._set_convergence_policy({"policy": "n"})
 
-    def criterion_value(self, gp, gp_2=None):
+    def criterion_value(self, surr, surr_2=None):
         self.values.append(np.nan)
         self.thres.append(np.nan)
-        self.n_posterior_evals.append(gp.n_total)
-        self.n_accepted_evals.append(gp.n)
+        self.n_posterior_evals.append(surr.n_total)
+        self.n_accepted_evals.append(surr.n_regress)
         return np.nan
 
     def is_converged(
-        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+        self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
     ):
-        self.criterion_value(gp, gp_2)
+        self.criterion_value(surr, surr_2)
         return False
 
 
@@ -262,7 +303,7 @@ class GaussianKL(ConvergenceCriterion):
 
     If a valid GPAcquisition instance is passed to ``is_converged``, mean and covariance
     will be extracted from it. Otherwise, it estimates the mean and covariance by running
-    an MCMC sampler on the GP (slow).
+    an MCMC sampler on the surrogate (slow).
 
     In the second case, this convergence criterion is MPI-aware, such that it will run as
     many parallel MCMC chains as running processes to improve the estimation of the mean
@@ -327,7 +368,7 @@ class GaussianKL(ConvergenceCriterion):
         self._last_info = {}
         self._last_collection = None
 
-    def _get_new_mean_and_cov(self, gp, acquisition=None):
+    def _get_new_mean_and_cov(self, surr, acquisition=None):
         try:
             return self._get_new_mean_and_cov_from_acquisition(acquisition)
         except AttributeError:
@@ -335,7 +376,7 @@ class GaussianKL(ConvergenceCriterion):
                 "Could not get sample from acquisition object. "
                 "Running MC process to get mean and covmat."
             )
-            return self._get_new_mean_and_cov_from_mc(gp)
+            return self._get_new_mean_and_cov_from_mc(surr)
 
     def _get_new_mean_and_cov_from_acquisition(self, acquisition):
         """
@@ -347,7 +388,7 @@ class GaussianKL(ConvergenceCriterion):
         attr_error, num_error = None, None
         if mpi.is_main_process:
             try:
-                X, _, _, w = acquisition.last_MC_sample(warn_reweight=False)
+                X, _, _, w = acquisition.last_mc_sample(warn_reweight=False)
             except AttributeError as excpt:
                 attr_error = excpt
             else:
@@ -366,17 +407,17 @@ class GaussianKL(ConvergenceCriterion):
             ) from num_error
         return mpi.bcast((mean, cov) if mpi.is_main_process else None)
 
-    def _get_new_mean_and_cov_from_mc(self, gp):
+    def _get_new_mean_and_cov_from_mc(self, surr):
         self.thres.append(self.limit)
         cov_mcmc = None
         if mpi.is_main_process:
             reused = False
             if self._last_collection is not None:
-                points = self._last_collection[self.paramnames].to_numpy(np.float64)
-                old_gp_values = -0.5 * self._last_collection["chi2"].to_numpy(np.float64)
-                new_gp_values = gp.predict(points)
-                weights = self._last_collection["weight"].to_numpy(np.float64)
-                logratio = new_gp_values - old_gp_values
+                points = self._last_collection[self.paramnames].to_numpy(float)
+                old_surr_values = -0.5 * self._last_collection["chi2"].to_numpy(float)
+                new_surr_values = surr.predict(points)
+                weights = self._last_collection["weight"].to_numpy(float)
+                logratio = new_surr_values - old_surr_values
                 logratio -= max(logratio)
                 reweights = weights * np.exp(logratio)
                 # Remove points with very small weight: more numerically stable
@@ -413,7 +454,7 @@ class GaussianKL(ConvergenceCriterion):
                 )
             return mean_reweighted, cov_reweighted
         # No previous mcmc sample, or reweighted mean+cov too different
-        self._last_info, samples = self._sample_mcmc(gp, covmat=cov_mcmc)
+        self._last_info, samples = self._sample_mcmc(surr, covmat=cov_mcmc)
         # Compute mean and cov, and broadcast
         if mpi.is_main_process:
             mean_new, cov_new = samples.mean(), samples.cov()
@@ -426,15 +467,14 @@ class GaussianKL(ConvergenceCriterion):
             )
         return mean_new, cov_new
 
-    # pylint: disable=import-outside-toplevel
-    def _sample_mcmc(self, gpr, covmat=None):
-        from cobaya.model import get_model
-        from cobaya.sampler import get_sampler
-        from cobaya.log import LoggedError
+    def _sample_mcmc(self, surr, covmat=None):
+        from cobaya.model import get_model  # type: ignore
+        from cobaya.sampler import get_sampler  # type: ignore
+        from cobaya.log import LoggedError  # type: ignore
 
         # Update Cobaya's input: mcmc's proposal covmat and log-likelihood
-        self.cobaya_input = cobaya_generate_gp_model_input(
-            gpr, self.prior_bounds, self.paramnames
+        self.cobaya_input = cobaya_generate_surr_model_input(
+            surr, self.prior_bounds, self.paramnames
         )
         # Supress Cobaya's output
         # (set to True for debug output, or comment out for normal output)
@@ -445,7 +485,7 @@ class GaussianKL(ConvergenceCriterion):
             cov = covmat
         else:
             cov = self.cov
-        sampler_info = mcmc_info_from_run(model, gpr, cov=cov)
+        sampler_info = mcmc_info_from_run(model, surr, cov=cov)
         sampler_info["mcmc"]["temperature"] = self.temperature
         high_prec_threshold = (self.values[-1] < 1) if len(self.values) > 0 else False
         # Relax stopping criterion if not yet well converged
@@ -471,26 +511,30 @@ class GaussianKL(ConvergenceCriterion):
         samples.reset_temperature()
         return updated_info, samples
 
-    def criterion_value(self, gp, gp_2=None, acquisition=None):
+    def criterion_value(self, surr, surr_2=None, acquisition=None):
         try:
-            mean_new, cov_new = self._get_new_mean_and_cov(gp, acquisition=acquisition)
+            mean_new, cov_new = self._get_new_mean_and_cov(
+                surr, acquisition=acquisition
+            )
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
             raise ConvergenceCheckError(
                 f"Error when computing mean and covmat: {excpt}"
             ) from excpt
-        if gp_2 is not None:
-            # TODO: Nothing yet to do with gp2
+        if surr_2 is not None:
+            # TODO: Nothing yet to do with surr_2
             pass
         if self.mean is None or self.cov is None:
             # Nothing to compare to! But save mean, cov for next call
             self.mean, self.cov = mean_new, cov_new
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
-            raise ConvergenceCheckError("No previous call: cannot compute criterion yet.")
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
+            raise ConvergenceCheckError(
+                "No previous call: cannot compute criterion yet."
+            )
         else:
             mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
         # Compute the KL divergence (gaussian approx) with the previous iteration
@@ -501,24 +545,24 @@ class GaussianKL(ConvergenceCriterion):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
         except Exception as excpt:
             kl = np.nan
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
             raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
         return kl
 
     def is_converged(
-        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+        self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
     ):
-        self.criterion_value(gp, gp_2, acquisition)
+        self.criterion_value(surr, surr_2, acquisition)
         try:
-            if np.all(np.abs(np.array(self.values[-self.limit_times:])) < self.limit):
+            if np.all(np.abs(np.array(self.values[-self.limit_times :])) < self.limit):
                 return True
         except IndexError:
             pass
@@ -529,7 +573,7 @@ class GaussianKL(ConvergenceCriterion):
         return deepcopy(self).__dict__
 
     def __deepcopy__(self, memo=None):
-        # Remove non-picklable gp model likelihood
+        # Remove non-picklable surrogate model likelihood
         if self.cobaya_input and "likelihood" in self.cobaya_input:
             like = list(self.cobaya_input["likelihood"])[0]
             self.cobaya_input["likelihood"][like]["external"] = True
@@ -540,109 +584,12 @@ class GaussianKL(ConvergenceCriterion):
         return new
 
 
-class GaussianKLTrain(GaussianKL):
-    """
-    This criterion is not aimed at estimating convergence, but at discarding cases in
-    which a MC sample from the GPR (the last one obtained by the acquisition step, if it
-    exists, otherwise computed on the fly) would not sample the mode mapped by the
-    training set, but instead some overshooting or large baseline plateau. It compares the
-    Gaussian approximation of the last MC sample by the acquisition step with the mean and
-    covariance matrix computed from the training set using probabilities as weights.
-
-    Since its a check in the current iteration, by default it is enough for this criterion
-    to be satisfied in the last step, and with a high tolerance, since it affects extreme
-    cases only.
-
-    At the moment, it assumes that there is a single mode.
-
-    If a valid GPAcquisition instance is passed to ``is_converged``, mean and covariance
-    will be extracted from it. Otherwise, it estimates the mean and covariance by running
-    an MCMC sampler on the GP (slow).
-
-    In the second case, this convergence criterion is MPI-aware, such that it will run as
-    many parallel MCMC chains as running processes to improve the estimation of the mean
-    and covariance.
-
-    Parameters
-    ----------
-    prior_bounds : list
-        List of prior bounds.
-
-    params : dict
-        Dict with the following keys:
-
-        * ``"limit"``: Value of the KL divergence for which we consider the algorithm
-                       converged (default ``2e-2``).
-        * ``"limit_times"``: Number of consecutive times that the KL divergence must be
-                             lower than the ``limit`` parameter (default ``2``).
-        * ``"n_draws"``: Number of steps of the MCMC chain (default: ignored in favour of
-                         ``"n_draws_per_dimsquared"``).
-        * ``"n_draws_per_dimsquared"``: idem, as a factor of the dimensionality squared
-                                        (default 10).
-        * ``"max_reused"``: number of times a sample can be reweighted and reused (may
-                            miss new high-value regions) (default 4).
-    """
-
-    def __init__(self, prior_bounds, params):
-        params = params or {}
-        if params.get("limit") is None:
-            params["limit"] = len(prior_bounds)
-        if params.get("limit_times") is None:
-            params["limit_times"] = 2
-        super().__init__(prior_bounds, params)
-
-    def _get_mean_and_cov_from_training(self, gp):
-        return mean_covmat_from_evals(gp.X_train, gp.y_train)
-
-    def criterion_value(self, gp, gp_2=None, acquisition=None):
-        try:
-            mean_new, cov_new = self._get_new_mean_and_cov(gp, acquisition=acquisition)
-        except ConvergenceCheckError as excpt:
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
-            raise ConvergenceCheckError(
-                f"Error when computing mean and covmat: {excpt}"
-            ) from excpt
-        try:
-            mean_training, cov_training = self._get_mean_and_cov_from_training(gp)
-        except Exception as excpt:
-            self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
-            raise ConvergenceCheckError(
-                f"Error when computing mean and covmat from training: {excpt}"
-            ) from excpt
-        if gp_2 is not None:
-            # TODO: Nothing yet to do with gp2
-            pass
-        # Compute the KL divergence (gaussian approx) between with the previous iteration
-        try:
-            kl = kl_norm(mean_new, cov_new, mean_training, cov_training)
-            if kl < 0:
-                raise ValueError("Negative KL -> undefined")
-            self.mean = mean_new
-            self.cov = cov_new
-            self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
-        except Exception as excpt:
-            kl = np.nan
-            self.mean = mean_new
-            self.cov = cov_new
-            self.values.append(kl)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
-            raise ConvergenceCheckError(f"Computation error in KL: {excpt}") from excpt
-        return kl
-
-
 class TrainAlignment(GaussianKL):
     """
     This criterion is not aimed at estimating convergence, but at discarding cases in
-    which a MC sample from the GPR (the last one obtained by the acquisition step, if it
-    exists, otherwise computed on the fly) would not sample the mode mapped by the
-    training set, but instead some overshooting or large baseline plateau.
+    which a MC sample from the surrogate model (the last one obtained by the acquisition
+    step, if it exists, otherwise computed on the fly) would not sample the mode mapped by
+    the training set, but instead some overshooting or large baseline plateau.
 
     It computes the minimum central confidence level of the mean of the training set with
     respect to a Gaussian approximation of the surrogate posterior.
@@ -659,7 +606,7 @@ class TrainAlignment(GaussianKL):
 
     If a valid GPAcquisition instance is passed to ``is_converged``, mean and covariance
     will be extracted from it. Otherwise, it estimates the mean and covariance by running
-    an MCMC sampler on the GP (slow).
+    an MCMC sampler on the surrogate (slow).
 
     In the second case, this convergence criterion is MPI-aware, such that it will run as
     many parallel MCMC chains as running processes to improve the estimation of the mean
@@ -696,9 +643,11 @@ class TrainAlignment(GaussianKL):
             params["limit_times"] = 1
         super().__init__(prior_bounds, params)
 
-    def _get_mean_from_training(self, gp):
-        Nfrac = int(gp.n * self.frac_training)
-        return mean_covmat_from_evals(gp.X_train[-Nfrac:], gp.y_train[-Nfrac:])[0]
+    def _get_mean_from_training(self, surr):
+        Nfrac = int(surr.n_regress * self.frac_training)
+        return mean_covmat_from_evals(surr.X_regress[-Nfrac:], surr.y_regress[-Nfrac:])[
+            0
+        ]
 
     @staticmethod
     def criterion_value_from_means_cov(mean1, mean2, cov):
@@ -706,27 +655,29 @@ class TrainAlignment(GaussianKL):
         chi2 = mean_diff @ np.linalg.inv(cov) @ mean_diff
         return credibility_of_nstd(np.sqrt(chi2), len(mean1))
 
-    def criterion_value(self, gp, gp_2=None, acquisition=None):
+    def criterion_value(self, surr, surr_2=None, acquisition=None):
         try:
-            mean_new, cov_new = self._get_new_mean_and_cov(gp, acquisition=acquisition)
+            mean_new, cov_new = self._get_new_mean_and_cov(
+                surr, acquisition=acquisition
+            )
         except ConvergenceCheckError as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
             raise ConvergenceCheckError(
                 f"Error when computing mean and covmat: {excpt}"
             ) from excpt
         try:
-            mean_training = self._get_mean_from_training(gp)
+            mean_training = self._get_mean_from_training(surr)
         except Exception as excpt:
             self.values.append(np.nan)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
             raise ConvergenceCheckError(
                 f"Error when computing mean and covmat from training: {excpt}"
             ) from excpt
-        if gp_2 is not None:
-            # TODO: Nothing yet to do with gp2
+        if surr_2 is not None:
+            # TODO: Nothing yet to do with surr_2
             pass
         # Compute the CL corresponding to the Chi-squared of the mean of the training set
         try:
@@ -737,15 +688,15 @@ class TrainAlignment(GaussianKL):
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(eps)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
         except Exception as excpt:
             eps = np.nan
             self.mean = mean_new
             self.cov = cov_new
             self.values.append(eps)
-            self.n_posterior_evals.append(gp.n_total)
-            self.n_accepted_evals.append(gp.n)
+            self.n_posterior_evals.append(surr.n_total)
+            self.n_accepted_evals.append(surr.n_regress)
             raise ConvergenceCheckError(
                 f"Computation error in train mean alignment: {excpt}"
             ) from excpt
@@ -754,7 +705,7 @@ class TrainAlignment(GaussianKL):
 
 class CorrectCounter(ConvergenceCriterion):
     r"""
-    This convergence criterion determines convergence by requiring that the GP's
+    This convergence criterion determines convergence by requiring that the surrogate's
     predictions of the posterior values in the last :math:`n` steps are correct up to a
     certain threshold. This condition is fulfilled if
 
@@ -764,7 +715,7 @@ class CorrectCounter(ConvergenceCriterion):
 
     where the parameters :math:`r` and :math:`a` are the relative and absolute
     tolerances controlled by the `reltol` and `abstol` parameters.
-    We set the "value" of the criterion to be the maximum difference of the GP
+    We set the "value" of the criterion to be the maximum difference of the surrogate's
     prediction and the true posterior in the last batch of accepted evaluations.
     Furthermore this class contains an internal list `thres` which contains the
     threshold values corresponding to this difference.
@@ -795,7 +746,7 @@ class CorrectCounter(ConvergenceCriterion):
 
     def __init__(self, prior_bounds, params):
         d = len(prior_bounds)
-        self.ncorrect = params.get("n_correct", max(4, np.ceil(0.5 * d)))
+        self.n_correct = params.get("n_correct", max(4, np.ceil(0.5 * d)))
         reltol = params.get("reltol", 0.01)
         if isinstance(reltol, str):
             try:
@@ -837,12 +788,12 @@ class CorrectCounter(ConvergenceCriterion):
         self.n_pred = 0
 
     def is_converged(
-        self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
+        self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None, acquisition=None
     ):
-        self.criterion_value(gp, new_X=new_X, new_y=new_y, pred_y=pred_y)
-        return self.n_pred > self.ncorrect
+        self.criterion_value(surr, new_X=new_X, new_y=new_y, pred_y=pred_y)
+        return self.n_pred > self.n_correct
 
-    def criterion_value(self, gp, gp_2=None, new_X=None, new_y=None, pred_y=None):
+    def criterion_value(self, surr, surr_2=None, new_X=None, new_y=None, pred_y=None):
         n_new = len(new_y)
         assert n_new == len(pred_y)
         max_val = 0
@@ -852,9 +803,11 @@ class CorrectCounter(ConvergenceCriterion):
             # Remove warning case that does not trigger any condition below
             if yn == -np.inf:
                 continue
-            # rel_difference = np.abs((yl - gp.y_max) / (yn - gp.y_max) - 1.)
-            diff = np.abs(yl - yn)
-            thres = np.abs(yn - gp.y_max) * self.reltol + self.abstol
+            # TODO: think about incorporating the noise level here (quite non-trivial!
+            #       but not very necessary since it's usually very small.
+            diff = np.abs(yl - yn) ### - gp.noise_level
+            # rel_difference = np.abs((yl - surr.y_max) / (yn - surr.y_max) - 1.)
+            thres = np.abs(yn - surr.y_max) * self.reltol + self.abstol
             if diff / thres > max_val:
                 max_val = diff / thres
                 max_diff = diff
@@ -869,8 +822,8 @@ class CorrectCounter(ConvergenceCriterion):
                     print("Mispredict...")
         self.values.append(max_diff if n_new > 0 else self.values[-1])
         self.thres.append(max_thres if n_new > 0 else self.thres[-1])
-        self.n_posterior_evals.append(gp.n_total)
-        self.n_accepted_evals.append(gp.n)
+        self.n_posterior_evals.append(surr.n_total)
+        self.n_accepted_evals.append(surr.n_regress)
         return max_val if n_new > 0 else self.values[-1]
 
     @property

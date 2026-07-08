@@ -34,7 +34,7 @@ runner = Runner(
 
 nsamples_each = 10000
 samples = np.concatenate([norm.rvs(nsamples_each) for norm in norms], axis=0)
-runner.set_fiducial_MC(samples)
+runner.set_fiducial_mc(samples)
 
 
 runner.run()

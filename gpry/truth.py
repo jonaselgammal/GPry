@@ -1,5 +1,7 @@
 """
-Module containing the class holding the true log-posterior and associated parameters.
+Module implementing the main class :class:`~gpry.truth.Truth` wrapping the true
+log-posterior and associated definitions: parameter names and labels, prior bounds and
+reference bounds for initialization (optional).
 """
 
 from warnings import warn
@@ -8,7 +10,6 @@ from copy import deepcopy
 
 import numpy as np
 
-from gpry import check_cobaya_installed
 from gpry.tools import (
     check_and_return_bounds,
     generic_params_names,
@@ -20,13 +21,41 @@ from gpry.tools import (
 def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
     """
     Instantiates and returns a Truth|TruthCobaya object.
+
+    Parameters
+    ----------
+    loglike : callable or Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
+        Log-likelihood function or Cobaya Model instance. If a Cobaya model is passed,
+        arguments ``bounds``, ``ref_bounds`` and ``params`` are ignored, since all
+        that information is already contained in the Cobaya model.
+
+    bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
+        correspond to the argument names of the ``likelihood`` function, and the values
+        can be either bounds specified as ``[min, max]``, or bounds and labels, as
+        ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
+        be ignored) if a Cobaya ``Model`` instance is passed as ``loglike``.
+
+    ref_bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of "reference" parameter bounds, i.e. bounds from within
+        which to raw the initial set of training samples.
+
+    params: list of str, dict {str: str}, optional
+        List of names for the parameters. Alternatively, a dictionary ``{name: label}``,
+        where ``label`` is a LaTeX-coded string, without ``$``'s.
+        By default, generic parameter names ``x_1, x_2,...`` will be used.
+
+    Returns
+    -------
+    :class:`truth.Truth` or :class:`truth.TruthCobaya`
     """
     if callable(loglike):
         return Truth(loglike, bounds=bounds, ref_bounds=ref_bounds, params=params)
-    elif check_cobaya_installed():
-        # pylint: disable=import-outside-toplevel
-        from cobaya.log import LoggedError
-        from cobaya.model import Model, get_model
+    from gpry import check_cobaya_installed
+
+    if check_cobaya_installed():
+        from cobaya.log import LoggedError  # type: ignore
+        from cobaya.model import Model, get_model  # type: ignore
 
         if isinstance(loglike, Mapping):
             try:
@@ -37,7 +66,9 @@ def get_truth(loglike, bounds=None, ref_bounds=None, params=None):
                     "initialise a Cobaya model."
                 ) from excpt
         if not isinstance(loglike, Model):
-            raise TypeError("'loglike' needs to be either a callable or a Cobaya model.")
+            raise TypeError(
+                "'loglike' needs to be either a callable or a Cobaya model."
+            )
         if bounds is not None or ref_bounds is not None or params is not None:
             warn("A Cobaya model was passed. Ignoring bounds and parameter names.")
         return TruthCobaya(loglike)
@@ -52,8 +83,28 @@ class Truth:
     """
     Class holding the true log-posterior and some information about it.
 
-    `reference_bounds` must have the same length as `bounds`, with None as an entry for
-    which reference bounds different from the prior bounds are not given.
+    Parameters
+    ----------
+    loglike : callable
+        Log-likelihood function.
+
+    bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of parameter bounds. If it is a dictionary, the keys need to
+        correspond to the argument names of the ``likelihood`` function, and the values
+        can be either bounds specified as ``[min, max]``, or bounds and labels, as
+        ``{"prior": [min, max], "latex": [label]}``. It does not need to be defined (will
+        be ignored) if a Cobaya ``Model`` instance is passed as ``loglike``.
+
+    ref_bounds : List of [min, max], or Dict {name: [min, max],...}
+        List or dictionary of "reference" parameter bounds, i.e. bounds from within
+        which to raw the initial set of training samples.
+        ``ref_bounds`` must have the same length as ``bounds``, with None as an entry for
+        which reference bounds different from the prior bounds are not given.
+
+    params : list of str, dict {str: str}, optional
+        List of names for the parameters. Alternatively, a dictionary ``{name: label}``,
+        where ``label`` is a LaTeX-coded string, without ``$``'s.
+        By default, generic parameter names ``x_1, x_2,...`` will be used.
     """
 
     def __init__(self, loglike, bounds=None, ref_bounds=None, params=None):
@@ -133,21 +184,21 @@ class Truth:
 
     def logprior(self, X):
         """
-        Evaluates and returns the log-prior.
+        Evaluates and returns the log-prior for a single point X.
         """
-        if not is_in_bounds(X, self.prior_bounds, check_shape=False):
+        if not is_in_bounds([X], self.prior_bounds, validate=False):
             return -np.inf
         return -1.0 * self.log_prior_volume
 
     def loglike(self, X):
         """
-        Evaluates and returns the log-likelihood.
+        Evaluates and returns the log-likelihood for a single point X.
         """
         return self._loglike(X)
 
     def logp(self, X):
         """
-        Evaluates and returns the log-posterior.
+        Evaluates and returns the log-posterior for a single point X.
         """
         logpost = self.logprior(X)
         if logpost != -np.inf:
@@ -182,9 +233,12 @@ class Truth:
 class TruthCobaya(Truth):
     """
     Truth class wrapping a Cobaya model.
+
+    Parameters
+    ----------
+    loglike : Cobaya `model object <https://cobaya.readthedocs.io/en/latest/cosmo_model.html>`_
     """
 
-    # pylint: disable=super-init-not-called
     def __init__(self, model):
         self._cobaya_model = model
         self._prior_bounds = self._cobaya_model.prior.bounds(

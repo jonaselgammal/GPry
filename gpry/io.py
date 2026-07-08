@@ -1,20 +1,25 @@
 """
-Module containing i/o utilities.
+This module provides some handy methods for creating paths and pickling and
+saving/checking/loading checkpoint files.
+
+Under normal circumstances you shouldn't have to use any of the methods in here if you use
+the :class:`~.gpry.run.Runner` class to run GPry.
 """
 
 import os
 
-import dill as pickle
+import dill as pickle  # type: ignore
 
-from gpry.gpr import GaussianProcessRegressor
+from gpry.surrogate import SurrogateModel
 from gpry.truth import get_truth, Truth
 
 _checkpoint_filenames = {
     "truth": "tru.pkl",
-    "gpr": "gpr.pkl",
+    "surrogate": "sur.pkl",
     "acquisition": "acq.pkl",
     "convergence": "con.pkl",
     "options": "opt.pkl",
+    "mc_options": "mco.pkl",
     "progress": "pro.pkl",
 }
 
@@ -56,7 +61,9 @@ def check_checkpoint(path=None):
     """
     if path is None:
         return [False] * len(_checkpoint_filenames)
-    return [os.path.exists(os.path.join(path, f)) for f in _checkpoint_filenames.values()]
+    return [
+        os.path.exists(os.path.join(path, f)) for f in _checkpoint_filenames.values()
+    ]
 
 
 def read_checkpoint(path, truth=None):
@@ -74,7 +81,7 @@ def read_checkpoint(path, truth=None):
 
     Returns
     -------
-    (truth, gpr, acquisition, convergence, options, progress)
+    (truth, surrogate, acquisition, convergence, options, progress)
     If any of the files does not exist or cannot be read the function will
     return None instead.
     """
@@ -94,20 +101,24 @@ def read_checkpoint(path, truth=None):
             with open(filename_model, "rb") as i:
                 truth = {"loglike": pickle.load(i)}
         truth = get_truth(**truth)
-    with open(os.path.join(path, _checkpoint_filenames["gpr"]), "rb") as i:
-        gpr = pickle.load(i) if checkpoint_files[1] else None
+    with open(os.path.join(path, _checkpoint_filenames["surrogate"]), "rb") as i:
+        surrogate = pickle.load(i) if checkpoint_files[1] else None
     with open(os.path.join(path, _checkpoint_filenames["acquisition"]), "rb") as i:
         acquisition = pickle.load(i) if checkpoint_files[2] else None
     with open(os.path.join(path, _checkpoint_filenames["convergence"]), "rb") as i:
         convergence = pickle.load(i) if checkpoint_files[3] else None
     with open(os.path.join(path, _checkpoint_filenames["options"]), "rb") as i:
-        options = pickle.load(i) if checkpoint_files[5] else None
+        options = pickle.load(i) if checkpoint_files[4] else None
+    with open(os.path.join(path, _checkpoint_filenames["mc_options"]), "rb") as i:
+        mc_options = pickle.load(i) if checkpoint_files[5] else None
     with open(os.path.join(path, _checkpoint_filenames["progress"]), "rb") as i:
-        progress = pickle.load(i) if checkpoint_files[4] else None
-    return truth, gpr, acquisition, convergence, options, progress
+        progress = pickle.load(i) if checkpoint_files[6] else None
+    return truth, surrogate, acquisition, convergence, options, mc_options, progress
 
 
-def save_checkpoint(path, truth, gpr, acquisition, convergence, options, progress):
+def save_checkpoint(
+    path, truth, surrogate, acquisition, convergence, options, mc_options, progress
+):
     """
     This function is used to save all relevant parts of the GP loop for reuse
     as checkpoint in case the procedure crashes.
@@ -118,17 +129,19 @@ def save_checkpoint(path, truth, gpr, acquisition, convergence, options, progres
     Parameters
     ----------
     path : The path where the files shall be saved
-        The files will be saved as *path* +(mod, gpr, acq, con, opt).pkl
+        The files will be saved as *path* +(mod, sur, acq, con, opt).pkl
 
     truth : Truth
 
-    gpr : GaussianProcessRegressor
+    surrogate : SurrogateModel
 
     acquisition : GPAcquisition
 
     convergence : Convergence_criterion
 
     options : dict
+
+    mc_options : dict
 
     progress : Progress instance
     """
@@ -139,14 +152,16 @@ def save_checkpoint(path, truth, gpr, acquisition, convergence, options, progres
         if truth is not None:
             with open(os.path.join(path, _checkpoint_filenames["truth"]), "wb") as f:
                 pickle.dump(truth.as_dict(), f, pickle.HIGHEST_PROTOCOL)
-        with open(os.path.join(path, _checkpoint_filenames["gpr"]), "wb") as f:
-            pickle.dump(gpr, f, pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(path, _checkpoint_filenames["surrogate"]), "wb") as f:
+            pickle.dump(surrogate, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["acquisition"]), "wb") as f:
             pickle.dump(acquisition, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["convergence"]), "wb") as f:
             pickle.dump(convergence, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["options"]), "wb") as f:
             pickle.dump(options, f, pickle.HIGHEST_PROTOCOL)
+        with open(os.path.join(path, _checkpoint_filenames["mc_options"]), "wb") as f:
+            pickle.dump(mc_options, f, pickle.HIGHEST_PROTOCOL)
         with open(os.path.join(path, _checkpoint_filenames["progress"]), "wb") as f:
             pickle.dump(progress, f, pickle.HIGHEST_PROTOCOL)
     except Exception as excpt:
@@ -156,18 +171,24 @@ def save_checkpoint(path, truth, gpr, acquisition, convergence, options, progres
         ) from excpt
 
 
-def ensure_gpr(
-    gpr, truth=None, acquisition=None, convergence=None, options=None, progress=None
+def ensure_surrogate(
+    surrogate,
+    truth=None,
+    acquisition=None,
+    convergence=None,
+    options=None,
+    mc_options=None,
+    progress=None,
 ):
     """
-    Returns (if instance passed) or loads (if string) the given gpr and associated
-    objects.
+    Returns (if instance passed) or loads (if string) the given surrogate model and
+    associated objects.
 
     If loading, any object passed as a keyword will be preferred to the loaded one.
 
     Parameters
     ----------
-    gpr : GaussianProcessRegressor
+    surrogate : SurrogateModel
 
     truth : Truth
 
@@ -177,26 +198,31 @@ def ensure_gpr(
 
     options : dict, optional
 
+    mc_options : dict, optional
+
     progress : Progress instance, optional
 
     Returns
     -------
-    (truth, gpr, acquisition, convergence, options, progress)
+    (truth, surrogate, acquisition, convergence, options, progress)
     If any of the files does not exist or cannot be read the function will
     return None instead.
     """
-    if not isinstance(gpr, (str, GaussianProcessRegressor)):
+    if not isinstance(surrogate, (str, SurrogateModel)):
         raise TypeError(
-            "`gpr` needs to be a gpry GP Regressor or a string "
+            "`surrogate` needs to be a gpry SurrogateModel or a string "
             "with a path to a checkpoint file."
         )
-    if isinstance(gpr, str):
-        truth_, gpr, acq_, conv_, opt_, prog_ = read_checkpoint(gpr, truth=truth)
+    if isinstance(surrogate, str):
+        truth_, surrogate, acq_, conv_, opt_, mc_opt_, prog_ = read_checkpoint(
+            surrogate, truth=truth
+        )
     else:
-        truth_, acq_, conv_, opt_, prog_ = None, None, None, None, None
+        truth_, acq_, conv_, opt_, mc_opt_, prog_ = None, None, None, None, None, None
     truth = truth or truth_
     acquisition = acquisition or acq_
     convergence = convergence or conv_
     options = options or opt_
+    mc_options = mc_options or mc_opt_
     progress = progress or prog_
-    return (truth, gpr, acquisition, convergence, options, progress)
+    return (truth, surrogate, acquisition, convergence, options, mc_options, progress)

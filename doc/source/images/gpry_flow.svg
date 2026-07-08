@@ -4,10 +4,10 @@
 <svg
    width="63.62648mm"
    height="112.77235mm"
-   viewBox="0 0 63.62648 112.77235"
+   viewBox="-2 -4 67.626 119.86115"
    version="1.1"
    id="svg88944"
-   inkscape:version="1.4.2 (1:1.4.2+202505120738+ebf0e940d0)"
+   inkscape:version="1.4 (e7c3feb100, 2024-10-09)"
    sodipodi:docname="gpry_flow.svg"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
@@ -25,10 +25,10 @@
      inkscape:document-units="mm"
      showgrid="false"
      inkscape:zoom="1.5144024"
-     inkscape:cx="-69.664445"
-     inkscape:cy="212.95529"
-     inkscape:window-width="1920"
-     inkscape:window-height="1019"
+     inkscape:cx="481.378"
+     inkscape:cy="213.28545"
+     inkscape:window-width="2327"
+     inkscape:window-height="1244"
      inkscape:window-x="0"
      inkscape:window-y="0"
      inkscape:window-maximized="1"
@@ -37,7 +37,7 @@
      inkscape:showpageshadow="2"
      inkscape:deskcolor="#d1d1d1">
     <sodipodi:guide
-       position="13.407504,325.87755"
+       position="13.407508,325.87755"
        orientation="0,-1"
        id="guide266804"
        inkscape:locked="false" />
@@ -337,10 +337,10 @@
        id="text101055"
        style="font-style:normal;font-weight:normal;font-size:40px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect101057);fill:#000000;fill-opacity:1;stroke:none"><tspan
          x="85.083984"
-         y="284.00088"
-         id="tspan2"><tspan
-           dx="0 22.246094 23.710938 24.433594 28.886719 28.886719 26.679688"
-           id="tspan1">gATHHER</tspan></tspan></text>
+         y="284.36571"
+         id="tspan4"><tspan
+           dx="0 24.599991 22.76001 22.23999 29.639969 29.639969 22.23999"
+           id="tspan3">gATHHER</tspan></tspan></text>
     <rect
        style="fill:#8ff0a4;stroke:#000000;stroke-width:0.408318;stroke-miterlimit:4;stroke-dasharray:none;stop-color:#000000"
        id="rect266092"

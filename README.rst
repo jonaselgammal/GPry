@@ -1,5 +1,5 @@
-**GPry**: A package for Bayesian inference of expensive likelihoods with Gaussian Processes
--------------------------------------------------------------------------------------------
+**GPry**: Bayesian inference of expensive likelihoods with Gaussian Processes
+-----------------------------------------------------------------------------
 
 :Author: Jonas El Gammal, Jesus Torrado, Nils Schoeneberg and Christian Fidler
 
@@ -7,15 +7,15 @@
 
 :Documentation: `Documentation on Read the Docs <https://gpry.readthedocs.io>`_
 
-:License: `LGPL <https://www.gnu.org/licenses/lgpl-3.0.en.html>`_ + mandatory bug reporting asap + mandatory `arXiv'ing <https://arxiv.org>`_ of publications using it (see `LICENSE <https://github.com/jonaselgammal/GPry/blob/main/LICENSE>`_ for exceptions). The documentation is licensed under the `GFDL <https://www.gnu.org/licenses/fdl-1.3.en.html>`_.
+:License: `LGPL <https://www.gnu.org/licenses/lgpl-3.0.en.html>`_ + bug reporting asap + `arXiv'ing <https://arxiv.org>`_ of publications using it (see `LICENSE <https://github.com/jonaselgammal/GPry/blob/main/LICENSE>`_ for exceptions). The documentation is licensed under the `GFDL <https://www.gnu.org/licenses/fdl-1.3.en.html>`_.
 
 :Support: For questions drop me an `email <mailto:jonas.e.elgammal@uis.no>`_. For issues/bugs please use `GitHub's Issues <https://github.com/jonaselgammal/GPry/issues>`_.
 
 :Installation: ``pip install gpry`` (for MPI and nested samplers, see `here <https://gpry.readthedocs.io/en/latest/installation.html>`_)
 
-GPry is a drop-in alternative to traditional Monte Carlo samplers (such as MCMC or Nested Sampling), for likelihood-based inference. It is aimed at speeding up posterior exploration and inference of marginal quantities from computationally expensive likelihoods, reducing the cost of inference by a factor of 100 or more.
+GPry is a drop-in alternative to traditional Monte Carlo samplers (such as MCMC or Nested Sampling), for likelihood-based inference. It is aimed at speeding up posterior exploration and inference of marginal quantities from computationally expensive likelihoods, reducing the cost of inference by a factor of 100 or more. GPry can also provide an estimation of the model evidence.
 
-GPry can be installed with pip (``python -m pip install gpry``), and needs only a callable likelihood and some bounds:
+GPry can be installed with pip (``python -m pip install gpry``), and needs only a callable log-likelihood and some bounds:
 
 .. code:: python
 
@@ -23,20 +23,31 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
        return [...]
 
    bounds = [[..., ...], [..., ...]]
-          
+
    from gpry import Runner
 
-   runner = Runner(log_likelihood, bounds, checkpoint="output/")
+   runner = Runner(log_likelihood, bounds, checkpoint="output/", load_checkpoint="overwrite")
    runner.run()
 
-.. image:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
+<<<<<<< Updated upstream
+.. image:: https://github.com/jonaselgammal/GPry/blob/main/doc/source/images/readme_animation.gif?raw=true
    :width: 400px
    :align: center
 
-An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/running_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines. 
+An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model specification, and direct access to some physical likelihood pipelines.
+=======
+.. figure:: https://github.com/jonaselgammal/GPry/blob/balrog/doc/source/images/readme_animation.gif?raw=true
+   :width: 400px
+   :align: center
 
-GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. thesis projects.
+   Animated progress for the `advanced example <https://gpry.readthedocs.io/en/latest/adv_example.html>`_
 
+An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
+>>>>>>> Stashed changes
+
+GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. theses projects.
+
+# TODO: link to some personal whebpage/github profile?
 
 How it works
 ^^^^^^^^^^^^
@@ -49,17 +60,17 @@ GPry introduces some innovations with respect to previous similar approaches:
 
 - It introduces a parallelizable batch acquisition algorithm (NORA) which increases robustness, reduces overhead and enables the evaluation of the likelihood/posterior in parallel using multiple cores.
 
-- Complementing the GP model, it implements an SVM classifier that learns the shape of uninteresting regions, where proposal are discarded, wherever the value of the likelihood is very-low (for increased efficiency) or undefined (for increased robustness).
+- Complementing the GP model, it implements an SVM classifier that learns the shape of uninteresting regions, where proposals are discarded, wherever the value of the likelihood is very-low (for increased efficiency) or undefined (for increased robustness).
 
 At the moment, GPry utilizes a modification of the CPU-based `scikit-learn GP implementation <https://scikit-learn.org/stable/modules/gaussian_process.html>`_.
 
-  
+
 What kinds of likelihoods/posteriors should work with GPry?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Non-stochastic log-probability density functions, smooth up to a small amount of (deterministic) numerical noise (less than 0.1 in log posterior).
 
-- Large evaluation times, so that the GPry overhead is subdominant with respect to posterior evaluation. How slow depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if an MCMC takes longer to converge than you're willing to wait you should give it a shot.
+- Log-likelihoods with large evaluation times, so that the GPry overhead is subdominant with respect to posterior evaluation. How slow depends on the number of dimensions and expected shape of the posterior distribution but as a rule of thumb, if an MCMC takes longer to converge than you're willing to wait, you should give it a shot.
 
 - The parameter space needs to be *low-dimensional* (less than 20 as a rule of thumb). In higher dimensions you might still gain considerable improvements in speed if your likelihood is sufficiently slow but the computational overhead of the algorithm increases considerably.
 
@@ -69,7 +80,7 @@ What may not work so well:
 
 - Highly non-Gaussian posteriors, that would not be well modelled by orthogonal constant correlation lengths.
 
-**GPry is under active developing, in order to mitigate some of those issues, so look out for new versions!**
+**GPry is under active development, in order to mitigate some of those issues, so look out for new versions!**
 
 
 It does not work!

@@ -47,7 +47,7 @@ def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
             from gpry.gp_acquisition import NORA
             if isinstance(runner.acquisition, NORA):
                 from getdist import MCSamples
-                X_mc, _, _, w_mc = runner.acquisition.last_MC_sample()
+                X_mc, _, _, w_mc = runner.acquisition.last_mc_sample()
                 mcsamples_nora = MCSamples(
                     samples=X_mc,
                     weights=w_mc,
