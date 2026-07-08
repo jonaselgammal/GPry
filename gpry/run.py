@@ -1755,6 +1755,8 @@ class Runner:
                 "You have to have added points to the surrogate model before you can "
                 "generate an MC sample. Call the run() method first."
             )
+        if sampler is None:
+            sampler = self._mc_options
         if output is None and self.checkpoint is not None:
             output = os.path.join(self.checkpoint, _default_mc_samples_filename)
         if sampler is None:
