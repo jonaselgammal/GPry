@@ -50,6 +50,7 @@ Homepage = "https://gpry.readthedocs.io"
 Documentation = "https://gpry.readthedocs.io"
 Source = "https://github.com/jonaselgammal/GPry"
 Issues = "https://github.com/jonaselgammal/GPry/issues"
+Support = "https://github.com/jonaselgammal/GPry/discussions"
 
 [tool.flake8]
 ignore = ['E231', 'E241']
