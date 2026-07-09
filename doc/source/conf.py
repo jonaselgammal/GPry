@@ -34,7 +34,6 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.doctest',
-    'sphinx.ext.intersphinx',
     'sphinx.ext.todo',
     'sphinx.ext.coverage',
     'sphinx.ext.mathjax',
@@ -42,6 +41,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.mathjax',
     'sphinx.ext.napoleon',
+    'sphinx.ext.extlinks',
     'sphinx_favicon',
 ]
 
@@ -333,14 +333,20 @@ texinfo_documents = [
 #texinfo_no_detailmenu = False
 
 
-# Example configuration for intersphinx: refer to the Python standard library.
-intersphinx_mapping = {
-    'python': ('https://docs.python.org/3', None),
-    'numpy': ('https://docs.scipy.org/doc/numpy/', None),
-    'cobaya': ('https://cobaya.readthedocs.io/en/latest', None),
+extlinks = {
+    'cobaya': ('https://cobaya.readthedocs.io/en/latest/%s', '%s'),
 }
-intersphinx_disabled_reftypes = ["*"]
 
 
 # Mock modules, so that readthedocs works!
-autodoc_mock_imports = ['getdist']
+autodoc_mock_imports = [
+    'getdist',
+    'cobaya',
+    'cobaya.yaml',
+    'cobaya.sampler',
+    'cobaya.log',
+    'cobaya.output',
+    'cobaya.tools',
+    'cobaya.collection',
+    'cobaya.conventions',
+]
