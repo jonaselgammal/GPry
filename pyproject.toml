@@ -22,14 +22,13 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 
-requires-python = ">=3.9.0"
+requires-python = ">=3.10.0"
 dependencies = [
     "scikit-learn", "dill", "tqdm", "ultranest", "pandas",
     "getdist>=1.7.4", "numpy", "scipy", "matplotlib",
