@@ -1,7 +1,7 @@
 **GPry**: Bayesian inference of expensive likelihoods with Gaussian Processes
 -----------------------------------------------------------------------------
 
-:Author: Jonas El Gammal, Jesus Torrado, Nils Schoeneberg and Christian Fidler
+:Author: `Jonas El Gammal <https://jonaselgammal.github.io/>`_, `Jesus Torrado <https://jesustorrado.github.io/>`_, `Nils Schoeneberg <https://schoeneberg.github.io/>`_ and `Christian Fidler <https://github.com/ChristianFidler>`_
 
 :Source: `Source code on GitHub <https://github.com/jonaselgammal/GPry>`_
 
@@ -38,8 +38,6 @@ GPry can be installed with pip (``python -m pip install gpry``), and needs only 
 An `interface to the Cobaya sampler <https://gpry.readthedocs.io/en/latest/module_cobaya.html>`_ is available, for richer model especification, and direct access to some physical likelihood pipelines.
 
 GPry was developed as part of J. El Gammal's M.Sc. and Ph.D. theses projects.
-
-# TODO: link to some personal whebpage/github profile?
 
 How it works
 ^^^^^^^^^^^^
