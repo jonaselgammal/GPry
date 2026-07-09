@@ -1615,6 +1615,8 @@ class RankedPool:
             self.log(level=4, msg=logpref + "Acq. func. value too small. Ignoring.")
             return
         X, y, sigma, acq = self.normalize_input(X, y, sigma, acq)
+        # In this case, for pool asignment, enforce some scalars
+        y, sigma, acq = np.squeeze(y)[()], np.squeeze(sigma)[()], np.squeeze(acq)[()]
         # Repeat the min acq test above to leave asap
         if acq <= self.min_acq:
             self.log(level=4, msg=logpref + "Acq. func. value too small. Ignoring.")
