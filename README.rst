@@ -9,7 +9,7 @@
 
 :License: `LGPL <https://www.gnu.org/licenses/lgpl-3.0.en.html>`_ + bug reporting asap + `arXiv'ing <https://arxiv.org>`_ of publications using it (see `LICENSE <https://github.com/jonaselgammal/GPry/blob/main/LICENSE>`_ for exceptions). The documentation is licensed under the `GFDL <https://www.gnu.org/licenses/fdl-1.3.en.html>`_.
 
-:Support: For questions use the `Discussions page <https://github.com/jonaselgammal/GPry/discussions>` or contact us via email. For issues/bugs please use `GitHub's Issues <https://github.com/jonaselgammal/GPry/issues>`_.
+:Support: For questions use the `Discussions page <https://github.com/jonaselgammal/GPry/discussions>`_ or contact us via email. For issues/bugs please use `GitHub's Issues <https://github.com/jonaselgammal/GPry/issues>`_.
 
 :Installation: ``pip install gpry`` (for MPI and nested samplers, see `here <https://gpry.readthedocs.io/en/latest/installation.html>`_)
 
