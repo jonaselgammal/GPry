@@ -29,8 +29,8 @@ Of course you can also fork/clone the repo or download the source code and insta
 Be aware though, that we are actively developing the code in git, though most of the development occurs in branches.
 
 
-Configuring MPI
----------------
+Configuring and using MPI
+-------------------------
 
 Though optional, in order to make GPry as fast as possible, you will need a working MPI installation and the necessary Python bindings.
 
@@ -47,6 +47,16 @@ If successful, you should be able to run the following command and get ``MPI is 
 .. code:: bash
 
    $ mpirun -n 2 python -c "exec('from mpi4py import MPI\nif MPI.COMM_WORLD.Get_rank() == 1: print(\"MPI is working\")')"
+
+Once MPI is working, you can simply run your Python script as
+
+.. code:: bash
+
+   $ mpirun -n 2 python your_script.py
+
+.. note::
+
+   GPry takes care internally of handling parallelization in the parts of the code that are supposed to be run by a single process, e.g. the plotting scripts, so that they do not produce multiple outputs/plots.
 
 
 .. _installing_nested_samplers:
