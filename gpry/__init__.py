@@ -1,4 +1,4 @@
-__version__ = "4.0rc1"
+__version__ = "4.0"
 
 from gpry.run import Runner as Runner
 

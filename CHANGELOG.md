@@ -1,4 +1,4 @@
-# 4.0 – 2026-xx-yy (unreleased)
+# 4.0 – 2026-07-09
 
 - API changes for the surrogate model: now a `surrogate.SurrogateModel` super-object manages both a `gpr.GaussianProcessRegressor` and an `infinities_classifier.InfinitiesClassifier` (also the preprocessors and clipping). The infinities classifier itself has been revamped: SVM and trust bounds check are now work at the same level.
 - NORA promoted to default acquisition engine.
