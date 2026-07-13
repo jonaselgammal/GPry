@@ -8,6 +8,7 @@ Under normal circumstances you shouldn't have to use any of the methods in here 
 the :class:`~gpry.run.Runner` class to run GPry.
 """
 
+import shutil
 import warnings
 from typing import Sequence, Mapping
 from numbers import Number
@@ -29,8 +30,14 @@ from gpry.tools import (
     generic_params_names,
 )
 
-# Use latex labels when available
-plt.rcParams["text.usetex"] = True
+# Use LaTeX for labels when a LaTeX toolchain is available; otherwise fall back to
+# matplotlib's built-in mathtext (which needs no LaTeX install).
+def _latex_available():
+    # matplotlib's usetex needs a LaTeX engine and dvipng (and, in practice, ghostscript)
+    return all(shutil.which(exe) for exe in ("latex", "dvipng"))
+
+
+plt.rcParams["text.usetex"] = _latex_available()
 _plot_dist_fontsize = 7
 
 
