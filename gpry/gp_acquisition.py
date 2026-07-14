@@ -22,6 +22,7 @@ from gpry import mpi
 from gpry.tools import NumpyErrorHandling, get_Xnumber, remove_0_weight_samples, \
     is_in_bounds
 import gpry.ns_interfaces as nsint
+from gpry.mc_interfaces import hmc_acquire, nuts_acquire
 from gpry.mc import samples_dict_to_getdist, _name_logp
 
 
@@ -674,7 +675,9 @@ class NORA(GenericGPAcquisition):
             self.sampler_interface = \
                 nsint._ns_interfaces[this_sampler.lower()](self.bounds_, self.verbose)
         except (AttributeError, KeyError) as excpt:
-            if this_sampler.lower() != "uniform":
+            # "uniform" (tests) and the gradient-based MC backends "hmc"/"nuts"
+            # (Lever 1) are not nested samplers and need no NS interface.
+            if this_sampler.lower() not in ("uniform", "hmc", "nuts"):
                 raise ValueError(
                     "No interface found for the requested nested sampler "
                     f"'{this_sampler}'. Use one of {list(nsint._ns_interfaces)}"
@@ -737,6 +740,10 @@ class NORA(GenericGPAcquisition):
             sampler = self.sampler
         if sampler.lower() == "uniform":
             return self._do_MC_sample_uniform(gpr, bounds=bounds, rng=rng)
+        if sampler.lower() == "hmc":
+            return self._do_MC_sample_hmc(gpr, bounds=bounds, rng=rng)
+        if sampler.lower() == "nuts":
+            return self._do_MC_sample_nuts(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "polychord":
             return self._do_MC_sample_polychord(gpr, bounds=bounds, rng=rng)
         if sampler.lower() == "ultranest":
@@ -756,6 +763,56 @@ class NORA(GenericGPAcquisition):
         for i in range(n_total):
             X[i] = proposer.get(rng=rng)
         return X, None, None, None
+
+    def _do_MC_sample_hmc(self, gpr, bounds=None, rng=None):
+        """
+        Gradient-based (HMC) acquisition sampling -- Lever 1 drop-in.
+
+        Chains are seeded from the GP training points and sample the GP-mean
+        surface (the same target NORA's nested sampler uses) with the analytic,
+        vectorized mean-gradient. Returns an equally weighted pool of candidate
+        points for the downstream kriging-believer ranking, mirroring the
+        ``(X, y, sigma_y, w)`` contract of the nested samplers.
+
+        Notes
+        -----
+        Unlike NORA's nested samplers this does NOT provide the evidence
+        (``logZ``) and does NOT discover new modes; it refines the *discovered*
+        ones. Keep NS for the final evidence and a separate discovery mechanism
+        (see ``GPry_NORA_hyperparam_handoff.md``, Lever 1). Rank-0 only for now.
+        """
+        if not mpi.is_main_process:
+            return None, None, None, None
+        use_bounds = self.bounds_ if bounds is None else bounds
+        # Modest defaults: pool size ~ ceil(n_samples / thin) * n_chains.
+        return hmc_acquire(
+            gpr,
+            use_bounds,
+            rng=rng,
+            n_warmup=40,
+            n_samples=60,
+            thin=6,
+            n_leapfrog=15,
+            max_chains=256,
+        )
+
+    def _do_MC_sample_nuts(self, gpr, bounds=None, rng=None):
+        """
+        BlackJAX NUTS acquisition sampling -- Lever 1 drop-in (JAX backend).
+
+        Like ``_do_MC_sample_hmc`` but with window adaptation (dual-averaging
+        step size + diagonal mass matrix), which mixes far better on anisotropic
+        GP-mean surfaces. Same ``(X, y, sigma_y, w)`` contract; rank-0 only.
+        Same caveats as HMC: no evidence (logZ), refines discovered modes only.
+        """
+        if not mpi.is_main_process:
+            return None, None, None, None
+        use_bounds = self.bounds_ if bounds is None else bounds
+        # Acquisition needs a decent candidate pool, not a huge ESS; keep the
+        # per-iteration NUTS budget modest. Overridable via ``self._nuts_kwargs``.
+        kw = dict(n_warmup=80, n_samples=60, thin=1, max_chains=32)
+        kw.update(getattr(self, "_nuts_kwargs", {}) or {})
+        return nuts_acquire(gpr, use_bounds, rng=rng, **kw)
 
     def _do_MC_sample_polychord(self, gpr, bounds=None, rng=None):
         # Update prior bounds

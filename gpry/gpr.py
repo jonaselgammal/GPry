@@ -1272,6 +1272,50 @@ class GaussianProcessRegressor(sk_GaussianProcessRegressor, BE):
 
         return y_mean
 
+    def predict_mean_grad_batch(self, X):
+        """
+        Vectorized GP posterior mean and its input-gradient for many points.
+
+        This is a batched counterpart of ``predict(X, return_mean_grad=True)``
+        specialised for the acquisition sampler (see :mod:`gpry.mc_interfaces`).
+        It follows the exact same conventions as ``predict``:
+
+        - ``X`` is given in the *transformed* (pre-processed) input space, i.e.
+          the space in which ``kernel_``, ``X_train_`` and ``alpha_`` live. No
+          ``preprocessing_X`` transform is applied here.
+        - the returned mean is in the *original* y-scale, and the gradient is
+          ``d(mean) / d(X_transformed)`` in the original y-scale.
+
+        Unlike ``predict``, this accepts an arbitrary number of points and is
+        fully vectorized via ``kernel_.gradient_x_batch``. The upper clipping
+        (``clip_factor``) and the SVM infinities classifier are intentionally
+        NOT applied: the sampler needs the smooth, unclipped mean surface and
+        handles the finite/infinite regions itself.
+
+        Parameters
+        ----------
+        X : array-like, shape=(n_points, n_features)
+            Points in the transformed input space.
+
+        Returns
+        -------
+        mean : array, shape=(n_points,)
+        mean_grad : array, shape=(n_points, n_features)
+        """
+        X = np.atleast_2d(X)
+        self.n_eval += X.shape[0]
+        if not hasattr(self, "X_train_"):  # Not fit; GP prior mean is zero
+            return np.zeros(X.shape[0]), np.zeros_like(X)
+        K_trans = self.kernel_(X, self.X_train_)               # (n_points, n_train)
+        y_mean = K_trans.dot(self.alpha_)                      # (n_points,)
+        grad_K = self.kernel_.gradient_x_batch(X, self.X_train_)  # (n_points, n_train, d)
+        y_mean_grad = np.einsum("mnd,n->md", grad_K, self.alpha_, optimize=True)
+        # Undo y-normalization (scale only for the gradient); DummyPreprocessor
+        # (the default when preprocessing_y is None) makes both a no-op.
+        y_mean = self.preprocessing_y.inverse_transform(y_mean)
+        y_mean_grad = self.preprocessing_y.inverse_transform_scale(y_mean_grad)
+        return y_mean, y_mean_grad
+
     def predict_std(self, X, validate=True):
         """
         Predict output standart deviation for X.
