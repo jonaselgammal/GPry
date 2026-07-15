@@ -1562,7 +1562,11 @@ class RankedPool():
                             (self.sigma, sigma), (self.acq, acq),
                             (self.acq_cond, acq_cond)]:
             pool[i_new + 1:] = pool[i_new:-1]
-            pool[i_new] = value
+            # Scalar pools (y/sigma/acq/acq_cond): coerce a possibly size-1 array
+            # to a scalar. numpy < 2.4 auto-unwrapped this (DeprecationWarning
+            # since 1.25); numpy >= 2.4 raises "setting an array element with a
+            # sequence". self.X is 2D and takes the point vector unchanged.
+            pool[i_new] = value if pool.ndim > 1 else np.asarray(value).item()
         # If not in the last position, we can safely assume that it has finite value,
         # since -inf's from conditional acq cannot climb.
         assert self.acq_cond[i_new] > -np.inf
