@@ -466,9 +466,13 @@ def _get_nuts_runner():
 
         def run_chain(k, u_init):
             wkey, skey = jax.random.split(k)
+            # NB: do NOT pass progress_bar here -- it defaults to False and some
+            # BlackJAX versions don't accept it on window_adaptation (they then
+            # forward it to the NUTS kernel, which raises). Keep this call to the
+            # arguments that are stable across versions.
             warmup = blackjax.window_adaptation(
                 blackjax.nuts, logdensity_fn, is_mass_matrix_diagonal=True,
-                target_acceptance_rate=target_accept, progress_bar=False,
+                target_acceptance_rate=target_accept,
                 max_num_doublings=max_num_doublings)
             (state, params), _ = warmup.run(wkey, u_init, num_steps=n_warmup)
             # params already carries max_num_doublings (an extra_parameter of the

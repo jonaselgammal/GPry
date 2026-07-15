@@ -68,8 +68,11 @@ def main():
     conv = {"values": [], "n_evals": []}
     for cc in r.convergence:
         if type(cc).__name__ == "GaussianKL":
-            v, npost, _ = cc.get_history()
-            conv = {"values": list(map(float, v)), "n_evals": list(map(float, npost))}
+            try:
+                v, npost, _ = cc.get_history()
+                conv = {"values": list(map(float, v)), "n_evals": list(map(float, npost))}
+            except Exception:
+                pass  # no history if the run ended before any convergence eval
             break
     np.savez(os.path.join(outdir, "conv.npz"),
              v=np.array(conv["values"]), n=np.array(conv["n_evals"]))
