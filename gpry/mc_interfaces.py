@@ -408,6 +408,86 @@ def _build_jax_logdensity(gpr, lo, hi, beta):
     return logdensity_fn, x_of_u, u_of_x
 
 
+_NUTS_RUNNER = None
+
+
+def _get_nuts_runner():
+    """
+    Build (once) and return the module-level JIT-compiled multi-chain NUTS
+    runner. Reusing the SAME function object lets JAX cache the compiled
+    executable across acquisition calls: it is re-used whenever the static args
+    (``n_warmup``, ``n_samples``, kernel ``family``/``nu``, ``target_accept``)
+    and the input SHAPES (padded training capacity, ``n_chains``, ``d``) match.
+
+    All values that change between iterations (``X_train``, ``alpha``, length
+    scales, amplitude, bounds, seeds, key) flow in as *arguments*, so only their
+    values change -- not the traced computation -- and no recompile is
+    triggered. This removes the ~1.7 s/call build+trace overhead that dominated
+    the previous version (which rebuilt the whole BlackJAX pipeline every call).
+    """
+    global _NUTS_RUNNER
+    if _NUTS_RUNNER is not None:
+        return _NUTS_RUNNER
+    import jax
+    import jax.numpy as jnp
+    import blackjax
+    from functools import partial
+
+    @partial(jax.jit, static_argnames=("n_warmup", "n_samples", "family", "nu",
+                                       "target_accept"))
+    def _run(Xpad, alpha_pad, ell, amp, std_y, beta, lo, hi, u0, key,
+             n_warmup, n_samples, family, nu, target_accept):
+        width = hi - lo
+
+        def k_vec(xn):
+            diff = (xn - Xpad) / ell                # (capacity, d)
+            d2 = jnp.sum(diff ** 2, axis=1)         # (capacity,)
+            if family == "rbf":
+                return amp * jnp.exp(-0.5 * d2)
+            dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
+            if nu == 0.5:
+                kk = jnp.exp(-dist)
+            elif nu == 1.5:
+                a = jnp.sqrt(3.0) * dist
+                kk = (1.0 + a) * jnp.exp(-a)
+            elif nu == 2.5:
+                a = jnp.sqrt(5.0) * dist
+                kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
+            else:
+                raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
+            return amp * kk
+
+        def logdensity_fn(u):
+            xn = lo + width * jax.nn.sigmoid(u)
+            log_jac = jnp.sum(jnp.log(width) + jax.nn.log_sigmoid(u)
+                              + jax.nn.log_sigmoid(-u))
+            # padded rows have alpha_pad == 0, so they contribute nothing here
+            return beta * std_y * jnp.dot(k_vec(xn), alpha_pad) + log_jac
+
+        def run_chain(k, u_init):
+            wkey, skey = jax.random.split(k)
+            warmup = blackjax.window_adaptation(
+                blackjax.nuts, logdensity_fn, is_mass_matrix_diagonal=True,
+                target_acceptance_rate=target_accept, progress_bar=False)
+            (state, params), _ = warmup.run(wkey, u_init, num_steps=n_warmup)
+            step = blackjax.nuts(logdensity_fn, **params).step
+
+            def one(st, kk):
+                st, info = step(kk, st)
+                return st, (st.position, info.num_integration_steps,
+                            info.acceptance_rate, info.is_divergent)
+
+            skeys = jax.random.split(skey, n_samples)
+            _, out = jax.lax.scan(one, state, skeys)
+            return out  # (pos, nsteps, acc, divs), each leading axis n_samples
+
+        keys = jax.random.split(key, u0.shape[0])
+        return jax.vmap(run_chain)(keys, u0)
+
+    _NUTS_RUNNER = _run
+    return _run
+
+
 def nuts_sample_gp_mean(
     gpr,
     lo,
@@ -420,6 +500,7 @@ def nuts_sample_gp_mean(
     beta=1.0,
     target_accept=0.8,
     thin=1,
+    pad_multiple=64,
 ):
     """
     BlackJAX NUTS on the GP mean, seeded from training points, in normalized
@@ -427,69 +508,77 @@ def nuts_sample_gp_mean(
     size + diagonal mass matrix), which is exactly what the naive identity-mass
     HMC lacks.
 
+    Uses the persistent, JIT-compiled runner from :func:`_get_nuts_runner`. To
+    keep the traced shapes stable across acquisition calls (so JAX compiles
+    once and re-uses the executable), the training set is padded to a fixed
+    capacity (``ceil(n_train / pad_multiple) * pad_multiple``; padded rows get
+    ``alpha = 0`` and so contribute nothing to the GP mean), and exactly
+    ``n_chains = max_chains`` chains are used (seeds sampled with replacement
+    when there are fewer training points). A recompile happens only when the
+    capacity tier changes (every ``pad_multiple`` new points).
+
     Returns a dict analogous to :func:`hmc_sample_gp_mean`, with ``X`` and
     ``trace`` (normalized space), ``n_eval`` (total leapfrog/gradient evals of
     the GP mean, warmup + sampling), ``n_eval_sampling``, ``accept_rate``,
-    ``n_chains`` and ``divergences``.
+    ``n_chains``, ``divergences`` and the padded ``capacity``.
     """
     import jax
     jax.config.update("jax_enable_x64", True)
     import jax.numpy as jnp
-    import blackjax
 
     rng = np.random.default_rng() if rng is None else rng
     lo = np.asarray(lo, dtype=float)
     hi = np.asarray(hi, dtype=float)
     d = lo.shape[0]
 
-    if seeds is None:
-        if not hasattr(gpr, "X_train_"):
-            raise ValueError("GPR is not fitted: no training points to seed NUTS.")
-        seeds = np.asarray(gpr.X_train_, dtype=float)
-    seeds = np.atleast_2d(np.asarray(seeds, dtype=float))
-    if seeds.shape[0] > max_chains:
-        idx = rng.choice(seeds.shape[0], size=max_chains, replace=False)
-        seeds = seeds[idx]
-    n_chains = seeds.shape[0]
+    if not hasattr(gpr, "X_train_"):
+        raise ValueError("GPR is not fitted: no training points to seed NUTS.")
+    Xtr = np.asarray(gpr.X_train_, dtype=float)
+    alpha = np.ravel(np.asarray(gpr.alpha_, dtype=float))
+    n_train = Xtr.shape[0]
 
-    logdensity_fn, x_of_u, u_of_x = _build_jax_logdensity(gpr, lo, hi, beta)
-    u0 = jnp.asarray(u_of_x(np.clip(seeds, lo, hi)))  # (n_chains, d)
+    # Chains: fixed at max_chains for shape stability (sample seeds with
+    # replacement when there are fewer training points than chains).
+    seeds_all = Xtr if seeds is None else np.atleast_2d(np.asarray(seeds, dtype=float))
+    n_seed = seeds_all.shape[0]
+    n_chains = int(max_chains)
+    idx = rng.choice(n_seed, size=n_chains, replace=(n_seed < n_chains))
+    seeds_sel = np.clip(seeds_all[idx], lo, hi)
 
-    seed_int = int(rng.integers(2 ** 31 - 1))
-    keys = jax.random.split(jax.random.PRNGKey(seed_int), n_chains)
+    # Pad training set to a fixed capacity (padded rows get alpha = 0).
+    capacity = max(int(pad_multiple),
+                   int(np.ceil(n_train / pad_multiple) * pad_multiple))
+    Xpad = np.zeros((capacity, d))
+    Xpad[:n_train] = Xtr
+    alpha_pad = np.zeros(capacity)
+    alpha_pad[:n_train] = alpha
 
-    def run_chain(key, u_init):
-        wkey, skey = jax.random.split(key)
-        warmup = blackjax.window_adaptation(
-            blackjax.nuts, logdensity_fn, is_mass_matrix_diagonal=True,
-            target_acceptance_rate=target_accept, progress_bar=False,
-        )
-        (state, params), _ = warmup.run(wkey, u_init, num_steps=n_warmup)
-        step = blackjax.nuts(logdensity_fn, **params).step
+    amp, ell, family, nu = _extract_stationary_kernel(gpr.kernel_)
+    std_y = float(np.ravel(gpr.preprocessing_y.inverse_transform_scale(np.ones(1)))[0])
 
-        def one(state, k):
-            state, info = step(k, state)
-            return state, (state.position, info.num_integration_steps,
-                           info.acceptance_rate, info.is_divergent)
+    # Seeds -> unconstrained u-space (logit bijector).
+    s = np.clip((seeds_sel - lo) / (hi - lo), 1e-6, 1 - 1e-6)
+    u0 = np.log(s) - np.log1p(-s)
 
-        skeys = jax.random.split(skey, n_samples)
-        _, (pos, nsteps, acc, divs) = jax.lax.scan(one, state, skeys)
-        return pos, nsteps, acc, divs
+    runner = _get_nuts_runner()
+    key = jax.random.PRNGKey(int(rng.integers(2 ** 31 - 1)))
+    pos, nsteps, acc, divs = runner(
+        jnp.asarray(Xpad), jnp.asarray(alpha_pad), jnp.asarray(ell),
+        jnp.asarray(float(amp)), jnp.asarray(std_y), jnp.asarray(float(beta)),
+        jnp.asarray(lo), jnp.asarray(hi), jnp.asarray(u0), key,
+        n_warmup=int(n_warmup), n_samples=int(n_samples),
+        family=family, nu=nu, target_accept=float(target_accept),
+    )
 
-    pos, nsteps, acc, divs = jax.vmap(run_chain)(keys, u0)
-    # pos: (n_chains, n_samples, d) in u-space -> transform to normalized x-space
-    pos = np.asarray(jax.vmap(jax.vmap(x_of_u))(pos))
-    nsteps = np.asarray(nsteps)          # (n_chains, n_samples)
-
-    # GP-eval count: each leapfrog step is one GP-mean gradient evaluation; add 1
-    # per NUTS step for the initial state evaluation. Warmup does n_warmup NUTS
-    # steps per chain; its leapfrog count is estimated from the sampling-phase
-    # mean tree size (window_adaptation does not expose per-step counts cleanly).
+    # u-space -> normalized x-space (sigmoid), then reshape.
+    pos = np.asarray(pos)                                   # (n_chains, n_samples, d)
+    pos_x = lo + (hi - lo) / (1.0 + np.exp(-pos))
+    nsteps = np.asarray(nsteps)                             # (n_chains, n_samples)
     mean_tree = float(np.mean(nsteps))
     n_eval_sampling = int(nsteps.sum() + nsteps.size)
     n_eval_warmup = int(round(n_warmup * n_chains * (mean_tree + 1)))
 
-    trace = np.swapaxes(pos, 0, 1)       # (n_samples, n_chains, d)
+    trace = np.swapaxes(pos_x, 0, 1)                        # (n_samples, n_chains, d)
     if thin > 1:
         trace = trace[::thin]
     X = trace.reshape(-1, d)
@@ -502,7 +591,8 @@ def nuts_sample_gp_mean(
         "accept_rate": float(np.mean(acc)),
         "divergences": int(np.sum(np.asarray(divs))),
         "n_chains": n_chains,
-        "mean_tree_size": float(np.mean(nsteps)),
+        "mean_tree_size": mean_tree,
+        "capacity": capacity,
     }
 
 
