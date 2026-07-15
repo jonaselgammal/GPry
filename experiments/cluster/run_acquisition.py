@@ -60,7 +60,8 @@ def main():
     try:
         r.run()
     except Exception as e:
-        print(f"run() ended: {type(e).__name__}: {str(e)[:80]}", flush=True)
+        import traceback
+        print("run() ended with exception:\n" + traceback.format_exc(), flush=True)
     wall = time.time() - t0
     # ensure the final point-count is also checkpointed
     cb(r)
