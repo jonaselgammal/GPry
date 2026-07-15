@@ -434,9 +434,9 @@ def _get_nuts_runner():
     from functools import partial
 
     @partial(jax.jit, static_argnames=("n_warmup", "n_samples", "family", "nu",
-                                       "target_accept"))
+                                       "target_accept", "max_num_doublings"))
     def _run(Xpad, alpha_pad, ell, amp, std_y, beta, lo, hi, u0, key,
-             n_warmup, n_samples, family, nu, target_accept):
+             n_warmup, n_samples, family, nu, target_accept, max_num_doublings):
         width = hi - lo
 
         def k_vec(xn):
@@ -468,8 +468,11 @@ def _get_nuts_runner():
             wkey, skey = jax.random.split(k)
             warmup = blackjax.window_adaptation(
                 blackjax.nuts, logdensity_fn, is_mass_matrix_diagonal=True,
-                target_acceptance_rate=target_accept, progress_bar=False)
+                target_acceptance_rate=target_accept, progress_bar=False,
+                max_num_doublings=max_num_doublings)
             (state, params), _ = warmup.run(wkey, u_init, num_steps=n_warmup)
+            # params already carries max_num_doublings (an extra_parameter of the
+            # adaptation), so it does not need to be passed again here.
             step = blackjax.nuts(logdensity_fn, **params).step
 
             def one(st, kk):
@@ -501,6 +504,7 @@ def nuts_sample_gp_mean(
     target_accept=0.8,
     thin=1,
     pad_multiple=64,
+    max_num_doublings=10,
 ):
     """
     BlackJAX NUTS on the GP mean, seeded from training points, in normalized
@@ -568,6 +572,7 @@ def nuts_sample_gp_mean(
         jnp.asarray(lo), jnp.asarray(hi), jnp.asarray(u0), key,
         n_warmup=int(n_warmup), n_samples=int(n_samples),
         family=family, nu=nu, target_accept=float(target_accept),
+        max_num_doublings=int(max_num_doublings),
     )
 
     # u-space -> normalized x-space (sigmoid), then reshape.
