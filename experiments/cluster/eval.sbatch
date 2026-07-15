@@ -5,7 +5,8 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-set -euo pipefail
+set -eo pipefail
+set +u
 source "$HOME/bhome/anaconda3/etc/profile.d/conda.sh"
 conda activate /bhome/$USER/envs/gpry_nuts
 export TMPDIR=/bhome/$USER/tmp

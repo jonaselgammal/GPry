@@ -22,7 +22,7 @@ conda activate "$BH/envs/gpry_nuts"
 # Only extras the NUTS backend needs: jax + blackjax (CPU is fine here).
 pip install -e "$REPO" "jax[cpu]" blackjax
 
-mkdir -p "$PROJ"
+mkdir -p "$PROJ" "$PROJ/logs" "$PROJ/runs"   # logs/ must exist before sbatch --output
 cp "$HERE"/{common.py,run_acquisition.py,run_eval.py,manifest.txt,acq.sbatch,eval.sbatch,README.md} "$PROJ"/
 
 python - <<'PY'
