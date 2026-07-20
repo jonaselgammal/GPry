@@ -1,3 +1,8 @@
+# 4.0.1 – 2026-07-20
+
+- Bugfixes: compatibility with numpy v2.4, sklearn v1.11, and handling non-existent `latex` shell command for plots.
+- The failure by the acquisition engine to get candidates after some iterations now raises an error (``gp_acquisition.GPAcquisitionError``).
+
 # 4.0 – 2026-07-09
 
 - API changes for the surrogate model: now a `surrogate.SurrogateModel` super-object manages both a `gpr.GaussianProcessRegressor` and an `infinities_classifier.InfinitiesClassifier` (also the preprocessors and clipping). The infinities classifier itself has been revamped: SVM and trust bounds check are now work at the same level.
