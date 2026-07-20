@@ -360,6 +360,7 @@ class Runner:
         self.current_iteration = 0
         self.has_run = False
         self.has_converged = False
+        self.no_more_candidates = False
         self._is_truth_saved = False
         self.old_surrogate, self.new_X, self.new_y, self.y_pred = None, None, None, None
         self.mean, self.cov = None, None
@@ -1050,18 +1051,12 @@ class Runner:
             # breaking if n_resamples_before_giveup is reached.
             if len(y_pred) < max(1, self.n_points_per_acq // 2):
                 self.resamples += 1
-                no_more_candidates = False
                 if self.resamples > self.n_resamples_before_giveup:
-                    if mpi.is_main_process:
-                        self.log(
-                            f"Acquisition returning no values after {self.resamples - 1} "
-                            "re-tries. Giving up.",
-                            level=1,
-                        )
-                        no_more_candidates = True
-                no_more_candidates = mpi.bcast(no_more_candidates)
-                if no_more_candidates:
-                    break
+                    self.no_more_candidates = True
+                    raise GPAcquisitionError(
+                        f"Acquisition returning no values after {self.resamples - 1} "
+                        "re-tries. Giving up."
+                    )
                 if mpi.is_main_process:
                     self.log(
                         "Acquisition returned less than half of the requested "
@@ -1219,11 +1214,6 @@ class Runner:
                     lines += (
                         "- The maximum number of finite truth evaluations "
                         f"({self.max_finite}) has been reached."
-                    )
-                if self.resamples > self.n_resamples_before_giveup:
-                    lines += (
-                        f"- Gave up up after {self.resamples - 1} resamples "
-                        f"(max. {self.n_resamples_before_giveup})."
                     )
                 self.banner(lines)
             # Run MC and diagnose if it did not converge
