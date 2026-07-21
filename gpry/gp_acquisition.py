@@ -835,7 +835,7 @@ class NORA(GenericGPAcquisition):
     # TODO: merge samples for >1 MPI processes.
     def _do_mc_sample_uniform(self, surrogate, bounds=None, rng=None):
         if not mpi.is_main_process:
-            return None, None, None, None
+            return None, None, None, None, None, None
         proposer = UniformProposer(self.bounds_ if bounds is None else bounds)
         n_total = 1000 * surrogate.d**2
         X = np.empty(shape=(n_total, surrogate.d))

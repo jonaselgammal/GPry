@@ -682,12 +682,13 @@ class Runner:
         rest_n_acq = self.n_points_per_acq % mpi.SIZE
         if rest_n_acq <= 0.2 * self.n_points_per_acq and rest_n_acq != 0:
             new_n_acq = self.n_points_per_acq - rest_n_acq
-            self.log(
-                "Warning: The number kriging believer samples per acquisition step "
-                f"'n_points_per_acq={self.n_points_per_acq}' has been rounded down to "
-                f"{new_n_acq} to better exploit parallelisation.",
-                level=2,
-            )
+            if mpi.is_main_process:
+                self.log(
+                    "Warning: The number kriging believer samples per acquisition step "
+                    f"'n_points_per_acq={self.n_points_per_acq}' has been rounded down to"
+                    f" {new_n_acq} to better exploit parallelisation.",
+                    level=2,
+                )
             self.n_points_per_acq = new_n_acq
 
     @property
@@ -941,8 +942,9 @@ class Runner:
             if mpi.is_main_process:
                 # Save checkpoint
                 self.save_checkpoint()
-        # Run bayesian optimization loop
+        # Run bayesian optimization loop -- reset some flags first
         self.has_converged = False
+        self.no_more_candidates = False
         if mpi.is_main_process:
             maybe_stop_before_max_total = (self.max_finite < self.max_total) or not any(
                 isinstance(cc, gpryconv.DontConverge) for cc in self.convergence
