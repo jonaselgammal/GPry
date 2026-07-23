@@ -1450,7 +1450,10 @@ class Runner:
             every is not None and self.current_iteration % every == every - 1
         )
         if is_this_iter(self.fit_full_every):
-            fit_gpr_kwargs = {"start_from_current": mpi.is_main_process}
+            fit_gpr_kwargs = {
+                "start_from_current": mpi.is_main_process,
+                "start_from_cov": (mpi.RANK == 1) if mpi.multiple_processes else True,
+            }
             fit_gpr_kwargs["n_restarts"] = mpi.split_number_for_parallel_processes(
                 self.surrogate.gpr.n_restarts_optimizer
             )[mpi.RANK]

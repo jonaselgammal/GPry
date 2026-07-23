@@ -24,7 +24,7 @@ from sklearn.utils.validation import validate_data  # type: ignore
 
 # Local
 from gpry.kernels import RBF, Matern, WhiteKernel, ConstantKernel as C
-from gpry.tools import check_random_state
+from gpry.tools import check_random_state, mean_covmat_from_evals
 
 GPR_CHOLESKY_LOWER = True
 EPS_SQ_NOISE = 1e-6  # diagonal term to be added when WhiteKernel used as noise
@@ -417,6 +417,7 @@ class GaussianProcessRegressor(sk_GPR):
     def _fit_hyperparameters(
         self,
         start_from_current=True,
+        start_from_cov=False,
         n_restarts=None,
         hyperparameter_bounds=None,
     ):
@@ -433,6 +434,11 @@ class GaussianProcessRegressor(sk_GPR):
         start_from_current : bool, default: True
             Starts the first optimization run from the current hyperparameters (ignored
             if not previously fitted).
+
+        start_from_cov : bool, default: False
+            Starts the first optimization (or the second one if
+            ``start_from_current=True``) from the lenghts computed with the square root
+            of the diagonal of the covariance of the training set.
 
         n_restarts : int, default None
             Number of restarts of the optimizer. If not defined, uses the one set at
@@ -468,6 +474,11 @@ class GaussianProcessRegressor(sk_GPR):
             )
             self._update_model()
             return self
+        if n_restarts == 1 and start_from_current and start_from_cov:
+            raise ValueError(
+                "Cannot choose both 'start_from_current' and 'start_from_cov' if the "
+                "number of restarts is 1."
+            )
         # Choose hyperparameters based on maximizing the log-marginal
         # likelihood (potentially starting from several initial values)
         # We don't need to clone the kernel here, even if overwritten during optimization,
@@ -504,6 +515,19 @@ class GaussianProcessRegressor(sk_GPR):
             if iteration == 0 and start_from_current:
                 # self.kernel_ guaranteed to exist because self.fitted checked above
                 theta_initial = self.kernel_.theta
+            elif start_from_cov and (
+                (iteration == 0 and not start_from_current)
+                or (iteration == 1 and start_from_current)
+            ):
+                # Guess the length hyperparameters from the covariance matrix of the
+                # training points (not from a sample from the GP mean, bc it may still be
+                # overfitting; use a high value for the output scale
+                theta_initial = self.kernel_.theta.copy()
+                theta_initial[0] = (lambda b: b[1] - 0.1 * (b[1] - b[0]))(
+                    hyperparameter_bounds[0]
+                )
+                _, X_cov = mean_covmat_from_evals(self.X_train_, self.y_train_)
+                theta_initial[1 : 1 + X_cov.shape[0]] = np.log(np.sqrt(np.diag(X_cov)))
             else:
                 # Additional runs are performed from log-uniform chosen initial theta
                 k = 1

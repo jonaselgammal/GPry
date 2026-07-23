@@ -1,3 +1,7 @@
+# 4.1 – (unreleased)
+
+- GPR hyperparameters uses as a guess for the length scales the standard deviations from the covariance matrix of the training set (faster convergence towards long length scales, if the problem allows for it).
+
 # 4.0.1 – 2026-07-20
 
 - Bugfixes: compatibility with numpy v2.4, sklearn v1.11, and handling non-existent `latex` shell command for plots.

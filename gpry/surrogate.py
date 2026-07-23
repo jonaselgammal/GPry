@@ -657,9 +657,11 @@ class SurrogateModel:
             passed a dict, which is always interpreted as ``True``, containing arguments
             for the ``_fit_hyperparameters`` method, namely ``n_restarts`` of the
             optimizer, ``start_from_current`` if the first optimizer run should start
-            from the last optimum, or different ``hyperparameters_bounds``. E.g. to
-            perform a single GPR optimization run starting at the last hyperparameter
-            optimum: ``fit_gpr={'start_from_current': True, 'n_restarts': 1}``.
+            from the last optimum (and/or ``start_from_cov`` to start from lenghts guessed
+            from the covmat of the training set), or different ``hyperparameters_bounds``.
+            E.g. to perform a single GPR optimization run starting at the last
+            hyperparameter optimum:
+            ``fit_gpr={'start_from_current': True, 'n_restarts': 1}``.
 
         fit_classifier: Bool (default: True)
             Whether the infinities classifier is refit. Overridden to ``True`` if
