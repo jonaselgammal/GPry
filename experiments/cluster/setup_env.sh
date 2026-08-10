@@ -24,6 +24,8 @@ pip install -e "$REPO" "jax[cpu]" blackjax
 
 mkdir -p "$PROJ" "$PROJ/logs" "$PROJ/runs"   # logs/ must exist before sbatch --output
 cp "$HERE"/{common.py,run_acquisition.py,run_eval.py,manifest.txt,acq.sbatch,eval.sbatch,README.md} "$PROJ"/
+# Tier-B multimodal (two-mode separation sweep) harness:
+cp "$HERE"/{run_acquisition_2mode.py,run_eval_2mode.py,gen_manifest_2mode.py,manifest_2mode.txt,acq_2mode.sbatch,eval_2mode.sbatch} "$PROJ"/
 
 python - <<'PY'
 import gpry, jax, blackjax, getdist, dill, scipy, sklearn

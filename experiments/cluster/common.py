@@ -45,6 +45,100 @@ def gaussian_kl(m0, c0, m1, c1):
 
 
 # --------------------------------------------------------------------------- #
+# Multimodal target: two isotropic unit Gaussians separated by `sep` sigma
+# along axis 0.  weight_ratio = w[mode0]/w[mode1] (1.0 -> equal weights).
+# This is the Tier-B separation-sweep target: the ONE knob is `sep`, so the
+# mode-recall-vs-separation curve is a clean phase transition.  Unlike the
+# unimodal make_gaussian(), the truth here has closed-form EXACT samples (draw
+# a component, draw a Gaussian) -- so evaluation never needs a sampler for the
+# reference side.
+# --------------------------------------------------------------------------- #
+def make_two_mode(d, sep, weight_ratio=1.0):
+    cov = np.eye(d)                    # isotropic unit covariance per mode
+    prec = np.eye(d)
+    marg = np.ones(d)
+    c0 = np.zeros(d); c0[0] = -0.5 * sep
+    c1 = np.zeros(d); c1[0] = +0.5 * sep
+    means = np.array([c0, c1])
+    w = np.array([float(weight_ratio), 1.0]); w = w / w.sum()
+    logw = np.log(w)
+    lognorm = -0.5 * d * np.log(2 * np.pi)   # slogdet(I) = 0
+
+    def logLkl(X):
+        X = np.atleast_2d(np.asarray(X, float))
+        comps = np.empty((2, X.shape[0]))
+        for k in range(2):
+            dx = X - means[k]
+            comps[k] = logw[k] + lognorm - 0.5 * np.einsum(
+                "ni,ij,nj->n", dx, prec, dx, optimize=True)
+        M = comps.max(axis=0)
+        out = M + np.log(np.exp(comps - M).sum(axis=0))
+        return float(out[0]) if X.shape[0] == 1 else out
+
+    half0 = 0.5 * sep + 6.0            # axis 0 must bracket both modes + 6 sigma
+    bounds = np.array([[-half0, half0]] + [[-6.0, 6.0]] * (d - 1))
+    # ref_bounds spans BOTH basins on axis 0 so the initial design seeds both.
+    ref_bounds = np.array([[-0.5 * sep - 2.0, 0.5 * sep + 2.0]]
+                          + [[-2.0, 2.0]] * (d - 1))
+    return dict(logLkl=logLkl, bounds=bounds, ref_bounds=ref_bounds,
+                means=means, cov=cov, marg=marg, weights=w, sep=float(sep),
+                weight_ratio=float(weight_ratio), d=d)
+
+
+def two_mode_reference_samples(target, n=40000, seed=123):
+    """EXACT samples from the two-mode mixture (closed form -- no sampler)."""
+    rng = np.random.default_rng(seed)
+    w, means, cov, d = (target["weights"], target["means"],
+                        target["cov"], target["d"])
+    comp = rng.choice(2, size=n, p=w)
+    L = np.linalg.cholesky(cov)
+    return means[comp] + rng.standard_normal((n, d)) @ L.T
+
+
+def evaluate_recovery_2mode(gpr, target, nuts_kwargs=None):
+    """
+    Multimodal recovery of the GP posterior, read out with well-tuned
+    NUTS-many-chains and compared against the EXACT mixture.  Metrics:
+      * mode_recall / n_modes_found -- did acquisition discover BOTH basins?
+      * w_gp vs w_true, w_relerr     -- relative mode WEIGHTS (the GP Achilles heel)
+      * spurious_frac                -- GP mass >5 sigma from either true mode
+      * wass_x0 / wass_max           -- 1-Wasserstein vs exact samples (x0 is bimodal)
+    """
+    from scipy.stats import wasserstein_distance
+    nuts_kwargs = nuts_kwargs or {}
+    X, w, info = nuts_corner_samples(gpr, target["bounds"], **nuts_kwargs)
+    wn = np.asarray(w, float); wn = wn / wn.sum()
+    means, wtrue = target["means"], target["weights"]
+
+    d0 = np.linalg.norm(X - means[0], axis=1)   # unit cov -> Euclidean = Mahalanobis
+    d1 = np.linalg.norm(X - means[1], axis=1)
+    assign = (d1 < d0).astype(int)
+    dmin = np.minimum(d0, d1)
+    w_gp = np.array([wn[assign == 0].sum(), wn[assign == 1].sum()])
+    recall = [bool(w_gp[k] > 0.02) for k in range(2)]
+    spurious = float(wn[dmin > 5.0].sum())      # far from BOTH modes
+
+    ref = two_mode_reference_samples(target, n=min(len(X), 40000))
+    wass = [float(wasserstein_distance(X[:, i], ref[:, i], u_weights=wn))
+            for i in range(target["d"])]
+    rec = dict(
+        w_gp=[round(float(x), 4) for x in w_gp],
+        w_true=[round(float(x), 4) for x in wtrue],
+        w_relerr=round(float(np.max(np.abs(w_gp - wtrue) / wtrue)), 4),
+        mode_recall=recall,
+        n_modes_found=int(sum(recall)),
+        spurious_frac=round(spurious, 4),
+        wass_x0=round(wass[0], 4),
+        wass_max=round(float(np.max(wass)), 4),
+        ess=round(float(1.0 / np.sum(wn ** 2)), 0),
+        pool=int(len(X)),
+        n_divergent=int(info.get("divergences", -1)),
+        accept=round(float(info.get("accept_rate", 0.0)), 3),
+    )
+    return rec, (X, w)
+
+
+# --------------------------------------------------------------------------- #
 # Sampler-free evaluator: Laplace approximation of the GP posterior
 # --------------------------------------------------------------------------- #
 def laplace_cov_at(gpr, bounds, x0):
