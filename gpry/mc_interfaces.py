@@ -408,6 +408,92 @@ def _build_jax_logdensity(surrogate, lo, hi, beta):
     return logdensity_fn, x_of_u, u_of_x
 
 
+def build_jax_gp_loglike(surrogate):
+    """
+    Build a JAX-native log-likelihood of the GP-surrogate mean, in the ORIGINAL
+    parameter space, for use by JAX-based samplers (e.g. BlackJAX nested
+    sampling).
+
+    Motivation
+    ----------
+    ``gpry.ns_interfaces.InterfaceBlackJAX`` evaluates the surrogate through
+    ``jax.pure_callback``, i.e. every likelihood call leaves JAX and runs the
+    numpy GP. That round-trip dominates the run time (a single d=16 GP read
+    takes minutes). Evaluating the GP mean natively in JAX instead lets the
+    whole nested-sampling loop be jitted, exactly as for the NUTS backend.
+
+    The x-preprocessor is diagonal-affine (``NormalizeBounds``, or the identity
+    for ``DummyPreprocessor``), so it is reproduced inside JAX from two probe
+    points rather than called per-sample.
+
+    Notes
+    -----
+    Like the NUTS backend, this uses the raw GP mean: the infinities classifier
+    and the upper clipping are NOT applied (they are non-differentiable and
+    introduce kinks). The sampler's own prior bounds delimit the support.
+
+    Parameters
+    ----------
+    surrogate : SurrogateModel
+        A *fitted* surrogate.
+
+    Returns
+    -------
+    loglike : callable
+        A jitted ``x -> log p`` for a single point ``x`` of shape ``(d,)`` in
+        the original parameter space, in the original y-scale.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    # MUST precede the jnp.asarray calls below. GPry's GP routinely has a large
+    # output scale (amp ~ 1e6) together with length scales far exceeding the
+    # normalized box, so every kernel entry is ~1 and ``alpha`` is a large,
+    # strongly cancelling vector. In float32 (JAX's default) that cancellation
+    # destroys the result completely; in float64 it is fine.
+    jax.config.update("jax_enable_x64", True)
+
+    amp, ell, family, nu = _extract_stationary_kernel(surrogate.gpr.kernel_)
+    std_y = float(
+        np.ravel(surrogate.preprocessing_y.inverse_transform_scale(np.ones(1)))[0]
+    )
+    # The y-preprocessor is affine; the additive part is irrelevant for the shape
+    # of the posterior but matters for the evidence, and costs nothing to keep.
+    off_y = float(np.ravel(surrogate.preprocessing_y.inverse_transform(np.zeros(1)))[0])
+    d = int(surrogate.d)
+    # Reproduce the (diagonal-affine) x-preprocessor: T(x) = offset + scale * x
+    t0 = np.ravel(surrogate.preprocessing_X.transform(np.zeros((1, d))))
+    t1 = np.ravel(surrogate.preprocessing_X.transform(np.ones((1, d))))
+    offset_j = jnp.asarray(t0)
+    scale_j = jnp.asarray(t1 - t0)
+
+    ell_j = jnp.asarray(ell)
+    Xtr_j = jnp.asarray(np.asarray(surrogate.gpr.X_train_, dtype=float))
+    alpha_j = jnp.asarray(np.ravel(np.asarray(surrogate.gpr.alpha_, dtype=float)))
+
+    def loglike(x):
+        xn = offset_j + scale_j * x  # into the regressor's own input space
+        diff = (xn - Xtr_j) / ell_j
+        d2 = jnp.sum(diff ** 2, axis=1)
+        if family == "rbf":
+            kk = jnp.exp(-0.5 * d2)
+        else:
+            dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
+            if nu == 0.5:
+                kk = jnp.exp(-dist)
+            elif nu == 1.5:
+                a = jnp.sqrt(3.0) * dist
+                kk = (1.0 + a) * jnp.exp(-a)
+            elif nu == 2.5:
+                a = jnp.sqrt(5.0) * dist
+                kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
+            else:
+                raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
+        return std_y * jnp.dot(amp * kk, alpha_j) + off_y
+
+    return jax.jit(loglike)
+
+
 _NUTS_RUNNER = None
 
 

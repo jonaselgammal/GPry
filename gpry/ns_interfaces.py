@@ -761,8 +761,15 @@ class InterfaceBlackJAX(NSInterface):
             else {"vectorized": False}
         )
 
+        jax_loglike = getattr(self, "jax_loglike", None)
+
         def loglikelihood_fn(params):
             x = jnp.array([params[name] for name in param_names])
+            if jax_loglike is not None:
+                # Fast path: the log-likelihood is already a JAX function, so the
+                # whole NS loop stays inside XLA instead of round-tripping to
+                # numpy through pure_callback on every single evaluation.
+                return jax_loglike(x)
 
             def _numpy_logp(x_np):
                 # ``logp_func`` may return a 0-d or 1-element array; force

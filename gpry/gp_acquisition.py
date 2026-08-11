@@ -1018,7 +1018,22 @@ class NORA(GenericGPAcquisition):
         return X_mc, y_mc, None, w_mc, logZ, logZstd
 
     def _do_mc_sample_blackjax(self, surrogate, bounds=None, rng=None):
-        warn("Support for BlackJax is experimental (and slow).")
+        # Fast path: hand the interface a JAX-native GP-mean log-likelihood so
+        # the nested-sampling loop stays inside XLA, instead of leaving JAX via
+        # pure_callback on every evaluation (which is what made this "slow").
+        # Set ``self._blackjax_pure_callback = True`` to force the old path.
+        if not getattr(self, "_blackjax_pure_callback", False):
+            try:
+                from gpry.mc_interfaces import build_jax_gp_loglike
+                self.sampler_interface.jax_loglike = build_jax_gp_loglike(surrogate)
+            except Exception as excpt:  # fall back to the callback path
+                self.sampler_interface.jax_loglike = None
+                warn(f"Could not build the JAX GP log-likelihood ({excpt}); "
+                     "falling back to the (slow) pure_callback path.")
+        else:
+            self.sampler_interface.jax_loglike = None
+        if getattr(self.sampler_interface, "jax_loglike", None) is None:
+            warn("Support for BlackJax is experimental (and slow).")
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings

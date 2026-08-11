@@ -43,7 +43,8 @@ def corner_plot(target, samples, path):
         return
     import common as C
     d = target["d"]
-    sub = list(range(min(d, 8)))
+    # ALL dimensions, always (see run_eval.py).
+    sub = list(range(d))
     nm = [f"x{i}" for i in sub]
     ref = C.two_mode_reference_samples(target, n=40000, seed=1)[:, sub]
     mcs = [MCSamples(samples=ref, names=nm, label="truth")]
@@ -51,7 +52,7 @@ def corner_plot(target, samples, path):
     if X is not None and len(X) > 50:
         mcs.append(MCSamples(samples=np.asarray(X)[:, sub], weights=np.asarray(w),
                              names=nm, label="GP (NUTS)"))
-    g = plots.get_subplot_plotter(width_inch=min(2 + 1.1 * len(sub), 11))
+    g = plots.get_subplot_plotter(width_inch=min(2 + 0.7 * len(sub), 26))
     g.triangle_plot(mcs, filled=[True, False][:len(mcs)],
                     legend_labels=[m.label for m in mcs])
     g.export(path)

@@ -43,7 +43,9 @@ def corner_plot(mean, cov, samples, path, d):
         from getdist import MCSamples, plots
     except Exception:
         return
-    sub = list(range(min(d, 10)))          # cap panels for readability
+    # ALL dimensions, always: partial corner plots hide exactly the failures
+    # (a single badly-recovered direction) that these runs exist to detect.
+    sub = list(range(d))
     nm = [f"x{i}" for i in sub]
     ref = np.random.default_rng(1).multivariate_normal(mean, cov, 20000)[:, sub]
     mcs = [MCSamples(samples=ref, names=nm, label="truth")]
@@ -51,7 +53,7 @@ def corner_plot(mean, cov, samples, path, d):
     if X is not None and len(X) > 50:
         mcs.append(MCSamples(samples=np.asarray(X)[:, sub], weights=np.asarray(w),
                              names=nm, label="GP (NUTS)"))
-    g = plots.get_subplot_plotter(width_inch=min(2 + 1.1 * len(sub), 12))
+    g = plots.get_subplot_plotter(width_inch=min(2 + 0.7 * len(sub), 26))
     g.triangle_plot(mcs, filled=[True, False][:len(mcs)],
                     legend_labels=[m.label for m in mcs])
     g.export(path)
