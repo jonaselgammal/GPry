@@ -408,7 +408,7 @@ def _build_jax_logdensity(surrogate, lo, hi, beta):
     return logdensity_fn, x_of_u, u_of_x
 
 
-def build_jax_gp_loglike(surrogate):
+def build_jax_gp_loglike(surrogate, pad_multiple=256):
     """
     Build a JAX-native log-likelihood of the GP-surrogate mean, in the ORIGINAL
     parameter space, for use by JAX-based samplers (e.g. BlackJAX nested
@@ -436,6 +436,11 @@ def build_jax_gp_loglike(surrogate):
     ----------
     surrogate : SurrogateModel
         A *fitted* surrogate.
+
+    pad_multiple : int (default: 256)
+        Pad the training set to a multiple of this, so the traced shape is
+        stable as the GP grows and JAX only recompiles on a capacity change.
+        Pass 0 to disable (not recommended inside an active-learning loop).
 
     Returns
     -------
@@ -467,9 +472,30 @@ def build_jax_gp_loglike(surrogate):
     offset_j = jnp.asarray(t0)
     scale_j = jnp.asarray(t1 - t0)
 
+    # Pad the training set to a fixed capacity. The GP grows by a few points every
+    # active-learning iteration, so closing over the raw (n_train, d) arrays makes
+    # the traced shape change EVERY iteration: JAX then recompiles the whole
+    # nested-sampling graph each time, and the accumulated LLVM JIT memory
+    # eventually kills the process ("LLVM ERROR: Unable to allocate section
+    # memory" -- observed on the cluster, where a single call succeeds but a full
+    # run dies). Padded rows get alpha = 0, so they contribute exactly nothing to
+    # the kernel sum. This mirrors the persistent-JIT trick already used by the
+    # NUTS runner: recompilation happens only when a capacity tier is crossed.
+    Xtr = np.asarray(surrogate.gpr.X_train_, dtype=float)
+    alpha = np.ravel(np.asarray(surrogate.gpr.alpha_, dtype=float))
+    n_train = Xtr.shape[0]
+    cap = int(np.ceil(n_train / pad_multiple) * pad_multiple) if pad_multiple else n_train
+    if cap > n_train:
+        Xpad = np.zeros((cap, Xtr.shape[1]), dtype=float)
+        Xpad[:n_train] = Xtr
+        apad = np.zeros(cap, dtype=float)
+        apad[:n_train] = alpha
+    else:
+        Xpad, apad = Xtr, alpha
+
     ell_j = jnp.asarray(ell)
-    Xtr_j = jnp.asarray(np.asarray(surrogate.gpr.X_train_, dtype=float))
-    alpha_j = jnp.asarray(np.ravel(np.asarray(surrogate.gpr.alpha_, dtype=float)))
+    Xtr_j = jnp.asarray(Xpad)
+    alpha_j = jnp.asarray(apad)
 
     def loglike(x):
         xn = offset_j + scale_j * x  # into the regressor's own input space
