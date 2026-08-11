@@ -284,6 +284,34 @@ class Kernel(sk_Kernel):
         """
         raise NotImplementedError
 
+    def gradient_x_batch(self, X, X_train):
+        """
+        Vectorized version of :meth:`gradient_x` over a batch of test points.
+
+        Parameters
+        ----------
+        X : array-like, shape=(n_points, n_features)
+            A batch of test points. A single point of shape ``(n_features,)``
+            is also accepted and treated as a batch of size one.
+
+        X_train : array-like, shape=(n_samples, n_features)
+            Training data used to fit the Gaussian process.
+
+        Returns
+        -------
+        gradient_x : array-like, shape=(n_points, n_samples, n_features)
+            ``gradient_x[i]`` equals ``self.gradient_x(X[i], X_train)``.
+
+        Notes
+        -----
+        This base implementation loops over :meth:`gradient_x` and is a
+        correctness-preserving fallback. Stationary kernels (and the kernel
+        operators used by GPry's default kernel) override it with a fully
+        vectorized implementation; see :mod:`gpry.mc_interfaces`.
+        """
+        X = np.atleast_2d(np.asarray(X))
+        return np.stack([self.gradient_x(x, X_train) for x in X], axis=0)
+
 
 class RBF(Kernel, sk_RBF):
     def __init__(
@@ -372,6 +400,17 @@ class RBF(Kernel, sk_RBF):
         gradient = exp_diff_squared * diff
         gradient /= length_scale
         return gradient
+
+    def gradient_x_batch(self, X, X_train):
+        X = np.atleast_2d(np.asarray(X))
+        X_train = np.asarray(X_train)
+        length_scale = np.asarray(self.length_scale)
+        # diff[i, j, :] = (X[i] - X_train[j]) / length_scale
+        diff = (X[:, None, :] - X_train[None, :, :]) / length_scale
+        sq = np.sum(diff ** 2, axis=2)                    # (n_points, n_train)
+        e = -np.exp(-0.5 * sq)                            # (n_points, n_train)
+        # gradient = (e * diff) / length_scale
+        return (e[:, :, None] * diff) / length_scale
 
 
 class Matern(Kernel, sk_Matern):
@@ -548,6 +587,45 @@ class Matern(Kernel, sk_Matern):
             g = np.expand_dims(g, axis=1)
             g_grad = -g * f1_grad
             return f * g_grad + g * f_grad
+
+    def gradient_x_batch(self, X, X_train):
+        X = np.atleast_2d(np.asarray(X))
+        X_train = np.asarray(X_train)
+        length_scale = np.asarray(self.length_scale)
+        diff = (X[:, None, :] - X_train[None, :, :]) / length_scale  # (m, n, d)
+        dist_sq = np.sum(diff ** 2, axis=2)                          # (m, n)
+        dist = np.sqrt(dist_sq)                                      # (m, n)
+        diffl = diff / length_scale                                 # (m, n, d)
+        nzd = dist != 0.0
+        if self.nu == 0.5:
+            scaled = np.zeros_like(dist)
+            scaled[nzd] = -np.exp(-dist[nzd]) / dist[nzd]
+            grad = scaled[:, :, None] * diffl
+            # x == X_train corner case: gradient is -1 / length_scale
+            grad[~nzd] = (-1.0 / length_scale)[None, :]
+            return grad
+        elif self.nu == 1.5:
+            sqrt_3_dist = sqrt(3) * dist
+            f = (1 + sqrt_3_dist)[:, :, None]
+            sqrt_3_by_dist = np.zeros_like(dist)
+            sqrt_3_by_dist[nzd] = sqrt(3) / dist[nzd]
+            f_grad = sqrt_3_by_dist[:, :, None] * diffl
+            g = np.exp(-sqrt_3_dist)[:, :, None]
+            g_grad = -g * f_grad
+            return f * g_grad + g * f_grad
+        elif self.nu == 2.5:
+            sqrt_5_dist = sqrt(5) * dist
+            f = (1 + sqrt_5_dist + (5.0 / 3.0) * dist_sq)[:, :, None]
+            sqrt_5_by_dist = np.zeros_like(dist)
+            sqrt_5_by_dist[nzd] = sqrt(5) / dist[nzd]
+            f1_grad = sqrt_5_by_dist[:, :, None] * diffl
+            f2_grad = (10.0 / 3.0) * diffl
+            f_grad = f1_grad + f2_grad
+            g = np.exp(-sqrt_5_dist)[:, :, None]
+            g_grad = -g * f1_grad
+            return f * g_grad + g * f_grad
+        # General nu: fall back to the (slower) per-point implementation.
+        return Kernel.gradient_x_batch(self, X, X_train)
 
 
 class RationalQuadratic(Kernel, sk_RationalQuadratic):
@@ -772,6 +850,11 @@ class ConstantKernel(Kernel, sk_ConstantKernel):
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
 
+    def gradient_x_batch(self, X, X_train):
+        X = np.atleast_2d(np.asarray(X))
+        X_train = np.asarray(X_train)
+        return np.zeros((X.shape[0], X_train.shape[0], X_train.shape[1]))
+
 
 class WhiteKernel(Kernel, sk_WhiteKernel):
     @property
@@ -780,6 +863,11 @@ class WhiteKernel(Kernel, sk_WhiteKernel):
 
     def gradient_x(self, x, X_train):
         return np.zeros_like(X_train)
+
+    def gradient_x_batch(self, X, X_train):
+        X = np.atleast_2d(np.asarray(X))
+        X_train = np.asarray(X_train)
+        return np.zeros((X.shape[0], X_train.shape[0], X_train.shape[1]))
 
     def __repr__(self):
         return "{0}(noise_level={1:.3g}**2)".format(
@@ -854,6 +942,10 @@ class Sum(KernelOperator, Kernel, sk_Sum):
     def gradient_x(self, x, X_train):
         return self.k1.gradient_x(x, X_train) + self.k2.gradient_x(x, X_train)
 
+    def gradient_x_batch(self, X, X_train):
+        return (self.k1.gradient_x_batch(X, X_train) +
+                self.k2.gradient_x_batch(X, X_train))
+
 
 class Product(KernelOperator, Kernel, sk_Product):
     @property
@@ -870,6 +962,16 @@ class Product(KernelOperator, Kernel, sk_Product):
         fgrad_g = np.expand_dims(self.k2(x, X_train)[0], axis=1) * self.k1.gradient_x(
             x, X_train
         )
+        return f_ggrad + fgrad_g
+
+    def gradient_x_batch(self, X, X_train):
+        X = np.atleast_2d(np.asarray(X))
+        X_train = np.asarray(X_train)
+        # grad(k1 * k2) = k1 * grad(k2) + k2 * grad(k1), broadcast over features
+        k1 = self.k1(X, X_train)   # (n_points, n_train)
+        k2 = self.k2(X, X_train)   # (n_points, n_train)
+        f_ggrad = k1[:, :, None] * self.k2.gradient_x_batch(X, X_train)
+        fgrad_g = k2[:, :, None] * self.k1.gradient_x_batch(X, X_train)
         return f_ggrad + fgrad_g
 
 
