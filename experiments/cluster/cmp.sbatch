@@ -15,6 +15,13 @@ export MPLCONFIGDIR=$TMPDIR/mpl_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p "$MPLCONFIGDIR"
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK \
        OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# JAX/XLA on a shared node: several array tasks landing together exhausted memory
+# (MemoryError; "Failed to materialize symbols"). Keep XLA single-device, bound its
+# compile threads, and give it a task-private compilation cache.
+export JAX_PLATFORMS=cpu
+export XLA_FLAGS="--xla_force_host_platform_device_count=1 --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=$SLURM_CPUS_PER_TASK"
+export JAX_COMPILATION_CACHE_DIR=$TMPDIR/jaxcache_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
+mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 cd /bhome/$USER/gpry_nuts_tests/GPry_v2/experiments/cluster
 mkdir -p logs
 LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" manifest_cmp.txt)
