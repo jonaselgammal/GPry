@@ -720,6 +720,42 @@ class GaussianProcessRegressor(sk_GPR):
                 return_values.append(grad_std)
         return return_values
 
+    def predict_mean_grad_batch(self, X):
+        """
+        Vectorized GP posterior mean and its input-gradient for many points.
+
+        Batched counterpart of ``predict(X, return_mean_grad=True)``, which is
+        restricted to a single point. Intended for the gradient-based
+        acquisition sampler (see :mod:`gpry.mc_interfaces`).
+
+        ``X`` is expected in the regressor's own (pre-processed) input space,
+        i.e. the space in which ``kernel_``, ``X_train_`` and ``alpha_`` live,
+        and the returned mean/gradient are in the regressor's y-scale. No
+        preprocessing, no infinities classifier and no clipping are applied
+        here; use :meth:`gpry.surrogate.SurrogateModel.predict_mean_grad_batch`
+        for the pre-processed, original-space counterpart.
+
+        Parameters
+        ----------
+        X : array-like, shape=(n_points, n_features)
+
+        Returns
+        -------
+        mean : array, shape=(n_points,)
+        mean_grad : array, shape=(n_points, n_features)
+        """
+        X = np.atleast_2d(X)
+        self.n_eval += X.shape[0]
+        if not hasattr(self, "X_train_"):  # not fit: GP prior mean is zero
+            return np.zeros(X.shape[0]), np.zeros_like(X)
+        alpha = np.ravel(self.alpha_)
+        K_trans = self.kernel_(X, self.X_train_)  # (n_points, n_train)
+        y_mean = K_trans.dot(alpha)  # (n_points,)
+        # (n_points, n_train, n_features)
+        grad_K = self.kernel_.gradient_x_batch(X, self.X_train_)
+        y_mean_grad = np.einsum("mnd,n->md", grad_K, alpha, optimize=True)
+        return y_mean, y_mean_grad
+
     def predict_std(self, X, validate=True):
         """
         Predict output standart deviation for X.

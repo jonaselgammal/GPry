@@ -1039,6 +1039,46 @@ class SurrogateModel:
         if y.size == 0:  # unfitted model: nothing to clip against
             return mean
         return self.clipper(mean, y.min(), y.max())
+    def predict_mean_grad_batch(self, X, transformed=True):
+        """
+        Vectorized surrogate mean and its input-gradient for many points.
+
+        Batched counterpart of ``predict(X, return_mean_grad=True)``, which is
+        restricted to a single point. Used by the gradient-based (NUTS)
+        acquisition sampler, see :mod:`gpry.mc_interfaces`.
+
+        Unlike :meth:`predict`, neither the infinities classifier nor the upper
+        clipping are applied: the sampler needs a smooth, everywhere-finite and
+        differentiable surface, and handles the infinite regions itself (the
+        classifier is not differentiable, and clipping introduces kinks).
+
+        Parameters
+        ----------
+        X : array-like, shape=(n_points, n_features)
+
+        transformed : bool (default: True)
+            Whether ``X`` is already in the regressor's pre-processed input
+            space (the space in which the sampler works). If ``False``, ``X``
+            is taken in the original parameter space and transformed first.
+
+        Returns
+        -------
+        mean : array, shape=(n_points,)
+            Posterior mean, in the original y-scale.
+
+        mean_grad : array, shape=(n_points, n_features)
+            ``d(mean) / d(X)``, in the original y-scale and w.r.t. the same
+            input space as ``X``.
+        """
+        X = np.atleast_2d(X)
+        X_ = X if transformed else self.preprocessing_X.transform(np.copy(X))
+        mean, mean_grad = self.gpr.predict_mean_grad_batch(X_)
+        mean = self.preprocessing_y.inverse_transform(mean)
+        mean_grad = self.preprocessing_y.inverse_transform_scale(mean_grad)
+        if not transformed:
+            # d(mean)/d(X_orig) = d(mean)/d(X_transf) * d(X_transf)/d(X_orig)
+            mean_grad = self.preprocessing_X.transform_scale(mean_grad)
+        return mean, mean_grad
 
     @staticmethod
     def _regressor_output_to_dict(
