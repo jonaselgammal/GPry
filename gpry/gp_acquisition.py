@@ -33,6 +33,7 @@ from gpry.tools import (
     is_in_bounds,
 )
 import gpry.ns_interfaces as nsint
+from gpry.mc_interfaces import hmc_acquire, nuts_acquire
 from gpry.mc import samples_dict_to_getdist, _name_logp, _name_loglike, _name_logprior
 
 
@@ -756,7 +757,9 @@ class NORA(GenericGPAcquisition):
                 self.bounds_, self.verbose
             )
         except (AttributeError, KeyError) as excpt:
-            if this_sampler.lower() != "uniform":
+            # "uniform" (tests) and the gradient-based MC backends "hmc"/"nuts"
+            # are not nested samplers and need no NS interface.
+            if this_sampler.lower() not in ("uniform", "hmc", "nuts"):
                 raise ValueError(
                     "No interface found for the requested nested sampler "
                     f"'{this_sampler}'. Use one of {list(nsint._ns_interfaces)}"
@@ -829,6 +832,10 @@ class NORA(GenericGPAcquisition):
             return self._do_mc_sample_nessai(surrogate, bounds=bounds, rng=rng)
         if sampler.lower() == "blackjax":
             return self._do_mc_sample_blackjax(surrogate, bounds=bounds, rng=rng)
+        if sampler.lower() == "hmc":
+            return self._do_mc_sample_hmc(surrogate, bounds=bounds, rng=rng)
+        if sampler.lower() == "nuts":
+            return self._do_mc_sample_nuts(surrogate, bounds=bounds, rng=rng)
         raise ValueError(f"Sampler '{sampler}' not known.")
 
     # For tests only.
@@ -842,6 +849,51 @@ class NORA(GenericGPAcquisition):
         for i in range(n_total):
             X[i] = proposer.get(rng=rng)
         return X, None, None, None, None, None
+
+    def _do_mc_sample_hmc(self, surrogate, bounds=None, rng=None):
+        """
+        Gradient-based (HMC) acquisition sampling.
+
+        Chains are seeded from the surrogate's training points and sample the
+        GP-mean surface -- the same target the nested samplers use -- using the
+        analytic, vectorized mean-gradient. Returns an equally weighted pool of
+        candidates for the downstream kriging-believer ranking.
+
+        Notes
+        -----
+        Unlike the nested samplers this provides no evidence (``logZ`` is
+        returned as ``None``), and it refines *discovered* modes rather than
+        discovering new ones: multimodal coverage comes from seeding one chain
+        per training point. Rank-0 only for now.
+        """
+        if not mpi.is_main_process:
+            return None, None, None, None, None, None
+        use_bounds = self.bounds_ if bounds is None else bounds
+        kw = dict(n_warmup=40, n_samples=60, thin=6, n_leapfrog=15, max_chains=256)
+        kw.update(getattr(self, "_hmc_kwargs", {}) or {})
+        X, y, sigma_y, w = hmc_acquire(surrogate, use_bounds, rng=rng, **kw)
+        return X, y, sigma_y, w, None, None
+
+    def _do_mc_sample_nuts(self, surrogate, bounds=None, rng=None):
+        """
+        BlackJAX NUTS acquisition sampling.
+
+        Like :meth:`_do_mc_sample_hmc`, but with window adaptation (dual-averaging
+        step size plus a diagonal mass matrix), which mixes far better on the
+        anisotropic GP-mean surface. The GP mean and its gradient are evaluated
+        natively in JAX (not through a callback), and a persistent jitted runner
+        keeps the per-call cost flat. Same caveats as HMC: no evidence, refines
+        discovered modes only. Rank-0 only for now.
+        """
+        if not mpi.is_main_process:
+            return None, None, None, None, None, None
+        use_bounds = self.bounds_ if bounds is None else bounds
+        # The acquisition needs a decent candidate pool, not a huge ESS, so keep
+        # the per-iteration NUTS budget modest. Overridable via ``_nuts_kwargs``.
+        kw = dict(n_warmup=80, n_samples=60, thin=1, max_chains=32)
+        kw.update(getattr(self, "_nuts_kwargs", {}) or {})
+        X, y, sigma_y, w = nuts_acquire(surrogate, use_bounds, rng=rng, **kw)
+        return X, y, sigma_y, w, None, None
 
     def _do_mc_sample_polychord(self, surrogate, bounds=None, rng=None):
         # NB: unlike UltraNest (below), PolyChord takes -inf directly (it compares
