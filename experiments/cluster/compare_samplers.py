@@ -110,13 +110,23 @@ def main():
                wall_s=round(wall, 1),
                t_acquire_s=round(tot("time_acquire"), 2),
                t_fit_s=round(tot("time_fit"), 2),
+               # Record EVERY timing column: wall must be fully accounted for.
+               # time_mc is GPry's FINAL posterior extraction (the `mc=` sampler,
+               # identical in every arm) and is NOT part of the acquisition loop --
+               # including it in a per-sampler comparison is meaningless.
+               t_mc_s=round(tot("time_mc"), 2),
+               t_truth_s=round(tot("time_truth"), 2),
+               t_convergence_s=round(tot("time_convergence"), 2),
+               t_loop_s=round(tot("time_acquire") + tot("time_fit"), 2),
+               evals_mc_total=int(np.nansum(df.get("evals_mc", [0]))),
                evals_acquire_total=int(np.nansum(df.get("evals_acquire", [0]))),
                kernel=str(sur.gpr.kernel_), **{k: v for k, v in rec.items()
                                                if k != "mean"})
     with open(os.path.join(outdir, f"{tag}.json"), "w") as f:
         json.dump(res, f, indent=2)
     print(f"[CMP] {tag}: n={res['n_total']} conv={converged} wall={res['wall_s']}s "
-          f"acq={res['t_acquire_s']}s fit={res['t_fit_s']}s | "
+          f"| LOOP={res['t_loop_s']}s (acq={res['t_acquire_s']} fit={res['t_fit_s']}) "
+          f"finalMC={res['t_mc_s']}s | "
           f"KL={rec['kl_nuts']} max|mean|={rec['max_mean_in_sigma']}sig "
           f"std_relerr={rec['std_relerr_nuts']} ESS={rec['ess']:.0f}", flush=True)
 
