@@ -1,0 +1,6 @@
+8 blackjax 1
+8 blackjax 2
+8 blackjax 3
+16 blackjax 1
+16 blackjax 2
+16 blackjax 3
