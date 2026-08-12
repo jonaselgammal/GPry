@@ -496,10 +496,50 @@ def build_jax_gp_loglike(surrogate, pad_multiple=256):
     ell_j = jnp.asarray(ell)
     Xtr_j = jnp.asarray(Xpad)
     alpha_j = jnp.asarray(apad)
+    offset_j = jnp.asarray(t0)
+    scale_j = jnp.asarray(t1 - t0)
+
+    # Bind the per-iteration data as ARGUMENTS to a module-level jitted runner
+    # (not as closure constants of a freshly jitted function). See
+    # _get_jax_loglike_runner for why this matters.
+    runner = _get_jax_loglike_runner()
 
     def loglike(x):
-        xn = offset_j + scale_j * x  # into the regressor's own input space
-        diff = (xn - Xtr_j) / ell_j
+        return runner(x, Xtr_j, alpha_j, ell_j, offset_j, scale_j,
+                      amp, std_y, off_y, family, nu)
+
+    return loglike
+
+
+_JAX_LOGLIKE_RUNNER = None
+
+
+def _get_jax_loglike_runner():
+    """
+    Module-level jitted GP-mean log-likelihood, compiled at most once per
+    (shape, dtype, kernel-family) combination.
+
+    Why this must be a singleton: ``build_jax_gp_loglike`` is called once per
+    active-learning iteration. If it returned ``jax.jit(closure)``, every call
+    would produce a NEW function object, and JAX keys its compilation cache on
+    the function -- so the whole nested-sampling graph would be recompiled every
+    iteration even with the training set padded to a fixed shape. The
+    accumulated LLVM JIT memory then kills the process on the cluster
+    ("LLVM ERROR: Unable to allocate section memory"), while a single call in
+    isolation succeeds. Passing the per-iteration arrays as arguments to one
+    persistent jitted function makes the cache hit instead.
+    """
+    global _JAX_LOGLIKE_RUNNER
+    if _JAX_LOGLIKE_RUNNER is not None:
+        return _JAX_LOGLIKE_RUNNER
+    import jax
+    import jax.numpy as jnp
+    from functools import partial
+
+    @partial(jax.jit, static_argnames=("family", "nu"))
+    def _ll(x, Xtr, alpha, ell, offset, scale, amp, std_y, off_y, family, nu):
+        xn = offset + scale * x  # into the regressor's own input space
+        diff = (xn - Xtr) / ell
         d2 = jnp.sum(diff ** 2, axis=1)
         if family == "rbf":
             kk = jnp.exp(-0.5 * d2)
@@ -515,9 +555,10 @@ def build_jax_gp_loglike(surrogate, pad_multiple=256):
                 kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
             else:
                 raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
-        return std_y * jnp.dot(amp * kk, alpha_j) + off_y
+        return std_y * jnp.dot(amp * kk, alpha) + off_y
 
-    return jax.jit(loglike)
+    _JAX_LOGLIKE_RUNNER = _ll
+    return _JAX_LOGLIKE_RUNNER
 
 
 _NUTS_RUNNER = None
