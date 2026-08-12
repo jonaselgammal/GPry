@@ -1775,7 +1775,50 @@ class Runner:
                 np.prod(self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]) /
                 np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
             )
-        if sampler_name.lower() in ["nested"] + list(_ns_interfaces):
+        if sampler_name.lower() in ("nuts", "hmc"):
+            # Gradient-based MC for the FINAL posterior. Unlike the nested
+            # samplers this yields no evidence (logZ is None), but it reads the
+            # GP natively in JAX and is orders of magnitude cheaper: a nested
+            # sampler driven by a *sequential* slice stepper calls the numpy
+            # surrogate one point at a time (~40 us/call of Python overhead on
+            # ~3 us of arithmetic), which dominates the whole run at high d.
+            #
+            # PRECISION: the final sample must be far more precise than the
+            # per-iteration acquisition sample (which only needs a good candidate
+            # pool, not a converged posterior). Defaults here are therefore much
+            # heavier than NORA's: many more chains, a long warmup, and ~50x the
+            # number of retained samples.
+            from gpry.mc_interfaces import nuts_acquire, hmc_acquire
+            _mc_fn = nuts_acquire if sampler_name.lower() == "nuts" else hmc_acquire
+            _defaults = {
+                "max_chains": 64,
+                "n_warmup": 500,
+                "n_samples": 1000,
+                "thin": 1,
+                "pad_multiple": 512,
+            }
+            if sampler_name.lower() == "nuts":
+                _defaults["max_num_doublings"] = 10
+            for _k, _v in _defaults.items():
+                sampler_options.setdefault(_k, _v)
+            self._last_mc_sampler_type = "mc"
+            X_mc, y_mc, _sigma_mc, w_mc = _mc_fn(
+                self.surrogate, self._last_mc_bounds, rng=self.rng, **sampler_options
+            )
+            logZ, logZstd = None, None
+            if mpi.is_main_process:
+                if y_mc is None:
+                    y_mc = self.surrogate.predict(np.atleast_2d(X_mc), validate=False)
+                logprior_mc = np.array([self.truth.logprior(x) for x in X_mc])
+                self._last_mc_samples = {
+                    "w": w_mc,
+                    "X": X_mc,
+                    mc._name_logp: y_mc,
+                    mc._name_logprior: logprior_mc,
+                    mc._name_loglike: y_mc - logprior_mc,
+                }
+                self._last_mc_logZ = logZ, logZstd
+        elif sampler_name.lower() in ["nested"] + list(_ns_interfaces):
             if resume:
                 warnings.warn(
                     "Resuming not possible for nested sampler. Starting from scratch."
@@ -1803,12 +1846,17 @@ class Runner:
                     mc._name_logprior: logprior_mc,
                     mc._name_loglike: y_mc - logprior_mc,
                 }
-                # Correct for sampling within reduced bounds
-                logZ -= np.log(frac_trust_bounds)
+                # Correct for sampling within reduced bounds.
+                # Some interfaces (e.g. BlackJAX) do not return an evidence.
+                if logZ is None:
+                    self._last_mc_logZ = None, None
+                    logZ = None
+                else:
+                    logZ -= np.log(frac_trust_bounds)
                 # Correct for finite prior fraction
-                log_frac_finite_prev = -np.inf
+                log_frac_finite_prev = -np.inf if logZ is not None else None
                 n_prior = 100 * self.d
-                for _ in range(5):
+                for _ in range(5 if logZ is not None else 0):
                     log_frac_finite = np.log(
                         self.surrogate.fraction_prior_finite(n_prior)
                     )
@@ -1816,8 +1864,9 @@ class Runner:
                         break
                     log_frac_finite_prev = log_frac_finite
                     n_prior *= 10
-                logZ += log_frac_finite
-                self._last_mc_logZ = logZ, logZstd
+                if logZ is not None:
+                    logZ += log_frac_finite
+                    self._last_mc_logZ = logZ, logZstd
         else:  # assume Cobaya sampler
             (
                 self._last_mc_cobaya_info,

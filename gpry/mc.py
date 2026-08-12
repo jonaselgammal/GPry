@@ -430,6 +430,20 @@ def mc_sample_from_gp_ns(
         else:
             raise excpt
     sampler.set_precision(**(sampler_options or {}))
+    # BlackJAX evaluates the surrogate through jax.pure_callback by default, i.e.
+    # it leaves JAX on every likelihood call. Hand it the JAX-native GP-mean
+    # log-likelihood instead so the whole nested-sampling loop stays inside XLA
+    # (the same fast path the acquisition step uses).
+    if isinstance(sampler, nsint.InterfaceBlackJAX):
+        try:
+            from gpry.mc_interfaces import build_jax_gp_loglike
+            sampler.jax_loglike = build_jax_gp_loglike(surrogate)
+        except Exception as excpt:
+            sampler.jax_loglike = None
+            warnings.warn(
+                f"Could not build the JAX GP log-likelihood ({excpt}); BlackJAX will "
+                "fall back to the (much slower) pure_callback path."
+            )
     if not run:
         return sampler
     # Run sampler
