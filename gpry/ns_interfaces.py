@@ -790,6 +790,17 @@ class InterfaceBlackJAX(NSInterface):
             )
             return result
 
+        # Each call rebuilds the NSS algorithm with a fresh loglikelihood closure,
+        # so JAX recompiles the whole nested-sampling graph every acquisition
+        # iteration. Inside an active-learning loop the retained executables
+        # accumulate until the LLVM JIT cannot allocate ("Unable to allocate
+        # section memory" -- a single call in isolation is fine). Drop the stale
+        # compiled code before building the new one; we pay a recompile either
+        # way, but the memory no longer grows without bound.
+        try:
+            jax.clear_caches()
+        except Exception:
+            pass
         # Build the NSS algorithm
         algorithm = nss_api(
             logprior_fn=logprior_fn,
