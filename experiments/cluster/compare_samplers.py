@@ -8,10 +8,18 @@ collapse to 1, and instant NS termination inside the loop), so every previous
 NUTS-vs-nested number was measured against a collapsed baseline. This re-runs
 the comparison against samplers that actually work.
 
-Usage:
-    python compare_samplers.py <d> <sampler> <seed> [max_total] [outdir]
+The FINAL posterior extraction is matched to the acquisition sampler (NUTS
+acquisition -> NUTS final MC, BlackJAX -> BlackJAX), rather than always using
+UltraNest: driving a sequential slice-stepper over the numpy surrogate made the
+final MC dominate the whole run at d>=16. Loop and final-MC timings are recorded
+separately, and the surrogate is checkpointed BEFORE the final MC so a different
+final sampler can be re-run on exactly the same GP later.
 
-  <sampler> = nuts | blackjax | ultranest | polychord
+Usage:
+    python compare_samplers.py <d> <sampler> <seed> [max_total] [outdir] [final_mc]
+
+  <sampler>  = nuts | blackjax | ultranest | polychord
+  <final_mc> = match (default) | nuts | blackjax | nested
 """
 import os
 import sys
@@ -58,16 +66,23 @@ def main():
     seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     max_total = int(sys.argv[4]) if len(sys.argv) > 4 else 0
     outdir = sys.argv[5] if len(sys.argv) > 5 else "compare"
+    final_mc = (sys.argv[6] if len(sys.argv) > 6 else "match").lower()
     os.makedirs(outdir, exist_ok=True)
     if not max_total:
-        max_total = {2: 200, 4: 400, 8: 900, 16: 1600}.get(d, int(70 * d ** 1.5))
+        max_total = {2: 200, 4: 400, 8: 900, 16: 1600, 30: 3000}.get(
+            d, int(70 * d ** 1.5))
+    # Match the final posterior extraction to the acquisition sampler.
+    if final_mc == "match":
+        final_mc = {"nuts": "nuts", "hmc": "hmc", "blackjax": "blackjax"}.get(
+            sampler, "nested")
+    mc_opts = {final_mc: {}}
 
     tgt = C.make_gaussian(d)
     n_initial = 3 * d
     r = Runner(
         tgt["logLkl"], tgt["bounds"].tolist(), ref_bounds=tgt["ref_bounds"].tolist(),
         gpr="RBF", gp_acquisition={"NORA": {"sampler": sampler, "mc_every": 1}},
-        mc={"nested": {}},
+        mc=mc_opts,
         options={"n_initial": n_initial,
                  "max_initial": min(3 * n_initial, max_total),
                  "max_total": max_total},
@@ -86,9 +101,23 @@ def main():
         print("run() ended:\n" + traceback.format_exc(), flush=True)
     wall = time.time() - t0
 
-    tag = f"d{d}_{sampler}_seed{seed}"
+    tag = f"d{d}_{sampler}_mc{final_mc}_seed{seed}"
     sur = r.surrogate
+    # Checkpoint the GP: the final MC does not modify it, so this is exactly the
+    # surrogate the acquisition produced and a different final sampler can be
+    # re-run on it later without repeating the (expensive) acquisition.
     C.save_gp(deepcopy(sur), os.path.join(outdir, f"{tag}_surrogate.pkl"))
+    # Persist the final MC sample itself, for later comparison of final samplers.
+    try:
+        _s = r.last_mc_samples()
+        _w = _s["w"]
+        np.savez_compressed(
+            os.path.join(outdir, f"{tag}_finalmc.npz"),
+            X=np.asarray(_s["X"]),
+            w=(np.ones(len(_s["X"])) if _w is None else np.asarray(_w, float)),
+        )
+    except Exception as exc:
+        print(f"  [warn] could not save final MC sample: {exc!r}", flush=True)
     r.progress.data.to_csv(os.path.join(outdir, f"{tag}_iters.csv"), index=False)
 
     # Sampler-independent scoring + FULL corner plot
@@ -105,7 +134,8 @@ def main():
 
     df = r.progress.data
     tot = lambda c: float(np.nansum(df[c].values)) if c in df else float("nan")
-    res = dict(d=d, sampler=sampler, seed=seed, converged=converged,
+    res = dict(d=d, sampler=sampler, final_mc=final_mc, seed=seed,
+               converged=converged,
                n_total=int(sur.n_total), n_iterations=int(len(df)),
                wall_s=round(wall, 1),
                t_acquire_s=round(tot("time_acquire"), 2),
