@@ -151,6 +151,30 @@ class Kernel(sk_Kernel):
         This kernel class is taken entirely from the Scikit-optimize package.
     """
 
+    @property
+    def length_scale_bounds(self):
+        """
+        Backwards-compatible alias for :attr:`length_scale_prior`.
+
+        ``length_scale_bounds`` is sklearn's name for this quantity; gpry calls it
+        ``length_scale_prior``, to distinguish it clearly from ``prior_bounds``
+        (the parameter-space box). Raises ``AttributeError`` for kernels that have
+        no length scale, which is the pre-existing behaviour.
+        """
+        return self.length_scale_prior
+
+    def __setstate__(self, state):
+        """
+        Restore a pickled kernel.
+
+        Handles checkpoints written before ``length_scale_bounds`` was renamed to
+        ``length_scale_prior``: without this, unpickling an older surrogate fails in
+        sklearn's ``get_params``, which reads the attribute named in ``__init__``.
+        """
+        if "length_scale_bounds" in state and "length_scale_prior" not in state:
+            state["length_scale_prior"] = state.pop("length_scale_bounds")
+        self.__dict__.update(state)
+
     def __add__(self, b):
         if not isinstance(b, Kernel):
             return Sum(self, ConstantKernel(b))
@@ -249,12 +273,12 @@ class Kernel(sk_Kernel):
 
 class RBF(Kernel, sk_RBF):
     def __init__(
-        self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5), prior_bounds=None
+        self, length_scale=1.0, length_scale_prior=(1e-3, 1e1), prior_bounds=None
     ):
         self.length_scale = length_scale
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RBF kernel "
@@ -288,12 +312,12 @@ class RBF(Kernel, sk_RBF):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     def gradient_x(self, x, X_train):
@@ -324,15 +348,15 @@ class Matern(Kernel, sk_Matern):
     def __init__(
         self,
         length_scale=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=(1e-3, 1e1),
         nu=1.5,
         prior_bounds=None,
     ):
         self.length_scale = length_scale
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.nu = nu
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the Matern kernel "
@@ -366,12 +390,12 @@ class Matern(Kernel, sk_Matern):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     def gradient_x(self, x, X_train):
@@ -488,16 +512,16 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         self,
         length_scale=1.0,
         alpha=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=(1e-3, 1e1),
         alpha_bounds=(1e-5, 1e5),
         prior_bounds=None,
     ):
         self.length_scale = length_scale
         self.alpha = alpha
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.alpha_bounds = alpha_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RQ kernel "
@@ -535,12 +559,12 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     @property
@@ -576,16 +600,16 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         self,
         length_scale=1.0,
         periodicity=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=(1e-3, 1e1),
         periodicity_bounds=(1e-5, 1e5),
         prior_bounds=None,
     ):
         self.length_scale = length_scale
         self.periodicity = periodicity
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.periodicity_bounds = periodicity_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RQ kernel "
@@ -623,14 +647,14 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 len(self.length_scale),
                 max_length=self.max_length,
             )
         return Hyperparameter(
             "length_scale",
             "numeric",
-            self.length_scale_bounds,
+            self.length_scale_prior,
             max_length=self.max_length,
         )
 

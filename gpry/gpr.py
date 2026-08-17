@@ -114,6 +114,13 @@ class GaussianProcessRegressor(sk_GPR):
         must be finite. Note that n_restarts_optimizer == 0 implies that one
         run is performed.
 
+    prior_bounds : array-like, shape = (n_dims, 2), optional
+        Bounds of the parameter space, **in the GPR's own (transformed) input space**,
+        i.e. ``preprocessing_X.transform_bounds(bounds)``. Only needed when a length
+        correlation kernel is created with ``length_scale_prior="dynamic"``, in which
+        case the length-scale bounds are derived from the prior size. Supplied by
+        :class:`gpry.surrogate.SurrogateModel`.
+
     random_state : int or numpy.random.Generator, optional
         The generator used to perform random operations of the GPR. If an integer is
         given, it is used as a seed for the default global numpy random number generator.
@@ -160,6 +167,7 @@ class GaussianProcessRegressor(sk_GPR):
         noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
+        prior_bounds=None,
         random_state=None,
     ):
         self.n_eval = 0
@@ -200,7 +208,8 @@ class GaussianProcessRegressor(sk_GPR):
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
             ) * length_corr_kernel(
                 length_scale_init,
-                prior_bounds=length_scale_prior,
+                length_scale_prior=length_scale_prior,
+                prior_bounds=prior_bounds,
                 **kernel_args,
             )
             # Use noise level as upper bound if added as additive kernel
