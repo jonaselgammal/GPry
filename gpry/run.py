@@ -400,7 +400,7 @@ class Runner:
                 "regressor": {
                     "kernel": "RBF",
                     "output_scale_prior": [1e-2, 1e3],
-                    "length_scale_prior": [1e-3, 1e1],
+                    "length_scale_prior": [1e-3, 1e2],
                     "noise_level": 1e-2,
                     "optimizer": "fmin_l_bfgs_b",
                     "n_restarts_optimizer": 10 + 2 * self.d,

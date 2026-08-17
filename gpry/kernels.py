@@ -76,16 +76,24 @@ class Hyperparameter(
         changed during hyperparameter tuning. If None is passed, the "fixed" is
         derived based on the given bounds.
     dynamic : bool, default=None
-        Whether the value of this hyperparameter is dynamic, i.e. whether the
-        bounds of the hyperparameter should automatically be adjusted to two
-        orders of magnitude above and below the current best fit value. If None
-        is passed, the "dynamic" is derived based on the given bounds.
+        Whether the bounds of this hyperparameter are derived on access rather
+        than fixed. If None, it is derived from the given bounds (True if they
+        were passed as the string "dynamic"). Two cases, see ``max_length``:
+
+        * ``max_length`` is None: the bounds track the *current* value, as
+          ``[value * 1e-3, value * 100]``. Since ``Kernel.bounds`` is a property
+          and the fit reads it once per refit, the search box re-centres on the
+          latest best fit at every refit.
+        * ``max_length`` is given: the bounds are ``[max_length * 1e-3,
+          max_length * 100]``, i.e. fixed but scaled to each parameter's prior
+          size.
     max_length : float or array-like, shape = (n_dimensions,)
-        The prior bounds of the posterior distribution (of the parameter-space,
-        not the hyperparameter space) is required for hyperparameters which are
-        length scales (correlation lengths) if their bounds are set to
-        "dynamic". This is done to restrict their range to the same order of
-        magnitude as the prior size (actually 2x the prior).
+        Size of the parameter-space prior (*not* of the hyperparameter space)
+        per dimension, i.e. ``upper - lower`` of the bounds in the kernel's own
+        (transformed) input space. Only used for length-scale (correlation
+        length) hyperparameters whose bounds are set to "dynamic", to scale
+        their allowed range to the prior size. Derived from the ``prior_bounds``
+        passed to the kernel.
     """
 
     # A raw namedtuple is very memory efficient as it packs the attributes
@@ -273,7 +281,7 @@ class Kernel(sk_Kernel):
 
 class RBF(Kernel, sk_RBF):
     def __init__(
-        self, length_scale=1.0, length_scale_prior=(1e-3, 1e1), prior_bounds=None
+        self, length_scale=1.0, length_scale_prior=(1e-3, 1e2), prior_bounds=None
     ):
         self.length_scale = length_scale
         self.length_scale_prior = length_scale_prior
@@ -348,7 +356,7 @@ class Matern(Kernel, sk_Matern):
     def __init__(
         self,
         length_scale=1.0,
-        length_scale_prior=(1e-3, 1e1),
+        length_scale_prior=(1e-3, 1e2),
         nu=1.5,
         prior_bounds=None,
     ):
@@ -512,7 +520,7 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         self,
         length_scale=1.0,
         alpha=1.0,
-        length_scale_prior=(1e-3, 1e1),
+        length_scale_prior=(1e-3, 1e2),
         alpha_bounds=(1e-5, 1e5),
         prior_bounds=None,
     ):
@@ -600,7 +608,7 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         self,
         length_scale=1.0,
         periodicity=1.0,
-        length_scale_prior=(1e-3, 1e1),
+        length_scale_prior=(1e-3, 1e2),
         periodicity_bounds=(1e-5, 1e5),
         prior_bounds=None,
     ):

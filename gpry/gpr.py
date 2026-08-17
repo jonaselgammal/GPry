@@ -64,8 +64,16 @@ class GaussianProcessRegressor(sk_GPR):
     output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
         Prior for the (non-squared) scale parameter, in normalised logp units.
 
-    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
+    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e2])
         Prior for the length parameters, as a fraction of the parameter priors sizes.
+        May also be given per-dimension, as an array of shape ``(n_dims, 2)``. Pass the
+        string ``"dynamic"`` to derive the bounds from the prior size instead, which
+        requires ``prior_bounds`` (see :class:`gpry.kernels.Hyperparameter`).
+
+        The upper bound is deliberately well above 1: in the normalised input space a
+        smooth (nearly quadratic) log-posterior is best described by a correlation
+        length several times the prior width, so fitted length scales of O(10) are
+        normal and a tighter bound would clamp them.
 
     noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
@@ -162,7 +170,7 @@ class GaussianProcessRegressor(sk_GPR):
         self,
         kernel="RBF",
         output_scale_prior=[1e-2, 1e3],
-        length_scale_prior=[1e-3, 1e1],
+        length_scale_prior=[1e-3, 1e2],
         noise_level=1e-2,
         noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
