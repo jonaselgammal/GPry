@@ -148,3 +148,4 @@ doc/source/output
 
 # profiling
 *.prof
+files/

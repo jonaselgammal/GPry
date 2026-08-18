@@ -442,6 +442,63 @@ class GaussianProcessRegressor(sk_GPR):
         self.n_eval_loglike += 1
         return super().log_marginal_likelihood(*args, **kwargs)
 
+    def _draw_restart_thetas(
+        self, n, hyperparameter_bounds, obj_func, strategy="uniform", theta_cov=None,
+        screen_factor=8, local_sigma_decades=1.0,
+    ):
+        """
+        Produce the starting points for the *random* hyperparameter restarts.
+
+        Measurements on real runs show that the accepted fit essentially always comes
+        from one of the two informed starts (previous theta, covariance-based guess),
+        while the tens of random restarts land far from the optimum and merely consume
+        the fit budget. These strategies try to spend that budget better:
+
+        - ``"uniform"``: the original behaviour -- log-uniform over the whole
+          hyperparameter prior, rejecting draws with non-finite log-marginal likelihood.
+        - ``"screen"``: draw ``screen_factor * n`` uniform candidates, evaluate the
+          log-marginal likelihood once each (gradient-free: one Cholesky, i.e. the cost
+          of a single L-BFGS iteration) and keep the best ``n``. Same number of
+          expensive optimisations, but started from demonstrably better points.
+        - ``"local"``: draw log-normal perturbations around ``theta_cov`` (width
+          ``local_sigma_decades`` decades), i.e. search near the data-driven guess
+          instead of across the whole prior. Falls back to ``"uniform"`` if no
+          covariance-based guess is available.
+        - ``"local_screen"``: ``"local"`` proposals, screened as in ``"screen"``.
+
+        Returns a list of ``n`` theta vectors.
+        """
+        if n <= 0:
+            return []
+        lo, hi = hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
+        use_local = strategy in ("local", "local_screen") and theta_cov is not None
+        n_draw = n * screen_factor if strategy in ("screen", "local_screen") else n
+
+        def _propose():
+            if use_local:
+                # log-normal around the covariance-based guess, clipped to the prior
+                width = local_sigma_decades * np.log(10.0)
+                return np.clip(
+                    theta_cov + self._rng.normal(scale=width, size=len(theta_cov)),
+                    lo, hi,
+                )
+            return self._rng.uniform(lo, hi)
+
+        candidates = []
+        for _ in range(n_draw):
+            # Reject non-finite draws, as the original implementation did.
+            for _try in range(100):
+                th = _propose()
+                val = obj_func(th, eval_gradient=False)
+                if np.isfinite(val):
+                    break
+            candidates.append((th, val))
+        if strategy in ("screen", "local_screen"):
+            # obj_func returns the NEGATIVE log-marginal likelihood: smaller is better.
+            candidates.sort(key=lambda tv: tv[1])
+            candidates = candidates[:n]
+        return [th for th, _ in candidates[:n]]
+
     def _fit_hyperparameters(
         self,
         start_from_current=True,
@@ -539,6 +596,25 @@ class GaussianProcessRegressor(sk_GPR):
                 )
         optima = []
         self._rng = check_random_state(self.random_state)
+        # The informed starts (previous theta, and the covariance-based guess) are the
+        # ones that actually find the optimum in practice; the remaining restarts are
+        # drawn randomly. ``restart_strategy`` controls how those random starts are
+        # produced -- see ``_draw_restart_thetas``.
+        strategy = getattr(self, "restart_strategy", "uniform")
+        n_informed = int(bool(start_from_current)) + int(bool(start_from_cov))
+        theta_cov = None
+        if start_from_cov:
+            theta_cov = self.kernel_.theta.copy()
+            theta_cov[0] = (lambda b: b[1] - 0.1 * (b[1] - b[0]))(
+                hyperparameter_bounds[0]
+            )
+            _, X_cov = mean_covmat_from_evals(self.X_train_, self.y_train_)
+            theta_cov[1 : 1 + X_cov.shape[0]] = np.log(np.sqrt(np.diag(X_cov)))
+        random_thetas = self._draw_restart_thetas(
+            max(0, n_restarts - n_informed), hyperparameter_bounds, obj_func,
+            strategy=strategy, theta_cov=theta_cov,
+        )
+        i_random = 0
         for iteration in range(n_restarts):
             if iteration == 0 and start_from_current:
                 # self.kernel_ guaranteed to exist because self.fitted checked above
@@ -550,23 +626,10 @@ class GaussianProcessRegressor(sk_GPR):
                 # Guess the length hyperparameters from the covariance matrix of the
                 # training points (not from a sample from the GP mean, bc it may still be
                 # overfitting; use a high value for the output scale
-                theta_initial = self.kernel_.theta.copy()
-                theta_initial[0] = (lambda b: b[1] - 0.1 * (b[1] - b[0]))(
-                    hyperparameter_bounds[0]
-                )
-                _, X_cov = mean_covmat_from_evals(self.X_train_, self.y_train_)
-                theta_initial[1 : 1 + X_cov.shape[0]] = np.log(np.sqrt(np.diag(X_cov)))
+                theta_initial = theta_cov
             else:
-                # Additional runs are performed from log-uniform chosen initial theta
-                k = 1
-                while k < 1e6:  # if not, just give up silently
-                    k += 1
-                    theta_initial = self._rng.uniform(
-                        hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
-                    )
-                    eval_value = obj_func(theta_initial, eval_gradient=False)
-                    if np.isfinite(eval_value):
-                        break
+                theta_initial = random_thetas[i_random]
+                i_random += 1
             # Run the optimizer!
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
