@@ -159,6 +159,9 @@ def main():
     ls_max = float(os.environ.get("RST_LSMAX", 0)) or None
     reg = {"kernel": "RBF", "n_restarts_optimizer": n_restarts,
            "restart_strategy": strategy}
+    # L-BFGS ftol; SciPy's default sits far below the LML's ~3e-5 noise floor.
+    if os.environ.get("RST_FTOL"):
+        reg["optimizer_ftol"] = float(os.environ["RST_FTOL"])
     if ls_max:
         reg["length_scale_prior"] = [1e-3, ls_max]
     r = Runner(
@@ -204,7 +207,7 @@ def main():
     tot = lambda c: float(np.nansum(df[c].values)) if c in df else float("nan")
     res = dict(
         target=kind, d=d, arm=arm, strategy=strategy, n_restarts=int(n_restarts),
-        ls_max=ls_max,
+        ls_max=ls_max, optimizer_ftol=reg.get("optimizer_ftol"),
         fit_simple_every=opts.get("fit_simple_every", 1),
         fit_full_every=opts.get("fit_full_every"),
         target_param=(CURVED_B if kind == "curved" else

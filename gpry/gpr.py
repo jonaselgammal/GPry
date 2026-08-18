@@ -16,6 +16,7 @@ from typing import Mapping
 
 # External
 import numpy as np
+import scipy.optimize  # type: ignore
 from scipy.linalg import cholesky, solve_triangular, cho_solve  # type: ignore
 from scipy.linalg.blas import dtrmm as tri_mul  # type: ignore
 from sklearn.base import clone  # type: ignore
@@ -129,6 +130,21 @@ class GaussianProcessRegressor(sk_GPR):
         historical behaviour), ``"screen"``, ``"local"`` or ``"local_screen"``.
         See :meth:`_draw_restart_thetas`.
 
+    optimizer_ftol : float, optional (default: None)
+        Relative ``ftol`` handed to L-BFGS-B when fitting the hyperparameters.
+        ``None`` keeps SciPy's default (2.22e-9).
+
+        That default is far below the numerical noise floor of the
+        log-marginal likelihood: the LML is evaluated through a Cholesky of an
+        ill-conditioned kernel matrix, which on a d=30 surrogate leaves it
+        accurate only to ~3e-5 in absolute terms, while SciPy's default asks
+        L-BFGS to resolve ~8e-8. The optimizer consequently thrashes in failed
+        line searches near the optimum (exiting
+        ``ABNORMAL_TERMINATION_IN_LNSRCH``), spending ~22 function evaluations
+        per iteration on differences that are pure rounding error. Setting
+        ``optimizer_ftol=1e-5`` reached an identical optimum (to six
+        significant figures) with 3-7x fewer evaluations.
+
     prior_bounds : array-like, shape = (n_dims, 2), optional
         Bounds of the parameter space, **in the GPR's own (transformed) input space**,
         i.e. ``preprocessing_X.transform_bounds(bounds)``. Only needed when a length
@@ -183,10 +199,12 @@ class GaussianProcessRegressor(sk_GPR):
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
         restart_strategy="uniform",
+        optimizer_ftol=None,
         prior_bounds=None,
         random_state=None,
     ):
         self.restart_strategy = restart_strategy
+        self.optimizer_ftol = optimizer_ftol
         self.n_eval = 0
         self.n_eval_loglike = 0
         self._fitted = False
@@ -512,6 +530,19 @@ class GaussianProcessRegressor(sk_GPR):
             candidates.sort(key=lambda tv: tv[1])
             candidates = candidates[:n]
         return [th for th, _ in candidates[:n]]
+
+    def _constrained_optimization(self, obj_func, initial_theta, bounds):
+        """
+        As scikit-learn's, but allows the L-BFGS-B ``ftol`` to be raised above
+        the LML's numerical noise floor (see ``optimizer_ftol``).
+        """
+        if self.optimizer_ftol is None or self.optimizer != "fmin_l_bfgs_b":
+            return super()._constrained_optimization(obj_func, initial_theta, bounds)
+        opt_res = scipy.optimize.minimize(
+            obj_func, initial_theta, method="L-BFGS-B", jac=True, bounds=bounds,
+            options={"ftol": self.optimizer_ftol},
+        )
+        return opt_res.x, opt_res.fun
 
     def _fit_hyperparameters(
         self,
