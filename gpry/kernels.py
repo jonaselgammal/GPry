@@ -93,7 +93,11 @@ class Hyperparameter(
         (transformed) input space. Only used for length-scale (correlation
         length) hyperparameters whose bounds are set to "dynamic", to scale
         their allowed range to the prior size. Derived from the ``prior_bounds``
-        passed to the kernel.
+        passed to the kernel. Note: :class:`RationalQuadratic` and
+        :class:`ExpSineSquared` set ``max_length`` to *twice* the prior width
+        (``2 * (upper - lower)``) to accommodate their broader correlation
+        structure, producing dynamic bounds of
+        ``[width * 2e-3, width * 200]``.
     """
 
     # A raw namedtuple is very memory efficient as it packs the attributes
