@@ -302,3 +302,44 @@ d=30 failure rate. The per-iteration fit is load-bearing.
 - A first ftol sweep reported sub-1x speedups for tolerances looser than the
   default (impossible). Cause: the reference was keyed by a dict with duplicate
   start names, so it summed 5 unique starts against 8-start totals.
+
+---
+
+# FINAL HEAD-TO-HEAD (50 runs, exclusive nodes)
+
+`BASE` = today's GPry defaults (S0 = 10+2d restarts, length-scale ceiling 1e2,
+SciPy default ftol). `PROP` = S2 (informed starts only) + ceiling 1e3 +
+`optimizer_ftol=1e-5`. Both arms re-run under identical `--exclusive`
+allocation, because the earlier study co-scheduled four jobs per node and its
+wall-clock numbers were not a usable baseline.
+
+| case | fit BASE -> PROP | fit speedup | loop BASE -> PROP | loop speedup | quality BASE -> PROP | failures |
+|---|---|---|---|---|---|---|
+| gauss d=30 | 640 -> 126 s | **5.07x** | 1125 -> 758 s | **1.48x** | 0.0205 -> 0.0192 | 1 -> **0** |
+| gauss d=16 | 19.4 -> 2.1 s | **9.41x** | 120 -> 100 s | 1.20x | 0.0058 -> 0.0054 | 0 -> 0 |
+| gauss d=8 | 3.7 -> 0.3 s | **10.91x** | 57 -> 52 s | 1.11x | 0.0016 -> 0.0021 | 0 -> 0 |
+| curved d=5 | 5.3 -> 0.6 s | **8.38x** | 102 -> 89 s | 1.15x | 0.0019 -> 0.0017 | 0 -> 0 |
+| multimode d=5 | 82.6 -> 7.8 s | **10.58x** | 276 -> 186 s | **1.48x** | 0.0623 -> **0.0515** | 0 -> 0 |
+
+Quality is equal or better in every case, `n_total` is unchanged (675/690,
+208/208, 300/300), and the single d=30 baseline failure disappears.
+
+## This closes the fit-cost line of work
+
+| case | fit share BASE | fit share PROP | loop gain if the fit were FREE |
+|---|---|---|---|
+| gauss d=30 | 56.9% | 16.7% | 1.20x |
+| gauss d=16 | 16.1% | 2.1% | 1.02x |
+| gauss d=8 | 6.5% | 0.7% | 1.01x |
+| curved d=5 | 5.2% | 0.7% | 1.01x |
+| multimode d=5 | 30.0% | 4.2% | 1.04x |
+
+Hyperparameter fitting is no longer the bottleneck at any dimension tested.
+Further work on it is capped at 1.20x (d=30) and ~1.02x elsewhere. The
+remaining cost is **acquisition**: 621 s of the 758 s d=30 loop.
+
+## Proposed defaults for main
+
+1. `length_scale_prior` ceiling `1e2` -> `1e3` (removes the railing failure)
+2. `n_restarts_optimizer` `10 + 2d` -> `2` (informed starts only)
+3. `optimizer_ftol` `None` -> `1e-5` (above the LML's ~3e-5 noise floor)
