@@ -75,7 +75,7 @@ FIXED_BUDGET = set(os.environ.get("RST_FIXED", "multimode").split(",")) - {""}
 # Target difficulty is calibrated so that the CONTROL arm (S0) actually solves
 # the target: if the control already fails, a cheaper arm failing carries no
 # information about the restart budget. Overridable for difficulty sweeps.
-CURVED_B = float(os.environ.get("RST_B", 0.8))
+CURVED_B = float(os.environ.get("RST_B", 1.2))
 CURVED_NTWIST = int(os.environ.get("RST_NTWIST", 1))
 MULTIMODE_SEP = float(os.environ.get("RST_SEP", 4.0))
 MULTIMODE_K = int(os.environ.get("RST_K", 4))

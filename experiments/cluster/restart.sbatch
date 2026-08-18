@@ -25,8 +25,10 @@ read -r KIND D ARM SEED <<< "$LINE"
 # Target-difficulty knobs for the d=5 non-Gaussian arms, calibrated so that the
 # CONTROL arm actually solves the target (see run_restart_study.py). Exported
 # explicitly so the submitted difficulty is recorded in the job log.
-export RST_B=${RST_B:-0.2}
-export RST_SEP=${RST_SEP:-4.0}
-echo "task ${SLURM_ARRAY_TASK_ID}: target=$KIND d=$D arm=$ARM seed=$SEED (B=$RST_B SEP=$RST_SEP)"
+export RST_B=${RST_B:-1.2}          # banana twist strength (single bend)
+export RST_NTWIST=${RST_NTWIST:-1}  # one bend: chaining all links is unsolvable
+export RST_SEP=${RST_SEP:-4.0}      # 4-mode separation (sep=6 loses a mode)
+export RST_FIXED=${RST_FIXED:-multimode}  # matched budget for multimode only
+echo "task ${SLURM_ARRAY_TASK_ID}: target=$KIND d=$D arm=$ARM seed=$SEED (B=$RST_B NTWIST=$RST_NTWIST SEP=$RST_SEP FIXED=$RST_FIXED)"
 srun python run_restart_study.py "$KIND" "$D" "$ARM" "$SEED" \
      /bhome/$USER/gpry_nuts_tests/restart_out
