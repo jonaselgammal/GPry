@@ -56,13 +56,21 @@ MAX_TOTAL = {("gauss", 8): 900, ("gauss", 16): 1600, ("gauss", 30): 3000,
              ("curved", 5): 600, ("multimode", 5): 600}
 
 
+# Target difficulty is calibrated so that the CONTROL arm (S0) actually solves
+# the target: if the control already fails, a cheaper arm failing carries no
+# information about the restart budget. Overridable for difficulty sweeps.
+CURVED_B = float(os.environ.get("RST_B", 0.35))
+MULTIMODE_SEP = float(os.environ.get("RST_SEP", 4.0))
+MULTIMODE_K = int(os.environ.get("RST_K", 4))
+
+
 def build_target(kind, d):
     if kind == "gauss":
         return C.make_gaussian(d)
     if kind == "curved":
-        return C.make_curved(d)
+        return C.make_curved(d, b=CURVED_B)
     if kind == "multimode":
-        return C.make_multimode(d, n_modes=4, sep=6.0)
+        return C.make_multimode(d, n_modes=MULTIMODE_K, sep=MULTIMODE_SEP)
     raise ValueError(f"unknown target {kind!r}")
 
 
@@ -164,6 +172,8 @@ def main():
     tot = lambda c: float(np.nansum(df[c].values)) if c in df else float("nan")
     res = dict(
         target=kind, d=d, arm=arm, strategy=strategy, n_restarts=int(n_restarts),
+        target_param=(CURVED_B if kind == "curved" else
+                      MULTIMODE_SEP if kind == "multimode" else None),
         seed=seed, converged=converged, error=err,
         n_total=int(sur.n_total), n_iterations=int(len(df)),
         wall_s=round(wall, 1),
