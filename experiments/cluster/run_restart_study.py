@@ -53,13 +53,24 @@ ARMS = {
 # unimodal Gaussian of the same dimension would need: four separated basins (or
 # a curved ridge) simply need more points to resolve.
 MAX_TOTAL = {("gauss", 8): 900, ("gauss", 16): 1600, ("gauss", 30): 3000,
-             ("curved", 5): 600, ("multimode", 5): 600}
+             ("curved", 5): 300, ("multimode", 5): 300}
+
+# The d=5 non-Gaussian arms run to a FIXED budget with convergence disabled.
+# Reason: on the multimode target GPry's convergence criterion fires at wildly
+# inconsistent points (control arm stopped at n = 95, 115 and 280 across three
+# seeds, with the mode-weight error swinging 0.056 -> 0.79), so a
+# quality-at-convergence comparison is dominated by *when the criterion fired*
+# rather than by the hyperparameter fit under test.  Matching the budget
+# removes that noise and makes the robustness question well posed.  The
+# Gaussian arms keep natural convergence -- that is where the SPEED claim
+# lives, and there convergence is stable (d=16: n=304 on all three v3 seeds).
+FIXED_BUDGET = {"curved", "multimode"}
 
 
 # Target difficulty is calibrated so that the CONTROL arm (S0) actually solves
 # the target: if the control already fails, a cheaper arm failing carries no
 # information about the restart budget. Overridable for difficulty sweeps.
-CURVED_B = float(os.environ.get("RST_B", 0.35))
+CURVED_B = float(os.environ.get("RST_B", 0.2))
 MULTIMODE_SEP = float(os.environ.get("RST_SEP", 4.0))
 MULTIMODE_K = int(os.environ.get("RST_K", 4))
 
@@ -136,6 +147,7 @@ def main():
         options={"n_initial": n_initial,
                  "max_initial": min(3 * n_initial, max_total),
                  "max_total": max_total},
+        convergence_criterion=("DontConverge" if kind in FIXED_BUDGET else None),
         seed=seed, verbose=1, checkpoint=None,
     )
     r.acquisition._nuts_kwargs = {"pad_multiple": 512, "max_num_doublings": 7}
@@ -175,6 +187,7 @@ def main():
         target_param=(CURVED_B if kind == "curved" else
                       MULTIMODE_SEP if kind == "multimode" else None),
         seed=seed, converged=converged, error=err,
+        fixed_budget=bool(kind in FIXED_BUDGET),
         n_total=int(sur.n_total), n_iterations=int(len(df)),
         wall_s=round(wall, 1),
         t_loop_s=round(tot("time_acquire") + tot("time_fit"), 2),
