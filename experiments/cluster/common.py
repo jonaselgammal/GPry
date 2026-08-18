@@ -274,7 +274,7 @@ def load_gp(path):
 # Both have EXACT closed-form samples, so evaluation never needs a sampler on
 # the truth side (same design as `two_mode_reference_samples`).
 # --------------------------------------------------------------------------- #
-def make_curved(d, b=0.5, cond=10.0, seed=None):
+def make_curved(d, b=0.5, cond=10.0, n_twist=None, seed=None):
     """
     Chained twisted Gaussian ("banana") in d dimensions.
 
@@ -297,12 +297,19 @@ def make_curved(d, b=0.5, cond=10.0, seed=None):
     """
     s = np.geomspace(1.0, 1.0 / np.sqrt(cond), d)
     s2 = s ** 2
+    # Number of twisted links. n_twist=1 is the classic single-bend banana;
+    # chaining every link (n_twist=d-1) compounds the curvature and proved
+    # unsolvable for GPry at any twist strength that was not already nearly
+    # Gaussian -- see notes/RESTART_STUDY.md.
+    n_twist = (d - 1) if n_twist is None else int(n_twist)
+    n_twist = max(0, min(n_twist, d - 1))
+    links = range(1, n_twist + 1)
 
     def forward(Z):
         """base -> target (vectorised over rows)"""
         Z = np.atleast_2d(np.asarray(Z, float))
         X = Z.copy()
-        for i in range(1, d):
+        for i in links:
             X[:, i] = Z[:, i] + b * (Z[:, i - 1] ** 2 - s2[i - 1])
         return X
 
@@ -310,7 +317,7 @@ def make_curved(d, b=0.5, cond=10.0, seed=None):
         """target -> base (vectorised over rows)"""
         X = np.atleast_2d(np.asarray(X, float))
         Z = X.copy()
-        for i in range(1, d):
+        for i in links:
             Z[:, i] = X[:, i] - b * (Z[:, i - 1] ** 2 - s2[i - 1])
         return Z
 
@@ -323,7 +330,10 @@ def make_curved(d, b=0.5, cond=10.0, seed=None):
         return float(out[0]) if X.shape[0] == 1 else out
 
     # Analytic moments of the pushforward (see docstring): mean 0, diagonal cov.
-    marg = np.sqrt(s2 + np.concatenate(([0.0], 2 * b ** 2 * s2[:-1] ** 2)))
+    extra = np.zeros(d)
+    for i in links:
+        extra[i] = 2 * b ** 2 * s2[i - 1] ** 2
+    marg = np.sqrt(s2 + extra)
     cov = np.diag(marg ** 2)
     # Bounds from a large EXACT sample: the banana is skewed, so a symmetric
     # k-sigma box would clip the arms.
@@ -335,7 +345,8 @@ def make_curved(d, b=0.5, cond=10.0, seed=None):
     ref_bounds = np.stack([q[0], q[1]], axis=1)
     return dict(logLkl=logLkl, bounds=bounds, ref_bounds=ref_bounds,
                 mean=np.zeros(d), cov=cov, marg=marg, d=d, b=float(b),
-                base_std=s, forward=forward, inverse=inverse, kind="curved")
+                n_twist=n_twist, base_std=s, forward=forward, inverse=inverse,
+                kind="curved")
 
 
 def curved_reference_samples(target, n=40000, seed=123):

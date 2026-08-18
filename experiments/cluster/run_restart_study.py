@@ -64,13 +64,19 @@ MAX_TOTAL = {("gauss", 8): 900, ("gauss", 16): 1600, ("gauss", 30): 3000,
 # removes that noise and makes the robustness question well posed.  The
 # Gaussian arms keep natural convergence -- that is where the SPEED claim
 # lives, and there convergence is stable (d=16: n=304 on all three v3 seeds).
-FIXED_BUDGET = {"curved", "multimode"}
+# Only the MULTIMODE target needs this. The single-bend banana already recovers
+# with very low seed variance under natural convergence, and disabling
+# convergence there just pushes the run past GP saturation into
+# GPAcquisitionError ("Acquisition returning no values"), which is a different
+# arbitrary stopping rule rather than a matched budget.
+FIXED_BUDGET = set(os.environ.get("RST_FIXED", "multimode").split(",")) - {""}
 
 
 # Target difficulty is calibrated so that the CONTROL arm (S0) actually solves
 # the target: if the control already fails, a cheaper arm failing carries no
 # information about the restart budget. Overridable for difficulty sweeps.
-CURVED_B = float(os.environ.get("RST_B", 0.2))
+CURVED_B = float(os.environ.get("RST_B", 0.8))
+CURVED_NTWIST = int(os.environ.get("RST_NTWIST", 1))
 MULTIMODE_SEP = float(os.environ.get("RST_SEP", 4.0))
 MULTIMODE_K = int(os.environ.get("RST_K", 4))
 
@@ -79,7 +85,7 @@ def build_target(kind, d):
     if kind == "gauss":
         return C.make_gaussian(d)
     if kind == "curved":
-        return C.make_curved(d, b=CURVED_B)
+        return C.make_curved(d, b=CURVED_B, n_twist=CURVED_NTWIST)
     if kind == "multimode":
         return C.make_multimode(d, n_modes=MULTIMODE_K, sep=MULTIMODE_SEP)
     raise ValueError(f"unknown target {kind!r}")
@@ -137,11 +143,18 @@ def main():
 
     tgt = build_target(kind, d)
     n_initial = 3 * d
+    # Length-scale prior. The merged default is [1e-3, 1e2]; at d=30 the fit
+    # rails against that ceiling (a Gaussian log-posterior is quadratic, so the
+    # RBF legitimately wants a very long correlation length), so allow it to be
+    # widened for the diagnosis.
+    ls_max = float(os.environ.get("RST_LSMAX", 0)) or None
+    reg = {"kernel": "RBF", "n_restarts_optimizer": n_restarts,
+           "restart_strategy": strategy}
+    if ls_max:
+        reg["length_scale_prior"] = [1e-3, ls_max]
     r = Runner(
         tgt["logLkl"], tgt["bounds"].tolist(), ref_bounds=tgt["ref_bounds"].tolist(),
-        surrogate={"regressor": {"kernel": "RBF",
-                                 "n_restarts_optimizer": n_restarts,
-                                 "restart_strategy": strategy}},
+        surrogate={"regressor": reg},
         gp_acquisition={"NORA": {"sampler": "nuts", "mc_every": 1}},
         mc={"nuts": {}},
         options={"n_initial": n_initial,
@@ -184,6 +197,7 @@ def main():
     tot = lambda c: float(np.nansum(df[c].values)) if c in df else float("nan")
     res = dict(
         target=kind, d=d, arm=arm, strategy=strategy, n_restarts=int(n_restarts),
+        ls_max=ls_max,
         target_param=(CURVED_B if kind == "curved" else
                       MULTIMODE_SEP if kind == "multimode" else None),
         seed=seed, converged=converged, error=err,
