@@ -143,6 +143,15 @@ def main():
 
     tgt = build_target(kind, d)
     n_initial = 3 * d
+    opts = {"n_initial": n_initial, "max_initial": min(3 * n_initial, max_total),
+            "max_total": max_total}
+    # The per-iteration "simple" fit is a full L-BFGS from the current theta and
+    # costs 15 s each at d=30 (vs 0.08 s at d=8), forming a floor that no restart
+    # policy can touch. RST_SIMPLE_EVERY thins it.
+    if os.environ.get("RST_SIMPLE_EVERY"):
+        opts["fit_simple_every"] = int(os.environ["RST_SIMPLE_EVERY"])
+    if os.environ.get("RST_FULL_EVERY"):
+        opts["fit_full_every"] = float(os.environ["RST_FULL_EVERY"])
     # Length-scale prior. The merged default is [1e-3, 1e2]; at d=30 the fit
     # rails against that ceiling (a Gaussian log-posterior is quadratic, so the
     # RBF legitimately wants a very long correlation length), so allow it to be
@@ -157,9 +166,7 @@ def main():
         surrogate={"regressor": reg},
         gp_acquisition={"NORA": {"sampler": "nuts", "mc_every": 1}},
         mc={"nuts": {}},
-        options={"n_initial": n_initial,
-                 "max_initial": min(3 * n_initial, max_total),
-                 "max_total": max_total},
+        options=opts,
         convergence_criterion=("DontConverge" if kind in FIXED_BUDGET else None),
         seed=seed, verbose=1, checkpoint=None,
     )
@@ -198,6 +205,8 @@ def main():
     res = dict(
         target=kind, d=d, arm=arm, strategy=strategy, n_restarts=int(n_restarts),
         ls_max=ls_max,
+        fit_simple_every=opts.get("fit_simple_every", 1),
+        fit_full_every=opts.get("fit_full_every"),
         target_param=(CURVED_B if kind == "curved" else
                       MULTIMODE_SEP if kind == "multimode" else None),
         seed=seed, converged=converged, error=err,
