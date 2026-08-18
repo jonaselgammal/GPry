@@ -17,6 +17,22 @@ from scipy.stats import chi2
 # cut in the spurious-mass metric. 0.99 -> a perfect sample contributes 1%.
 SPURIOUS_QUANTILE = 0.99
 
+# Trim threshold (in base-sigma units) for the banana's inverse twist; see
+# `evaluate_recovery_curved`. Exact samples stay below ~5.
+Z_TRIM = 8.0
+
+
+def _wcorr(a, b, w=None):
+    """Weighted Pearson correlation."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    w = np.ones(len(a)) if w is None else np.asarray(w, float)
+    w = w / w.sum()
+    am, bm = a - np.average(a, weights=w), b - np.average(b, weights=w)
+    va, vb = np.average(am ** 2, weights=w), np.average(bm ** 2, weights=w)
+    if va <= 0 or vb <= 0:
+        return 0.0
+    return float(np.average(am * bm, weights=w) / np.sqrt(va * vb))
+
 
 # --------------------------------------------------------------------------- #
 # Target: anisotropic Gaussian, deterministic per dimension (target_seed=d)
@@ -243,3 +259,246 @@ def save_gp(surrogate, path):
 def load_gp(path):
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+# --------------------------------------------------------------------------- #
+# Non-Gaussian targets for the restart-efficiency study (d=5)
+#
+# The restart study must show that a cheaper hyperparameter-fit budget does not
+# just go faster but stays ROBUST, so the low-d arm uses targets that a wrong
+# length scale actually breaks: a curved (banana) degeneracy and a 4-mode
+# mixture.  GPry's own test suite only ships 2d versions of these
+# (`Curved_degeneracy`, `Ring`) and its n-dim `Himmelblau` silently leaves
+# dimensions unconstrained, so both targets are built from scratch here.
+#
+# Both have EXACT closed-form samples, so evaluation never needs a sampler on
+# the truth side (same design as `two_mode_reference_samples`).
+# --------------------------------------------------------------------------- #
+def make_curved(d, b=0.5, cond=10.0, seed=None):
+    """
+    Chained twisted Gaussian ("banana") in d dimensions.
+
+    Base z ~ N(0, diag(s^2)); the target is the pushforward under the chained
+    twist::
+
+        x_0 = z_0,   x_i = z_i + b * (z_{i-1}^2 - s_{i-1}^2)   (i >= 1)
+
+    which is unit lower-triangular with unit Jacobian, so
+    ``logp(x) = log N(z(x); 0, diag(s^2))`` with ``z(x)`` the (equally
+    triangular, hence exact and cheap) inverse.
+
+    Why this target: the twist is centred (``E[z^2] = s^2``), so the pushforward
+    has mean 0 and a *diagonal* covariance ``diag(s_i^2 + 2 b^2 s_{i-1}^4)`` --
+    i.e. the coordinates are linearly UNCORRELATED but strongly dependent.  A
+    surrogate that collapses to a Gaussian blob therefore scores perfectly on
+    every first- and second-moment metric while being completely wrong, which
+    is exactly the failure a moment-based score would hide.  `evaluate_recovery
+    _curved` catches it by mapping back through ``z(x)``.
+    """
+    s = np.geomspace(1.0, 1.0 / np.sqrt(cond), d)
+    s2 = s ** 2
+
+    def forward(Z):
+        """base -> target (vectorised over rows)"""
+        Z = np.atleast_2d(np.asarray(Z, float))
+        X = Z.copy()
+        for i in range(1, d):
+            X[:, i] = Z[:, i] + b * (Z[:, i - 1] ** 2 - s2[i - 1])
+        return X
+
+    def inverse(X):
+        """target -> base (vectorised over rows)"""
+        X = np.atleast_2d(np.asarray(X, float))
+        Z = X.copy()
+        for i in range(1, d):
+            Z[:, i] = X[:, i] - b * (Z[:, i - 1] ** 2 - s2[i - 1])
+        return Z
+
+    const = -0.5 * (d * np.log(2 * np.pi) + np.sum(np.log(s2)))
+
+    def logLkl(X):
+        X = np.atleast_2d(np.asarray(X, float))
+        Z = inverse(X)
+        out = const - 0.5 * np.sum(Z ** 2 / s2, axis=1)
+        return float(out[0]) if X.shape[0] == 1 else out
+
+    # Analytic moments of the pushforward (see docstring): mean 0, diagonal cov.
+    marg = np.sqrt(s2 + np.concatenate(([0.0], 2 * b ** 2 * s2[:-1] ** 2)))
+    cov = np.diag(marg ** 2)
+    # Bounds from a large EXACT sample: the banana is skewed, so a symmetric
+    # k-sigma box would clip the arms.
+    big = forward(np.random.default_rng(1234).standard_normal((200000, d)) * s)
+    lo, hi = big.min(axis=0), big.max(axis=0)
+    pad = 0.05 * (hi - lo)
+    bounds = np.stack([lo - pad, hi + pad], axis=1)
+    q = np.quantile(big, [0.1, 0.9], axis=0)
+    ref_bounds = np.stack([q[0], q[1]], axis=1)
+    return dict(logLkl=logLkl, bounds=bounds, ref_bounds=ref_bounds,
+                mean=np.zeros(d), cov=cov, marg=marg, d=d, b=float(b),
+                base_std=s, forward=forward, inverse=inverse, kind="curved")
+
+
+def curved_reference_samples(target, n=40000, seed=123):
+    """EXACT samples from the banana (push exact Gaussian draws forward)."""
+    rng = np.random.default_rng(seed)
+    d, s = target["d"], target["base_std"]
+    return target["forward"](rng.standard_normal((n, d)) * s)
+
+
+def make_multimode(d, n_modes=4, sep=6.0, weight_ratio=1.0, seed=7):
+    """
+    ``n_modes`` isotropic unit Gaussians whose centres are ``sep`` apart, placed
+    along mutually orthogonal directions so that EVERY dimension separates the
+    modes (unlike `make_two_mode`, which separates along axis 0 only).
+
+    Centres are ``R * q_k`` for orthonormal ``q_k``, with ``R = sep / sqrt(2)``
+    so that ``||c_i - c_j|| = R * sqrt(2) = sep`` for every pair.  Requires
+    ``n_modes <= d``.  Weights are geometric with ratio ``weight_ratio``
+    (1.0 -> equal).  Exact samples in closed form.
+    """
+    if n_modes > d:
+        raise ValueError(f"n_modes={n_modes} > d={d}: need orthogonal centres.")
+    rng = np.random.default_rng(seed)
+    Q, _ = np.linalg.qr(rng.standard_normal((d, d)))
+    means = (sep / np.sqrt(2.0)) * Q[:n_modes]
+    cov = np.eye(d)
+    marg = np.ones(d)
+    w = np.geomspace(1.0, 1.0 / weight_ratio, n_modes)
+    w = w / w.sum()
+    logw = np.log(w)
+    lognorm = -0.5 * d * np.log(2 * np.pi)   # slogdet(I) = 0
+
+    def logLkl(X):
+        X = np.atleast_2d(np.asarray(X, float))
+        comps = np.empty((n_modes, X.shape[0]))
+        for k in range(n_modes):
+            dx = X - means[k]
+            comps[k] = logw[k] + lognorm - 0.5 * np.sum(dx ** 2, axis=1)
+        M = comps.max(axis=0)
+        out = M + np.log(np.exp(comps - M).sum(axis=0))
+        return float(out[0]) if X.shape[0] == 1 else out
+
+    lo, hi = means.min(axis=0), means.max(axis=0)
+    bounds = np.stack([lo - 6.0, hi + 6.0], axis=1)
+    # ref_bounds must span every basin, else the initial design cannot seed them.
+    ref_bounds = np.stack([lo - 2.0, hi + 2.0], axis=1)
+    return dict(logLkl=logLkl, bounds=bounds, ref_bounds=ref_bounds,
+                means=means, cov=cov, marg=marg, weights=w, sep=float(sep),
+                weight_ratio=float(weight_ratio), n_modes=int(n_modes), d=d,
+                kind="multimode")
+
+
+def mixture_reference_samples(target, n=40000, seed=123):
+    """EXACT samples from a K-mode unit-covariance mixture (closed form)."""
+    rng = np.random.default_rng(seed)
+    w, means, d = target["weights"], target["means"], target["d"]
+    comp = rng.choice(len(w), size=n, p=w)
+    return means[comp] + rng.standard_normal((n, d))
+
+
+def evaluate_recovery_mixture(gpr, target, nuts_kwargs=None):
+    """
+    K-mode generalisation of `evaluate_recovery_2mode`: nearest-centre
+    assignment (unit covariance -> Euclidean == Mahalanobis), mode recall,
+    per-mode weight error, chi2_d-corrected spurious mass, and per-dimension
+    1-Wasserstein against exact mixture samples.
+    """
+    from scipy.stats import wasserstein_distance
+    nuts_kwargs = nuts_kwargs or {}
+    X, w, info = nuts_corner_samples(gpr, target["bounds"], **nuts_kwargs)
+    wn = np.asarray(w, float); wn = wn / wn.sum()
+    means, wtrue, K = target["means"], target["weights"], len(target["weights"])
+
+    dists = np.stack([np.linalg.norm(X - means[k], axis=1) for k in range(K)])
+    assign = dists.argmin(axis=0)
+    dmin = dists.min(axis=0)
+    w_gp = np.array([wn[assign == k].sum() for k in range(K)])
+    # "Found" = holds at least 10% of the weight it should have. Scaling by the
+    # TRUE weight keeps the test equally strict for light and heavy modes.
+    recall = [bool(w_gp[k] > 0.1 * wtrue[k]) for k in range(K)]
+
+    d_dim = target["d"]
+    thresh = np.sqrt(chi2.ppf(SPURIOUS_QUANTILE, d_dim))
+    spurious = float(wn[dmin > thresh].sum())
+    spurious_excess = max(0.0, spurious - (1.0 - SPURIOUS_QUANTILE))
+
+    ref = mixture_reference_samples(target, n=min(len(X), 40000))
+    wass = [float(wasserstein_distance(X[:, i], ref[:, i], u_weights=wn))
+            for i in range(d_dim)]
+    return dict(
+        w_gp=[round(float(x), 4) for x in w_gp],
+        w_true=[round(float(x), 4) for x in wtrue],
+        w_relerr=round(float(np.max(np.abs(w_gp - wtrue) / wtrue)), 4),
+        mode_recall=recall,
+        n_modes_found=int(sum(recall)),
+        n_modes_true=int(K),
+        spurious_frac=round(spurious, 4),
+        spurious_excess=round(spurious_excess, 4),
+        wass_max=round(float(np.max(wass)), 4),
+        ess=round(float(1.0 / np.sum(wn ** 2)), 0),
+        pool=int(len(X)),
+        n_divergent=int(info.get("divergences", -1)),
+        accept=round(float(info.get("accept_rate", 0.0)), 3),
+    ), (X, w)
+
+
+def evaluate_recovery_curved(gpr, target, nuts_kwargs=None):
+    """
+    Recovery of the banana.  Moment metrics ALONE are useless here (the target
+    has diagonal covariance, so a Gaussian blob scores perfectly), so the
+    headline metric maps the GP samples back through the known inverse twist:
+    under the truth ``z(x) ~ N(0, diag(s^2))`` exactly, so a Gaussian KL in
+    z-space is zero iff the curvature was captured.  The x-space moments are
+    reported alongside as an interpretable, but NOT sufficient, cross-check.
+    """
+    from scipy.stats import wasserstein_distance
+    nuts_kwargs = nuts_kwargs or {}
+    X, w, info = nuts_corner_samples(gpr, target["bounds"], **nuts_kwargs)
+    wn = np.asarray(w, float); wn = wn / wn.sum()
+    marg, d = target["marg"], target["d"]
+
+    m = np.average(X, axis=0, weights=wn)
+    c = np.cov(X.T, aweights=wn)
+    # Curvature-sensitive metric: push back to the base coordinates.  The
+    # inverse twist is a chained quadratic recursion, so it AMPLIFIES tail
+    # error: on exact samples |z/s| stays below ~5, but on a wrong (blobby)
+    # posterior it reaches ~1e7, which would let a handful of outliers dominate
+    # the moments.  Trim at |z/s| <= Z_TRIM (discards ~0 of a correct sample)
+    # and report the trimmed fraction, which is itself a failure signal.
+    s = target["base_std"]
+    Z = target["inverse"](X)
+    keep = np.all(np.abs(Z / s) <= Z_TRIM, axis=1)
+    z_outlier_frac = max(0.0, float(1.0 - wn[keep].sum()))
+    if keep.sum() < 10:      # essentially nothing survived -> maximally wrong
+        kl_z = float("inf")
+    else:
+        wk = wn[keep] / wn[keep].sum()
+        mz = np.average(Z[keep], axis=0, weights=wk)
+        cz = np.atleast_2d(np.cov(Z[keep].T, aweights=wk))
+        kl_z = gaussian_kl(mz, cz, np.zeros(d), np.diag(s ** 2))
+    # Bounded companion: the banana's signature is corr(x_{i-1}^2, x_i), which
+    # is ~0.69 for this target and ~0 for any elliptical fit.  Unlike KL_z it
+    # cannot blow up, so it stays readable when the fit is bad.
+    def _curv(A, aw=None):
+        return float(np.mean([_wcorr(A[:, i - 1] ** 2, A[:, i], aw)
+                              for i in range(1, d)]))
+
+    ref = curved_reference_samples(target, n=min(len(X), 40000))
+    wass = [float(wasserstein_distance(X[:, i], ref[:, i], u_weights=wn))
+            for i in range(d)]
+    return dict(
+        kl_z=round(float(kl_z), 4),                       # <- headline
+        z_outlier_frac=round(z_outlier_frac, 4),
+        curv_gp=round(_curv(X, wn), 4),                   # <- bounded companion
+        curv_true=round(_curv(ref), 4),
+        kl_gauss_x=round(gaussian_kl(m, np.atleast_2d(c), target["mean"],
+                                     target["cov"]), 4),  # <- NOT sufficient
+        max_mean_in_sigma=round(float(np.max(np.abs(m - target["mean"]) / marg)), 4),
+        std_relerr=round(float(np.median(
+            np.abs(np.sqrt(np.diag(c)) - marg) / marg)), 4),
+        wass_max=round(float(np.max(wass)), 4),
+        ess=round(float(1.0 / np.sum(wn ** 2)), 0),
+        pool=int(len(X)),
+        n_divergent=int(info.get("divergences", -1)),
+        accept=round(float(info.get("accept_rate", 0.0)), 3),
+    ), (X, w)

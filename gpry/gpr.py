@@ -122,6 +122,13 @@ class GaussianProcessRegressor(sk_GPR):
         must be finite. Note that n_restarts_optimizer == 0 implies that one
         run is performed.
 
+    restart_strategy : str, optional (default: "uniform")
+        How the *random* restarts are drawn (the informed starts -- the current
+        kernel and the covariance-based guess -- are unaffected). One of
+        ``"uniform"`` (log-uniform over the full hyperparameter prior, the
+        historical behaviour), ``"screen"``, ``"local"`` or ``"local_screen"``.
+        See :meth:`_draw_restart_thetas`.
+
     prior_bounds : array-like, shape = (n_dims, 2), optional
         Bounds of the parameter space, **in the GPR's own (transformed) input space**,
         i.e. ``preprocessing_X.transform_bounds(bounds)``. Only needed when a length
@@ -175,9 +182,11 @@ class GaussianProcessRegressor(sk_GPR):
         noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
+        restart_strategy="uniform",
         prior_bounds=None,
         random_state=None,
     ):
+        self.restart_strategy = restart_strategy
         self.n_eval = 0
         self.n_eval_loglike = 0
         self._fitted = False
@@ -468,6 +477,11 @@ class GaussianProcessRegressor(sk_GPR):
 
         Returns a list of ``n`` theta vectors.
         """
+        known = ("uniform", "screen", "local", "local_screen")
+        if strategy not in known:
+            raise ValueError(
+                f"Unknown restart_strategy {strategy!r}; expected one of {known}."
+            )
         if n <= 0:
             return []
         lo, hi = hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1]
@@ -600,7 +614,7 @@ class GaussianProcessRegressor(sk_GPR):
         # ones that actually find the optimum in practice; the remaining restarts are
         # drawn randomly. ``restart_strategy`` controls how those random starts are
         # produced -- see ``_draw_restart_thetas``.
-        strategy = getattr(self, "restart_strategy", "uniform")
+        strategy = getattr(self, "restart_strategy", "uniform") or "uniform"
         n_informed = int(bool(start_from_current)) + int(bool(start_from_cov))
         theta_cov = None
         if start_from_cov:
