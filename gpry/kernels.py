@@ -681,7 +681,7 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
-                    "Prior bounds are required for the RQ kernel "
+                    "Prior bounds are required for the ExpSineSquared kernel "
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
@@ -693,7 +693,7 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
             if not self.anisotropic:
                 if prior_bounds.shape[0] > 1:
                     warnings.warn(
-                        "The hyperparameter bounds of the isotropic RQ "
+                        "The hyperparameter bounds of the isotropic ExpSineSquared "
                         "kernel were set to 'dynamic' even though the "
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
