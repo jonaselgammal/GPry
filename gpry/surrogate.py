@@ -202,6 +202,14 @@ class SurrogateModel:
         kwargs_regressor = deepcopy(regressor)
         kwargs_regressor["noise_level"] = self._noise_level_
         kwargs_regressor["random_state"] = random_state
+        # The regressor (and hence its kernel) lives in the transformed space, so the
+        # parameter-space bounds must be transformed too. Only used if a length
+        # correlation kernel is requested with ``length_scale_prior="dynamic"``, but
+        # passed always: it is cheap, and its absence is what silently disabled that
+        # option when the bounds moved out of the GPR.
+        kwargs_regressor["prior_bounds"] = self.preprocessing_X.transform_bounds(
+            self._bounds
+        )
         self.gpr = GaussianProcessRegressor(**kwargs_regressor)
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)

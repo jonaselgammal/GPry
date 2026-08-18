@@ -64,8 +64,16 @@ class GaussianProcessRegressor(sk_GPR):
     output_scale_prior : tuple as (min, max), optional (default: [1e-2, 1e3])
         Prior for the (non-squared) scale parameter, in normalised logp units.
 
-    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e1])
+    length_scale_prior : tuple as (min, max), optional (default: [1e-3, 1e2])
         Prior for the length parameters, as a fraction of the parameter priors sizes.
+        May also be given per-dimension, as an array of shape ``(n_dims, 2)``. Pass the
+        string ``"dynamic"`` to derive the bounds from the prior size instead, which
+        requires ``prior_bounds`` (see :class:`gpry.kernels.Hyperparameter`).
+
+        The upper bound is deliberately well above 1: in the normalised input space a
+        smooth (nearly quadratic) log-posterior is best described by a correlation
+        length several times the prior width, so fitted length scales of O(10) are
+        normal and a tighter bound would clamp them.
 
     noise_level : float or array-like, optional (default: 1e-2)
         Square-root of the value added to the diagonal of the kernel matrix
@@ -114,6 +122,13 @@ class GaussianProcessRegressor(sk_GPR):
         must be finite. Note that n_restarts_optimizer == 0 implies that one
         run is performed.
 
+    prior_bounds : array-like, shape = (n_dims, 2), optional
+        Bounds of the parameter space, **in the GPR's own (transformed) input space**,
+        i.e. ``preprocessing_X.transform_bounds(bounds)``. Only needed when a length
+        correlation kernel is created with ``length_scale_prior="dynamic"``, in which
+        case the length-scale bounds are derived from the prior size. Supplied by
+        :class:`gpry.surrogate.SurrogateModel`.
+
     random_state : int or numpy.random.Generator, optional
         The generator used to perform random operations of the GPR. If an integer is
         given, it is used as a seed for the default global numpy random number generator.
@@ -155,11 +170,12 @@ class GaussianProcessRegressor(sk_GPR):
         self,
         kernel="RBF",
         output_scale_prior=[1e-2, 1e3],
-        length_scale_prior=[1e-3, 1e1],
+        length_scale_prior=[1e-3, 1e2],
         noise_level=1e-2,
         noise_fixed=True,
         optimizer="fmin_l_bfgs_b",
         n_restarts_optimizer=0,
+        prior_bounds=None,
         random_state=None,
     ):
         self.n_eval = 0
@@ -184,10 +200,21 @@ class GaussianProcessRegressor(sk_GPR):
                 ) from excpt
             # Build kernel
             output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
-            # Guaranteed to be n-dimensional, if initialised from SurrogateModel
-            length_scale_init = np.sqrt(
-                length_scale_prior[:, 0] * length_scale_prior[:, 1]
-            )
+            # Guaranteed to be n-dimensional, if initialised from SurrogateModel.
+            # When "dynamic", derive an initial scale from the prior widths.
+            if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
+                if prior_bounds is None:
+                    raise TypeError(
+                        "prior_bounds is required when length_scale_prior='dynamic'."
+                    )
+                _pb = np.asarray(prior_bounds)
+                _widths = _pb[:, 1] - _pb[:, 0]
+                length_scale_init = 0.1 * _widths
+            else:
+                length_scale_prior = np.asarray(length_scale_prior)
+                length_scale_init = np.sqrt(
+                    length_scale_prior[:, 0] * length_scale_prior[:, 1]
+                )
             # Noise treatment
             self.is_noise_in_kernel = not noise_fixed
             if hasattr(noise_level, "__len__"):
@@ -200,7 +227,8 @@ class GaussianProcessRegressor(sk_GPR):
                 [output_scale_prior[0] ** 2, output_scale_prior[1] ** 2],
             ) * length_corr_kernel(
                 length_scale_init,
-                prior_bounds=length_scale_prior,
+                length_scale_prior=length_scale_prior,
+                prior_bounds=prior_bounds,
                 **kernel_args,
             )
             # Use noise level as upper bound if added as additive kernel

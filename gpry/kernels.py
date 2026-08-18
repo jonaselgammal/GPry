@@ -28,6 +28,8 @@ from sklearn.gaussian_process.kernels import (  # type: ignore
     WhiteKernel as sk_WhiteKernel,
 )
 
+_LSP_DEFAULT = object()  # sentinel for length_scale_prior default
+
 
 class Hyperparameter(
     namedtuple(
@@ -76,16 +78,28 @@ class Hyperparameter(
         changed during hyperparameter tuning. If None is passed, the "fixed" is
         derived based on the given bounds.
     dynamic : bool, default=None
-        Whether the value of this hyperparameter is dynamic, i.e. whether the
-        bounds of the hyperparameter should automatically be adjusted to two
-        orders of magnitude above and below the current best fit value. If None
-        is passed, the "dynamic" is derived based on the given bounds.
+        Whether the bounds of this hyperparameter are derived on access rather
+        than fixed. If None, it is derived from the given bounds (True if they
+        were passed as the string "dynamic"). Two cases, see ``max_length``:
+
+        * ``max_length`` is None: the bounds track the *current* value, as
+          ``[value * 1e-3, value * 100]``. Since ``Kernel.bounds`` is a property
+          and the fit reads it once per refit, the search box re-centres on the
+          latest best fit at every refit.
+        * ``max_length`` is given: the bounds are ``[max_length * 1e-3,
+          max_length * 100]``, i.e. fixed but scaled to each parameter's prior
+          size.
     max_length : float or array-like, shape = (n_dimensions,)
-        The prior bounds of the posterior distribution (of the parameter-space,
-        not the hyperparameter space) is required for hyperparameters which are
-        length scales (correlation lengths) if their bounds are set to
-        "dynamic". This is done to restrict their range to the same order of
-        magnitude as the prior size (actually 2x the prior).
+        Size of the parameter-space prior (*not* of the hyperparameter space)
+        per dimension, i.e. ``upper - lower`` of the bounds in the kernel's own
+        (transformed) input space. Only used for length-scale (correlation
+        length) hyperparameters whose bounds are set to "dynamic", to scale
+        their allowed range to the prior size. Derived from the ``prior_bounds``
+        passed to the kernel. Note: :class:`RationalQuadratic` and
+        :class:`ExpSineSquared` set ``max_length`` to *twice* the prior width
+        (``2 * (upper - lower)``) to accommodate their broader correlation
+        structure, producing dynamic bounds of
+        ``[width * 2e-3, width * 200]``.
     """
 
     # A raw namedtuple is very memory efficient as it packs the attributes
@@ -150,6 +164,30 @@ class Kernel(sk_Kernel):
      .. note::
         This kernel class is taken entirely from the Scikit-optimize package.
     """
+
+    @property
+    def length_scale_bounds(self):
+        """
+        Backwards-compatible alias for :attr:`length_scale_prior`.
+
+        ``length_scale_bounds`` is sklearn's name for this quantity; gpry calls it
+        ``length_scale_prior``, to distinguish it clearly from ``prior_bounds``
+        (the parameter-space box). Raises ``AttributeError`` for kernels that have
+        no length scale, which is the pre-existing behaviour.
+        """
+        return self.length_scale_prior
+
+    def __setstate__(self, state):
+        """
+        Restore a pickled kernel.
+
+        Handles checkpoints written before ``length_scale_bounds`` was renamed to
+        ``length_scale_prior``: without this, unpickling an older surrogate fails in
+        sklearn's ``get_params``, which reads the attribute named in ``__init__``.
+        """
+        if "length_scale_bounds" in state and "length_scale_prior" not in state:
+            state["length_scale_prior"] = state.pop("length_scale_bounds")
+        self.__dict__.update(state)
 
     def __add__(self, b):
         if not isinstance(b, Kernel):
@@ -249,12 +287,28 @@ class Kernel(sk_Kernel):
 
 class RBF(Kernel, sk_RBF):
     def __init__(
-        self, length_scale=1.0, length_scale_bounds=(1e-5, 1e5), prior_bounds=None
+        self,
+        length_scale=1.0,
+        length_scale_prior=_LSP_DEFAULT,
+        prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RBF kernel "
@@ -288,12 +342,12 @@ class RBF(Kernel, sk_RBF):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     def gradient_x(self, x, X_train):
@@ -324,15 +378,28 @@ class Matern(Kernel, sk_Matern):
     def __init__(
         self,
         length_scale=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=_LSP_DEFAULT,
         nu=1.5,
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.nu = nu
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the Matern kernel "
@@ -366,12 +433,12 @@ class Matern(Kernel, sk_Matern):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     def gradient_x(self, x, X_train):
@@ -488,16 +555,29 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         self,
         length_scale=1.0,
         alpha=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=_LSP_DEFAULT,
         alpha_bounds=(1e-5, 1e5),
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.alpha = alpha
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.alpha_bounds = alpha_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
                     "Prior bounds are required for the RQ kernel "
@@ -535,12 +615,12 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 self.max_length,
                 len(self.length_scale),
             )
         return Hyperparameter(
-            "length_scale", "numeric", self.length_scale_bounds, self.max_length
+            "length_scale", "numeric", self.length_scale_prior, self.max_length
         )
 
     @property
@@ -576,19 +656,32 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         self,
         length_scale=1.0,
         periodicity=1.0,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_prior=_LSP_DEFAULT,
         periodicity_bounds=(1e-5, 1e5),
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.periodicity = periodicity
-        self.length_scale_bounds = length_scale_bounds
+        self.length_scale_prior = length_scale_prior
         self.periodicity_bounds = periodicity_bounds
         self.prior_bounds = prior_bounds
-        if length_scale_bounds == "dynamic":
+        if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
             if prior_bounds is None:
                 raise TypeError(
-                    "Prior bounds are required for the RQ kernel "
+                    "Prior bounds are required for the ExpSineSquared kernel "
                     "if its hyperparameter bounds are set to 'dynamic'. "
                     "You can either provide these bounds or set the "
                     "hyperparameter bounds to either numeric values or "
@@ -600,7 +693,7 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
             if not self.anisotropic:
                 if prior_bounds.shape[0] > 1:
                     warnings.warn(
-                        "The hyperparameter bounds of the isotropic RQ "
+                        "The hyperparameter bounds of the isotropic ExpSineSquared "
                         "kernel were set to 'dynamic' even though the "
                         "posterior distribution has more than one dimension. "
                         "The maximum length scale will be adapted to the "
@@ -623,14 +716,14 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
             return Hyperparameter(
                 "length_scale",
                 "numeric",
-                self.length_scale_bounds,
+                self.length_scale_prior,
                 len(self.length_scale),
                 max_length=self.max_length,
             )
         return Hyperparameter(
             "length_scale",
             "numeric",
-            self.length_scale_bounds,
+            self.length_scale_prior,
             max_length=self.max_length,
         )
 
