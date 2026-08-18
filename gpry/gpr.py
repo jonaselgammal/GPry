@@ -200,10 +200,21 @@ class GaussianProcessRegressor(sk_GPR):
                 ) from excpt
             # Build kernel
             output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
-            # Guaranteed to be n-dimensional, if initialised from SurrogateModel
-            length_scale_init = np.sqrt(
-                length_scale_prior[:, 0] * length_scale_prior[:, 1]
-            )
+            # Guaranteed to be n-dimensional, if initialised from SurrogateModel.
+            # When "dynamic", derive an initial scale from the prior widths.
+            if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
+                if prior_bounds is None:
+                    raise TypeError(
+                        "prior_bounds is required when length_scale_prior='dynamic'."
+                    )
+                _pb = np.asarray(prior_bounds)
+                _widths = _pb[:, 1] - _pb[:, 0]
+                length_scale_init = 0.1 * _widths
+            else:
+                length_scale_prior = np.asarray(length_scale_prior)
+                length_scale_init = np.sqrt(
+                    length_scale_prior[:, 0] * length_scale_prior[:, 1]
+                )
             # Noise treatment
             self.is_noise_in_kernel = not noise_fixed
             if hasattr(noise_level, "__len__"):
