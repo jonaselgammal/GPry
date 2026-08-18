@@ -69,7 +69,7 @@ Inside the ``gpry`` block you can specify options for the different GPry modules
        kernel: RBF
        # Priors for the output and length scale, in normalised logp units
        output_scale_prior: [1e-2, 1e3]
-       length_scale_prior: [1e-3, 1e1]
+       length_scale_prior: [1e-3, 1e2]
        # Noise level in logp units; increase for numerically noisy likelihoods
        noise_level: 1e-1
        # Whether to fix the noise or to fit for a white-noise additive kernel term
