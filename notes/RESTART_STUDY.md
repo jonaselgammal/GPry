@@ -208,3 +208,97 @@ d=30 results to appear were the three failures, because a failing run dies in
 ~3 minutes while a healthy one takes ~20. With all 25 in, **21/25 succeed**.
 Nor is it a regression — pre-fix v3 managed 2/3 seeds at d=30 and needed n=990;
 post-fix it is 21/25 at n=660-720.
+
+---
+
+# FOLLOW-UP: why the fit speedup is small, and where the cost really is
+
+## Where fit time goes (measured, all seeds)
+
+| d | full refits, % of fit time | s/full refit | s/**simple** fit | ceiling if full refits were free | S2 got |
+|---|---|---|---|---|---|
+| 8 | 90.2% | 1.7 | 0.08 | 10.2x | 4.84x |
+| 16 | 80.9% | 8.8 | 0.52 | 5.2x | 3.85x |
+| 30 | **54.4%** | 119.7 | **15.31** | **2.2x** | 1.64x |
+
+The per-iteration "simple" fit (`start_from_current=True, n_restarts=1`, run
+EVERY iteration) costs 0.08 s at d=8 but **15.3 s at d=30**; ~20 of them form a
+~276 s floor inside a ~605 s fit. So at d=30 no restart policy could ever have
+exceeded 2.2x, and S2 captured three-quarters of that.
+
+## Why an informed start costs more than a random one
+
+Two separate reasons, both measured on a real d=30 surrogate:
+
+**1. They do not solve the same problem.** All 12 random log-uniform restarts
+converge -- legitimately, ~6 L-BFGS iterations, clean `CONVERGENCE` status --
+to the *identical* point:
+
+| | LML | output scale | length scales |
+|---|---|---|---|
+| true optimum (informed starts) | **+38.47** | 1000 | 38-49 |
+| random-restart attractor | **-797.44** | 1 | 0.001-97 |
+
+836 nats worse. At d=30 the 68 random restarts are not exploring; they return
+the same worthless answer 68 times. They are cheap *because* they solve an
+easier, wrong problem.
+
+**2. The last stretch is pathological.** Informed starts exit
+`ABNORMAL_TERMINATION_IN_LNSRCH` -- 45 evals for **2** iterations, ~22 wasted
+per iteration. The LML goes through a Cholesky of an ill-conditioned kernel
+matrix, giving it a **~3e-5 absolute noise floor** (established by a
+finite-difference step-size study; FD matches the analytic gradient to 5
+significant figures at eps=1e-2/1e-3 and breaks down below, so the gradient
+itself is correct). SciPy's default `ftol=2.22e-9` asks L-BFGS to resolve
+~8e-8, 400x below the noise, so the line search thrashes on rounding error.
+
+## The ftol lever
+
+Controlled A/B (same process, same surrogate, 8 identical start thetas,
+alternating order), and a tolerance sweep:
+
+| ftol | evals | speedup | worst dLML | starts hurt |
+|---|---|---|---|---|
+| default 2.22e-9 | 591 | 1.00x | - | - |
+| 1e-7 | 513 | 1.18x | 0.000 | 0/8 |
+| 1e-6 | 335 | 1.90x | -3.43 | 1/8 |
+| 1e-5 | 212 | 3.03x | -12.01 | 2/8 |
+
+The two starts GPry actually uses (current theta, covariance guess) were
+unaffected at every tolerance; the losses hit synthetically perturbed starts.
+End to end at d=30, six runs at `ftol=1e-5` all converged with KL 0.018-0.019,
+indistinguishable from the default (0.0178-0.0206), and one seed that FAILED at
+the default converged. Best observed combination (S2 + ftol=1e-5, seed 1):
+fit 500 s -> 88 s, loop 1097 s -> 774 s.
+
+## What is NOT established
+
+The end-to-end wall-clock gain at d=30 is **not** resolved by these runs:
+
+- changing `ftol` changes the trajectory (different GP -> different
+  acquisitions -> different points), so arms are not the same run with one knob
+  turned, and d=30 fit cost is dominated by one or two expensive late fits
+  whose placement varies per trajectory (e.g. a single n=630 fit = 258 s of a
+  519 s total);
+- `sacct` shows these jobs shared nodes (four at once on gorina14, others on
+  gorina12/15); per-eval cost swings 45->107 ms at identical n and d.
+
+Robust across that noise: LML evals drop 1.9-4.6x end to end, and quality is
+unchanged. Settling the wall-clock number needs more seeds on exclusive nodes.
+
+## Dead end: fit_simple_every
+
+Thinning the per-iteration fit is erratic, not a lever: `=2` worked on seed 1
+(KL 0.021) but failed on seed 4 (KL 221); `=3` failed on seed 1 (KL 283) but
+worked on seed 4 (KL 0.018). Coin-flipping, consistent with the background
+d=30 failure rate. The per-iteration fit is load-bearing.
+
+## Corrections made during this follow-up
+
+- "~2400 evals per informed start" was arithmetic error -- a whole-run eval
+  total divided by 2. The real figure is 45-117 evals per L-BFGS run.
+- A first gradient check suggested the analytic gradient was wrong; it used
+  `eps=1e-5`, inside the FD noise floor. The gradient is correct.
+- A first ftol sweep reported sub-1x speedups for tolerances looser than the
+  default (impossible). Cause: the reference was keyed by a dict with duplicate
+  start names, so it summed 5 unique starts against 8-start totals.
