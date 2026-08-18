@@ -131,3 +131,80 @@ because they all die at the same point, before the restart budget matters.
 - `experiments/cluster/aggregate_restart.py` — cost + quality-vs-control table
 
 Manifest order is d=30 first (longest, ~3.7 h at S0) to fill the wall-clock tail.
+
+---
+
+# RESULTS (125 runs, all complete)
+
+## 1. Quality is preserved by every arm, everywhere
+
+Median headline metric per arm; all five arms are statistically
+indistinguishable in every case:
+
+| target | S0 (control) | S1 | S2 | S3 | S4 |
+|---|---|---|---|---|---|
+| curved d=5 (KL_z) | 0.0019 | 0.0021 | 0.0023 | 0.0017 | 0.0015 |
+| multimode d=5 (w_relerr) | 0.062 | 0.062 | 0.064 | 0.072 | 0.057 |
+| gauss d=8 (KL) | 0.0016 | 0.0021 | 0.0016 | 0.0021 | 0.0018 |
+| gauss d=16 (KL) | 0.0058 | 0.0063 | 0.0057 | 0.0057 | 0.0061 |
+| gauss d=30 (KL) | 0.0209 | 0.0196 | 0.0185 | 0.0199 | 0.0189 |
+
+**All 25 multimode runs recovered 4/4 modes**, in every arm.
+
+## 2. The fit gets much cheaper — but the loop barely does
+
+| case | fit share of loop | Amdahl ceiling | S2 fit speedup | S2 **loop** speedup |
+|---|---|---|---|---|
+| curved d=5 | 5.3% | 1.06x | 5.02x | **1.04x** |
+| gauss d=8 | 6.8% | 1.07x | 4.84x | **1.04x** |
+| gauss d=16 | 13.3% | 1.15x | 3.85x | **1.40x** |
+| multimode d=5 | 29.1% | 1.41x | 8.69x | **1.48x** |
+| gauss d=30 | 53.9% | 2.17x | 1.64x | **1.26x** |
+
+**The 47x microbenchmark did not translate.** That number came from timing a
+single full fit on one saved d=16 surrogate. In a real run the full fit happens
+only every `round(2*sqrt(d))` iterations — every other iteration uses the cheap
+`fit_simple_every` path with `n_restarts=1` — and the fit is only 5-54% of the
+loop. There was never 47x available end to end.
+
+(d=16 and multimode slightly EXCEED their Amdahl ceiling because the cheaper
+arm also converged in fewer points, cutting acquisition work too; the ceiling
+assumes fixed non-fit work.)
+
+## 3. Failures are a background rate, not an arm effect
+
+6 of 125 runs died with `GPAcquisitionError`, spread across arms *including the
+control*:
+
+| arm | S0 | S1 | S2 | S3 | S4 |
+|---|---|---|---|---|---|
+| failures | 1 | 1 | 1 | 2 | 0 |
+
+At 5 seeds per cell this is indistinguishable from a ~5% background failure
+rate. It does **not** support "fewer restarts is less robust" — nor the
+converse.
+
+## 4. Side-finding: the length-scale ceiling is causal for those failures
+
+Failed runs have 10-12 of 30 length scales pinned at exactly 100, the ceiling
+of the merged `[1e-3, 1e2]` default; successful ones sit at a median ~43 with
+**none** railed. Re-running the identical failing case (d=30, S0, seed 3) with
+only the ceiling changed:
+
+| ls ceiling | outcome | n | KL | fit time |
+|---|---|---|---|---|
+| 1e2 (merged default) | **FAILS** | 240 | 311.7 | 14 s |
+| 1e3 | converges | 690 | 0.0191 | 508 s |
+| 1e5 | converges | 690 | 0.0186 | 1842 s |
+
+Widening to 1e3 fixes it at no extra cost relative to a normal successful fit
+(~591 s); 1e5 costs 3.6x more. **Suggested: raise the default ceiling to 1e3.**
+
+## Correction to an earlier read of this data
+
+An interim report here claimed "the d=30 arm is failing" and suspected a
+regression from PR #4. That was wrong, from a selection effect: the first three
+d=30 results to appear were the three failures, because a failing run dies in
+~3 minutes while a healthy one takes ~20. With all 25 in, **21/25 succeed**.
+Nor is it a regression — pre-fix v3 managed 2/3 seeds at d=30 and needed n=990;
+post-fix it is 21/25 at n=660-720.

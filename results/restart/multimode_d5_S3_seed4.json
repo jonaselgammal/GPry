@@ -1,0 +1,52 @@
+{
+  "target": "multimode",
+  "d": 5,
+  "arm": "S3",
+  "strategy": "local",
+  "n_restarts": 8,
+  "ls_max": null,
+  "target_param": 4.0,
+  "seed": 4,
+  "converged": false,
+  "error": null,
+  "fixed_budget": true,
+  "n_total": 300,
+  "n_iterations": 58,
+  "wall_s": 245.1,
+  "t_loop_s": 199.41,
+  "t_fit_s": 31.02,
+  "t_acquire_s": 168.39,
+  "t_mc_s": 45.35,
+  "evals_fit_total": 6016,
+  "evals_acquire_total": 109440,
+  "lml_final": 242.99191035215375,
+  "kernel": "1.09**2 * RBF(length_scale=[0.355, 0.232, 0.287, 0.521, 0.183])",
+  "w_gp": [
+    0.259,
+    0.2539,
+    0.2438,
+    0.2433
+  ],
+  "w_true": [
+    0.25,
+    0.25,
+    0.25,
+    0.25
+  ],
+  "w_relerr": 0.0358,
+  "mode_recall": [
+    true,
+    true,
+    true,
+    true
+  ],
+  "n_modes_found": 4,
+  "n_modes_true": 4,
+  "spurious_frac": 0.0128,
+  "spurious_excess": 0.0028,
+  "wass_max": 0.0638,
+  "ess": 19200.0,
+  "pool": 19200,
+  "n_divergent": 0,
+  "accept": 0.903
+}
