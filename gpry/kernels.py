@@ -28,6 +28,8 @@ from sklearn.gaussian_process.kernels import (  # type: ignore
     WhiteKernel as sk_WhiteKernel,
 )
 
+_LSP_DEFAULT = object()  # sentinel for length_scale_prior default
+
 
 class Hyperparameter(
     namedtuple(
@@ -285,8 +287,24 @@ class Kernel(sk_Kernel):
 
 class RBF(Kernel, sk_RBF):
     def __init__(
-        self, length_scale=1.0, length_scale_prior=(1e-3, 1e2), prior_bounds=None
+        self,
+        length_scale=1.0,
+        length_scale_prior=_LSP_DEFAULT,
+        prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.length_scale_prior = length_scale_prior
         self.prior_bounds = prior_bounds
@@ -360,10 +378,23 @@ class Matern(Kernel, sk_Matern):
     def __init__(
         self,
         length_scale=1.0,
-        length_scale_prior=(1e-3, 1e2),
+        length_scale_prior=_LSP_DEFAULT,
         nu=1.5,
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.length_scale_prior = length_scale_prior
         self.nu = nu
@@ -524,10 +555,23 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         self,
         length_scale=1.0,
         alpha=1.0,
-        length_scale_prior=(1e-3, 1e2),
+        length_scale_prior=_LSP_DEFAULT,
         alpha_bounds=(1e-5, 1e5),
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.alpha = alpha
         self.length_scale_prior = length_scale_prior
@@ -612,10 +656,23 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         self,
         length_scale=1.0,
         periodicity=1.0,
-        length_scale_prior=(1e-3, 1e2),
+        length_scale_prior=_LSP_DEFAULT,
         periodicity_bounds=(1e-5, 1e5),
         prior_bounds=None,
+        **kwargs,
     ):
+        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        if length_scale_bounds is not _LSP_DEFAULT:
+            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
+                raise ValueError(
+                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
+                    "with different values."
+                )
+            length_scale_prior = length_scale_bounds
+        if length_scale_prior is _LSP_DEFAULT:
+            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.periodicity = periodicity
         self.length_scale_prior = length_scale_prior
