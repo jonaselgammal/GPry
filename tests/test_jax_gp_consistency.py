@@ -271,3 +271,84 @@ def test_nonlinear_y_preprocessor_is_rejected_not_silently_mis_scaled():
     # and the guard must hold through the public entry point, not just the helper
     with pytest.raises(TypeError, match="affine y-preprocessor"):
         build_jax_gp_loglike(sur)
+
+
+# --------------------------------------------------------------------------- #
+# Kernel-level agreement.
+#
+# The tests above compare end-to-end (jax_loglike vs surrogate.predict), which
+# catches drift but does not localise it. These compare the JAX kernel directly
+# against gpry.kernels, so a failure points at the kernel math rather than
+# anywhere in the stack. They also pin the invariant that the planned
+# array-namespace refactor (one kernel source evaluated under numpy or JAX) has
+# to preserve.
+# --------------------------------------------------------------------------- #
+KERNEL_CASES = [
+    ("rbf", None),
+    ("matern", 0.5),
+    ("matern", 1.5),
+    ("matern", 2.5),
+]
+
+
+@pytest.mark.parametrize("family,nu", KERNEL_CASES)
+@pytest.mark.parametrize("d", [1, 3, 7])
+def test_jax_k_vec_matches_gpry_kernel(family, nu, d):
+    """`_jax_k_vec` must reproduce `gpry.kernels`' own k(x*, X_train)."""
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from gpry.kernels import RBF, Matern, ConstantKernel as C
+    from gpry.mc_interfaces import _jax_k_vec, _ensure_x64
+
+    _ensure_x64()
+    rng = np.random.default_rng(abs(hash((family, nu, d))) % (2 ** 31))
+    ell = rng.uniform(0.3, 3.0, size=d)
+    amp = float(rng.uniform(0.5, 4.0))
+    Xtr = rng.normal(size=(23, d))
+    base = RBF(ell) if family == "rbf" else Matern(ell, nu=nu)
+    kernel = C(amp) * base
+
+    for x in rng.normal(size=(7, d)):
+        got = np.asarray(_jax_k_vec(jnp.asarray(x), jnp.asarray(Xtr),
+                                    jnp.asarray(ell), amp, family, nu))
+        ref = np.ravel(kernel(np.atleast_2d(x), Xtr))
+        assert np.allclose(got, ref, rtol=0, atol=1e-12), (
+            f"JAX kernel disagrees with gpry.kernels for {family} nu={nu} d={d}: "
+            f"max |diff| = {np.max(np.abs(got - ref)):.3e}"
+        )
+
+
+def test_jax_k_vec_rejects_unsupported_matern_nu():
+    """Only nu in {0.5, 1.5, 2.5} have closed forms in the backend; a general nu
+    needs a Bessel function and must be refused, not approximated."""
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from gpry.mc_interfaces import _jax_k_vec
+
+    with pytest.raises(ValueError, match="nu="):
+        _jax_k_vec(jnp.zeros(2), jnp.ones((3, 2)), jnp.ones(2), 1.0, "matern", 1.75)
+
+
+def test_jax_k_vec_padding_contract():
+    """The multi-chain runner pads X_train to a fixed capacity with zero rows and
+    zero alpha entries. Padding must not change the resulting GP mean."""
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from gpry.mc_interfaces import _jax_k_vec, _ensure_x64
+
+    _ensure_x64()
+    rng = np.random.default_rng(5)
+    d, n, cap = 4, 12, 32
+    ell, amp = rng.uniform(0.5, 2.0, size=d), 1.7
+    Xtr, alpha, x = rng.normal(size=(n, d)), rng.normal(size=n), rng.normal(size=d)
+
+    Xpad = np.zeros((cap, d)); Xpad[:n] = Xtr
+    apad = np.zeros(cap); apad[:n] = alpha
+
+    plain = float(np.dot(np.asarray(_jax_k_vec(
+        jnp.asarray(x), jnp.asarray(Xtr), jnp.asarray(ell), amp, "rbf", None)), alpha))
+    padded = float(np.dot(np.asarray(_jax_k_vec(
+        jnp.asarray(x), jnp.asarray(Xpad), jnp.asarray(ell), amp, "rbf", None)), apad))
+    assert abs(plain - padded) < 1e-12 * max(1.0, abs(plain)), (
+        f"padding changed the GP mean: {plain!r} vs {padded!r}"
+    )
