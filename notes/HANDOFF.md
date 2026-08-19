@@ -22,7 +22,9 @@ question is settled; remaining work is a paper, a defensible code structure, and
   some prose; the per-arm table S0:1 S1:1 S2:1 S3:2 S4:0 is correct.) All 5 restart strategies give indistinguishable
   quality at d in {5,8,16,30}; all 25 multimode runs found 4/4 modes.
   `results/restart/`, `notes/RESTART_STUDY.md`.
-- **Final head-to-head, 50 runs on EXCLUSIVE nodes** (`results/final/{BASE,PROP}`):
+- **Final head-to-head, 50 runs** (`results/final/{BASE,PROP}`). **TIMINGS INVALID --
+  see the SLURM warning below. Quality columns stand; absolute times must be re-measured;
+  the speedup RATIOS are plausible but unproven [assumed].**
   | case | fit speedup | loop speedup | quality BASE->PROP | fails |
   |---|---|---|---|---|
   | gauss d=30 | 5.07x | 1.48x | 0.0205 -> 0.0192 | 1 -> 0 |
@@ -35,6 +37,38 @@ question is settled; remaining work is a paper, a defensible code structure, and
   work on it is capped at 1.20x (d=30), ~1.02x elsewhere. Remaining d=30 cost is
   acquisition: 621 s of a 758 s loop.
 - **`length_scale_prior` bug** found, fixed, PR'd, merged to main (PR #4).
+
+## INFRASTRUCTURE TRAP: `--exclusive` without `--ntasks=1` runs N copies of every task
+
+`#SBATCH --exclusive` allocates all 36 cores. With `--cpus-per-task=8` and no explicit
+`--ntasks`, `srun` derives `ntasks = floor(36/8) = 4` and launches **four identical ranks**,
+racing to write the same output files; the surviving JSON is whichever rank finished last.
+`--exclusive` was added to make timings trustworthy and did the exact opposite.
+
+Every sbatch MUST carry, and `srun` must repeat:
+
+    #SBATCH --ntasks=1
+    #SBATCH --nodes=1
+    srun --ntasks=1 --nodes=1 python ...
+
+Audit by counting banner lines per task log (`grep -c "^\[ARM\]"`); it must be 1.
+
+| campaign | ranks/task | verdict |
+|---|---|---|
+| `rst_*` (restart study, 125 runs) | 1 | clean |
+| `ftol_*`, `v3_*` | 1 | clean |
+| **`final_476048` (`results/final/`)** | **4** | **timings contaminated** |
+
+What survives: all four ranks agreed BIT-IDENTICALLY on `n_total`, `converged`, `evals_fit`,
+`LML` to full precision, and `KL` -- NUTS is deterministic. So every QUALITY conclusion from
+`results/final/` stands. What does not: the wall-clock numbers describe 4 processes x 8 threads
+on a 36-core node, not the intended lone process. The 1-5% spread BETWEEN ranks does not bound
+the inflation, because all four were equally contended.
+
+The BASE/PROP ratios (5.07x fit, 1.48x loop) are probably close, since both arms were equally
+affected, but that is an inference, not a measurement. Re-run `final.sbatch` (now fixed) to
+recover real absolute times. The clean NUTS arm of job 476793 uses the same configuration as
+`results/final/PROP`, so comparing them will quantify the inflation directly.
 
 ## RED FLAGS on the headline comparison (raised 08-19, must be resolved before the paper)
 
