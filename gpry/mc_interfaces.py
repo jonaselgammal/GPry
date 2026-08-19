@@ -312,6 +312,44 @@ def hmc_acquire(surrogate, bounds, rng=None, return_info=False, **hmc_kwargs):
 # =========================================================================== #
 # BlackJAX NUTS backend
 # =========================================================================== #
+def _ensure_x64():
+    """
+    Enable JAX double precision, and VERIFY that it took effect.
+
+    Must run before any ``jnp`` array is created from GP data. GPry's GP
+    routinely carries a large output scale (amp ~ 1e6) together with length
+    scales exceeding the normalized box, so every kernel entry is ~1 while
+    ``alpha`` is a large, strongly cancelling vector. In float32 that
+    cancellation destroys the mean outright -- measured relative error 61, i.e.
+    6100% -- while in float64 it is exact to machine precision.
+
+    This mutates *interpreter-global* JAX state, which is a blunt thing for a
+    library to do. It is centralised here so the reason is documented once
+    rather than restated at each call site.
+
+    The verification matters: if something else in the process has already
+    locked JAX into 32-bit, the update is silently ignored, and every
+    subsequent GP evaluation would be quietly wrong rather than failing.
+
+    Raises
+    ------
+    RuntimeError
+        If double precision could not be enabled.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    jax.config.update("jax_enable_x64", True)
+    if jnp.zeros(1, dtype=jnp.float64).dtype != jnp.float64:
+        raise RuntimeError(
+            "Could not enable JAX float64. The GP mean is not computable in "
+            "single precision here (a large output scale with a strongly "
+            "cancelling alpha loses all significant digits), so refusing to "
+            "continue rather than return silently wrong values. Something else "
+            "in this process has locked JAX into 32-bit."
+        )
+
+
 def _y_scale_offset(surrogate, check=True):
     """
     Recover the y-preprocessor as ``y = offset + scale * y_norm``.
@@ -540,7 +578,7 @@ def build_jax_gp_loglike(surrogate, pad_multiple=256):
     # normalized box, so every kernel entry is ~1 and ``alpha`` is a large,
     # strongly cancelling vector. In float32 (JAX's default) that cancellation
     # destroys the result completely; in float64 it is fine.
-    jax.config.update("jax_enable_x64", True)
+    _ensure_x64()
 
     amp, ell, family, nu = _extract_stationary_kernel(surrogate.gpr.kernel_)
     # The additive part is irrelevant for the shape of the posterior but matters
@@ -765,7 +803,7 @@ def nuts_sample_gp_mean(
     ``n_chains``, ``divergences`` and the padded ``capacity``.
     """
     import jax
-    jax.config.update("jax_enable_x64", True)
+    _ensure_x64()
     import jax.numpy as jnp
 
     rng = np.random.default_rng() if rng is None else rng

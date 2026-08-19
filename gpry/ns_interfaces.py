@@ -729,7 +729,9 @@ class InterfaceBlackJAX(NSInterface):
         import jax
         import jax.numpy as jnp
 
-        jax.config.update("jax_enable_x64", True)
+        from gpry.mc_interfaces import _ensure_x64
+
+        _ensure_x64()
         nss_api = self.globals["nss_api"]
         ns_utils = self.globals["ns_utils"]
         nlive = self.precision_settings["nlive"]
