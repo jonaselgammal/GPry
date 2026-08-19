@@ -312,6 +312,53 @@ def hmc_acquire(surrogate, bounds, rng=None, return_info=False, **hmc_kwargs):
 # =========================================================================== #
 # BlackJAX NUTS backend
 # =========================================================================== #
+def _jax_k_vec(xn, Xtr, ell, amp, family, nu):
+    """
+    ``k(x*, X_train)`` for a single test point, in JAX.
+
+    Single definition of the JAX kernel evaluation, shared by all three
+    backends (the NUTS log-density, the BlackJAX log-likelihood runner, and the
+    multi-chain NUTS runner). It previously existed as three byte-identical
+    copies, which is exactly how a shadow implementation drifts.
+
+    Traced, not jitted: callers invoke it inside their own ``jax.jit`` with
+    ``family``/``nu`` static, so the Python-level branching resolves at trace
+    time and no branch survives into the compiled graph.
+
+    Parameters
+    ----------
+    xn : array, shape=(d,)
+        Test point, in the regressor's own (pre-processed) input space.
+    Xtr : array, shape=(n, d)
+        Training inputs in the same space; may be zero-padded to a fixed
+        capacity, in which case the matching ``alpha`` entries are zero.
+    ell : array, shape=(d,)
+    amp : float
+        Product of the constant (output-scale) factors.
+    family : {"rbf", "matern"}
+    nu : float or None
+        Matern smoothness; only 0.5, 1.5 and 2.5 have closed forms here.
+    """
+    import jax.numpy as jnp
+
+    diff = (xn - Xtr) / ell
+    d2 = jnp.sum(diff ** 2, axis=1)
+    if family == "rbf":
+        return amp * jnp.exp(-0.5 * d2)
+    dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
+    if nu == 0.5:
+        kk = jnp.exp(-dist)
+    elif nu == 1.5:
+        a = jnp.sqrt(3.0) * dist
+        kk = (1.0 + a) * jnp.exp(-a)
+    elif nu == 2.5:
+        a = jnp.sqrt(5.0) * dist
+        kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
+    else:
+        raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
+    return amp * kk
+
+
 def _ensure_x64():
     """
     Enable JAX double precision, and VERIFY that it took effect.
@@ -493,22 +540,7 @@ def _build_jax_logdensity(surrogate, lo, hi, beta):
     width = hi_j - lo_j
 
     def k_vec(xn):
-        diff = (xn - Xtr_j) / ell_j            # (n_train, d)
-        d2 = jnp.sum(diff ** 2, axis=1)        # (n_train,)
-        if family == "rbf":
-            return amp * jnp.exp(-0.5 * d2)
-        dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
-        if nu == 0.5:
-            kk = jnp.exp(-dist)
-        elif nu == 1.5:
-            a = jnp.sqrt(3.0) * dist
-            kk = (1.0 + a) * jnp.exp(-a)
-        elif nu == 2.5:
-            a = jnp.sqrt(5.0) * dist
-            kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
-        else:
-            raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
-        return amp * kk
+        return _jax_k_vec(xn, Xtr_j, ell_j, amp, family, nu)
 
     def gp_mean_norm(xn):
         return jnp.dot(k_vec(xn), alpha_j)
@@ -658,23 +690,7 @@ def _get_jax_loglike_runner():
     @partial(jax.jit, static_argnames=("family", "nu"))
     def _ll(x, Xtr, alpha, ell, offset, scale, amp, std_y, off_y, family, nu):
         xn = offset + scale * x  # into the regressor's own input space
-        diff = (xn - Xtr) / ell
-        d2 = jnp.sum(diff ** 2, axis=1)
-        if family == "rbf":
-            kk = jnp.exp(-0.5 * d2)
-        else:
-            dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
-            if nu == 0.5:
-                kk = jnp.exp(-dist)
-            elif nu == 1.5:
-                a = jnp.sqrt(3.0) * dist
-                kk = (1.0 + a) * jnp.exp(-a)
-            elif nu == 2.5:
-                a = jnp.sqrt(5.0) * dist
-                kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
-            else:
-                raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
-        return std_y * jnp.dot(amp * kk, alpha) + off_y
+        return std_y * jnp.dot(_jax_k_vec(xn, Xtr, ell, amp, family, nu), alpha) + off_y
 
     _JAX_LOGLIKE_RUNNER = _ll
     return _JAX_LOGLIKE_RUNNER
@@ -712,22 +728,9 @@ def _get_nuts_runner():
         width = hi - lo
 
         def k_vec(xn):
-            diff = (xn - Xpad) / ell                # (capacity, d)
-            d2 = jnp.sum(diff ** 2, axis=1)         # (capacity,)
-            if family == "rbf":
-                return amp * jnp.exp(-0.5 * d2)
-            dist = jnp.sqrt(jnp.clip(d2, 1e-30, None))
-            if nu == 0.5:
-                kk = jnp.exp(-dist)
-            elif nu == 1.5:
-                a = jnp.sqrt(3.0) * dist
-                kk = (1.0 + a) * jnp.exp(-a)
-            elif nu == 2.5:
-                a = jnp.sqrt(5.0) * dist
-                kk = (1.0 + a + (5.0 / 3.0) * d2) * jnp.exp(-a)
-            else:
-                raise ValueError(f"Matern nu={nu} not supported in the JAX backend.")
-            return amp * kk
+            # Xpad is zero-padded to a fixed capacity; the padded alpha entries
+            # are zero, so the extra terms contribute nothing to the dot product.
+            return _jax_k_vec(xn, Xpad, ell, amp, family, nu)
 
         def logdensity_fn(u):
             xn = lo + width * jax.nn.sigmoid(u)
