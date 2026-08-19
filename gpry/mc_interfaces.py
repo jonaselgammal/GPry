@@ -312,6 +312,52 @@ def hmc_acquire(surrogate, bounds, rng=None, return_info=False, **hmc_kwargs):
 # =========================================================================== #
 # BlackJAX NUTS backend
 # =========================================================================== #
+def _y_scale_offset(surrogate, check=True):
+    """
+    Recover the y-preprocessor as ``y = offset + scale * y_norm``.
+
+    The JAX backends re-derive the GP mean from the *normalized* regressor and
+    then undo the y-preprocessing with a single scale (and, where the additive
+    constant matters, an offset). That is only valid while the preprocessor is
+    affine, and it is recovered by probing rather than declared -- so a
+    nonlinear preprocessor (a soft clip, say) would not raise here, it would
+    silently mis-scale the sampling target. Verify it instead of assuming it.
+
+    Parameters
+    ----------
+    surrogate : SurrogateModel
+    check : bool (default: True)
+        Verify affinity on a probe grid. Cheap (a handful of numpy calls, once
+        per build) relative to the sampling it guards.
+
+    Returns
+    -------
+    (scale, offset) : tuple of float
+
+    Raises
+    ------
+    TypeError
+        If the y-preprocessor is not affine.
+    """
+    pre = surrogate.preprocessing_y
+    scale = float(np.ravel(pre.inverse_transform_scale(np.ones(1)))[0])
+    offset = float(np.ravel(pre.inverse_transform(np.zeros(1)))[0])
+    if check:
+        probe = np.linspace(-4.0, 4.0, 17)
+        got = np.ravel(pre.inverse_transform(probe))
+        ref = offset + scale * probe
+        tol = 1e-8 * max(1.0, float(np.max(np.abs(ref))))
+        if not np.allclose(got, ref, rtol=0, atol=tol):
+            raise TypeError(
+                f"The JAX backends require an affine y-preprocessor, but "
+                f"{type(pre).__name__} is not affine (max deviation "
+                f"{float(np.max(np.abs(got - ref))):.3e} on a probe grid). It would "
+                "silently mis-scale the sampling target; extend the backend or use "
+                "an affine preprocessor."
+            )
+    return scale, offset
+
+
 def _extract_stationary_kernel(kernel):
     """
     Pull ``(amplitude, length_scale, family, nu)`` out of GPry's default kernel
@@ -400,7 +446,7 @@ def _build_jax_logdensity(surrogate, lo, hi, beta):
     amp, ell, family, nu = _extract_stationary_kernel(surrogate.gpr.kernel_)
     # y-normalization scale (Dummy -> 1.0, Normalize_y -> std_y). The additive
     # offset is an irrelevant constant for sampling, so only the scale is needed.
-    std_y = float(np.ravel(surrogate.preprocessing_y.inverse_transform_scale(np.ones(1)))[0])
+    std_y, _ = _y_scale_offset(surrogate)
 
     ell_j = jnp.asarray(ell)
     Xtr_j = jnp.asarray(np.asarray(surrogate.gpr.X_train_, dtype=float))
@@ -497,12 +543,9 @@ def build_jax_gp_loglike(surrogate, pad_multiple=256):
     jax.config.update("jax_enable_x64", True)
 
     amp, ell, family, nu = _extract_stationary_kernel(surrogate.gpr.kernel_)
-    std_y = float(
-        np.ravel(surrogate.preprocessing_y.inverse_transform_scale(np.ones(1)))[0]
-    )
-    # The y-preprocessor is affine; the additive part is irrelevant for the shape
-    # of the posterior but matters for the evidence, and costs nothing to keep.
-    off_y = float(np.ravel(surrogate.preprocessing_y.inverse_transform(np.zeros(1)))[0])
+    # The additive part is irrelevant for the shape of the posterior but matters
+    # for the evidence, and costs nothing to keep.
+    std_y, off_y = _y_scale_offset(surrogate)
     d = int(surrogate.d)
     # Reproduce the (diagonal-affine) x-preprocessor: T(x) = offset + scale * x
     t0 = np.ravel(surrogate.preprocessing_X.transform(np.zeros((1, d))))
@@ -753,7 +796,7 @@ def nuts_sample_gp_mean(
     alpha_pad[:n_train] = alpha
 
     amp, ell, family, nu = _extract_stationary_kernel(surrogate.gpr.kernel_)
-    std_y = float(np.ravel(surrogate.preprocessing_y.inverse_transform_scale(np.ones(1)))[0])
+    std_y, _ = _y_scale_offset(surrogate)
 
     # Seeds -> unconstrained u-space (logit bijector).
     s = np.clip((seeds_sel - lo) / (hi - lo), 1e-6, 1 - 1e-6)

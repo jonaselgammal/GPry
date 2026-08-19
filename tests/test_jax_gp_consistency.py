@@ -233,3 +233,41 @@ def test_fixture_still_exercises_the_float32_failure_regime():
         f"regime (amp={amp:.3e}, max|alpha|={alpha_max:.3e}), so the JAX "
         f"consistency tests can no longer detect a float32 regression."
     )
+
+
+def test_nonlinear_y_preprocessor_is_rejected_not_silently_mis_scaled():
+    """
+    The JAX backends undo the y-preprocessing with a single scale recovered by
+    probing. That is valid only for an affine preprocessor -- a nonlinear one
+    (a soft clip, say) would not raise on its own, it would silently mis-scale
+    the sampling target. `_y_scale_offset` must therefore verify affinity.
+    """
+    pytest.importorskip("jax")
+    from gpry.mc_interfaces import _y_scale_offset, build_jax_gp_loglike
+
+    sur, _ = _fitted_surrogate(d=3, seed=4)
+    scale, offset = _y_scale_offset(sur)          # affine: must succeed
+    assert np.isfinite(scale) and np.isfinite(offset)
+
+    class _SoftClipY:
+        """Stand-in for a nonlinear y-preprocessor (cf. the SoftClipY idea)."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def inverse_transform_scale(self, x):
+            return self._inner.inverse_transform_scale(x)
+
+        def inverse_transform(self, y):
+            y = np.asarray(y, float)
+            return self._inner.inverse_transform(np.tanh(y / 3.0) * 3.0)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    sur.preprocessing_y = _SoftClipY(sur.preprocessing_y)
+    with pytest.raises(TypeError, match="affine y-preprocessor"):
+        _y_scale_offset(sur)
+    # and the guard must hold through the public entry point, not just the helper
+    with pytest.raises(TypeError, match="affine y-preprocessor"):
+        build_jax_gp_loglike(sur)
