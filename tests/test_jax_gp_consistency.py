@@ -169,26 +169,48 @@ def test_y_preprocessor_is_affine():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_extract_stationary_kernel cannot distinguish Sum from Product -- "
-           "both expose k1/k2 -- so a genuine sum of two stationary kernels is "
-           "silently evaluated as a product. Safe today only because GPry's "
-           "default is C*RBF + WhiteKernel, where White contributes nothing.",
-)
-def test_extract_kernel_handles_sums():
-    """A sum of two stationary kernels must not be collapsed into a product."""
-    jax = pytest.importorskip("jax")
+def test_extract_kernel_rejects_sums_instead_of_silently_mangling_them():
+    """
+    A genuine sum of two stationary kernels is not a single scaled stationary
+    kernel, so the JAX backend cannot represent it. It must REJECT it.
+
+    Regression guard: `Sum` and `Product` both expose `k1`/`k2`, so a walker that
+    keys on those attributes treats a sum exactly like a product -- silently
+    returning amp = c1*c2 and the last length scale, i.e. a wrong number with no
+    error. This was the behaviour until 2026-08-19.
+    """
     from gpry.kernels import RBF, ConstantKernel as C
     from gpry.mc_interfaces import _extract_stationary_kernel
 
     k = C(2.0) * RBF(np.array([1.0, 1.0])) + C(3.0) * RBF(np.array([5.0, 5.0]))
-    amp, ell, family, nu = _extract_stationary_kernel(k)
-    # A sum cannot be represented by a single (amp, ell) pair at all; the current
-    # code returns amp = 2*3 = 6 and the LAST length scale, with no error.
-    assert not (np.isclose(amp, 6.0) and np.allclose(ell, 5.0)), (
-        f"sum silently collapsed to a product: amp={amp}, ell={ell}"
+    with pytest.raises(ValueError, match="cannot represent the sum"):
+        _extract_stationary_kernel(k)
+
+
+def test_extract_kernel_accepts_the_default_and_drops_white_noise():
+    """GPry's default `C * RBF + WhiteKernel` must still work: the white term
+    contributes nothing to k(x*, X_train) off the training set."""
+    from gpry.kernels import RBF, ConstantKernel as C, WhiteKernel
+    from gpry.mc_interfaces import _extract_stationary_kernel
+
+    base = C(4.0) * RBF(np.array([2.0, 3.0]))
+    amp0, ell0, fam0, nu0 = _extract_stationary_kernel(base)
+    amp1, ell1, fam1, nu1 = _extract_stationary_kernel(base + WhiteKernel(0.1))
+    assert (amp0, fam0, nu0) == (4.0, "rbf", None)
+    assert np.allclose(ell0, [2.0, 3.0])
+    assert (amp1, fam1, nu1) == (amp0, fam0, nu0) and np.allclose(ell1, ell0), (
+        "adding white noise changed the extracted mean kernel"
     )
+
+
+def test_extract_kernel_rejects_two_stationary_factors():
+    """A product of two stationary kernels is also not one (amp, length_scale)."""
+    from gpry.kernels import RBF, ConstantKernel as C
+    from gpry.mc_interfaces import _extract_stationary_kernel
+
+    k = C(2.0) * RBF(np.array([1.0, 1.0])) * RBF(np.array([4.0, 4.0]))
+    with pytest.raises(ValueError, match="single stationary factor"):
+        _extract_stationary_kernel(k)
 
 
 def test_fixture_still_exercises_the_float32_failure_regime():

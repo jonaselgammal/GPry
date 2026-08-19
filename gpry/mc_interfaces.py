@@ -315,14 +315,37 @@ def hmc_acquire(surrogate, bounds, rng=None, return_info=False, **hmc_kwargs):
 def _extract_stationary_kernel(kernel):
     """
     Pull ``(amplitude, length_scale, family, nu)`` out of GPry's default kernel
-    ``ConstantKernel * (RBF|Matern)`` (possibly nested products). ``amplitude``
-    is the product of the constant factors; the predictive mean ignores any
-    additive WhiteKernel (zero off the training set).
+    ``ConstantKernel * (RBF|Matern) [+ WhiteKernel]``. ``amplitude`` is the
+    product of the constant factors; an additive ``WhiteKernel`` is dropped,
+    since it contributes nothing to ``k(x*, X_train)`` for a test point not in
+    the training set, and hence nothing to the predictive mean.
+
+    Only kernels reducible to a SINGLE scaled stationary factor are
+    representable this way. Anything else -- notably a genuine sum of two
+    stationary kernels -- is rejected rather than approximated: the return
+    signature simply cannot express it.
+
+    Raises
+    ------
+    ValueError
+        If the kernel is not a scaled stationary kernel (optionally plus white
+        noise).
     """
-    from gpry.kernels import RBF, Matern, ConstantKernel, WhiteKernel
+    from gpry.kernels import RBF, Matern, ConstantKernel, WhiteKernel, Sum, Product
 
     amp = [1.0]
     stat = [None]
+
+    def set_stationary(k):
+        # A second stationary factor would mean a product of two stationary
+        # kernels (e.g. an anisotropic RBF*RBF), which is not a single
+        # (amp, length_scale) pair either.
+        if stat[0] is not None:
+            raise ValueError(
+                "The JAX backend supports a single stationary factor, but got two "
+                f"({stat[0]!r} and {k!r}). Extend the backend or use a simpler kernel."
+            )
+        stat[0] = k
 
     def walk(k):
         if isinstance(k, ConstantKernel):
@@ -330,14 +353,29 @@ def _extract_stationary_kernel(kernel):
         elif isinstance(k, WhiteKernel):
             pass  # zero contribution to k(x*, X_train) for x* not in the set
         elif isinstance(k, (RBF, Matern)):
-            stat[0] = k
-        elif hasattr(k, "k1") and hasattr(k, "k2"):
+            set_stationary(k)
+        elif isinstance(k, Product):
             walk(k.k1)
             walk(k.k2)
+        elif isinstance(k, Sum):
+            # A sum is only representable if every term but one vanishes from the
+            # predictive mean, i.e. is white noise. Sum and Product both expose
+            # k1/k2, so treating them alike would silently evaluate this sum as a
+            # PRODUCT and return a wrong number with no error.
+            terms = [t for t in (k.k1, k.k2) if not isinstance(t, WhiteKernel)]
+            if len(terms) != 1:
+                raise ValueError(
+                    f"The JAX backend cannot represent the sum {k!r}: a sum of two "
+                    "non-white kernels is not a single scaled stationary kernel. "
+                    "Extend the backend or use a simpler kernel."
+                )
+            walk(terms[0])
+        elif isinstance(k, (Sum, Product)) or (hasattr(k, "k1") and hasattr(k, "k2")):
+            raise ValueError(f"Unsupported kernel operator for the JAX backend: {k!r}")
         elif hasattr(k, "length_scale"):
-            stat[0] = k
+            set_stationary(k)
         else:
-            raise ValueError(f"Unsupported kernel factor for NUTS: {k!r}")
+            raise ValueError(f"Unsupported kernel factor for the JAX backend: {k!r}")
 
     walk(kernel)
     if stat[0] is None:
