@@ -1,0 +1,213 @@
+"""
+Contract tests: the JAX re-implementations of the GP mean must agree with the
+numpy surrogate.
+
+`gpry.mc_interfaces` does not call the GP. It walks the kernel tree, extracts
+``(amplitude, length_scale, family, nu)``, and re-derives the kernel and the
+predictive mean in JAX, reproducing the preprocessors from probe points. That
+shadow implementation can silently drift from `gpry.kernels` / `SurrogateModel`
+with no test noticing -- which is how a float32 bug (the large output scale and
+strongly cancelling ``alpha`` destroy the mean in single precision) survived
+until it was caught by hand.
+
+These tests pin the agreement so any drift fails loudly.
+"""
+import numpy as np
+import pytest
+
+from gpry.preprocessing import NormalizeBounds, NormalizeY
+from gpry.surrogate import SurrogateModel
+
+# Agreement tolerance, relative to the scale of the GP mean.
+#
+# Measured on these fixtures: the JAX form matches numpy to MACHINE PRECISION
+# (<=1e-15 relative) whenever K is well conditioned; it degrades to ~2e-7 only at
+# d=2/3, where a 60-point GP in a small box gives cond(K) ~ 1e20 -- numerically
+# singular, beyond float64's reach. That is problem conditioning, not backend drift.
+#
+# The bug this test exists to catch is a float32 regression, which is catastrophic
+# exactly in GPry's characteristic regime (output scale railed at 1e6 with a large,
+# strongly cancelling alpha): measured relative error 61, i.e. 6100%. So at d=2 the
+# failure mode (61) and the conditioning noise (2e-7) are eight orders apart, and
+# 1e-6 separates them cleanly.
+RTOL = 1e-6
+
+
+def _fitted_surrogate(d=4, n=60, seed=0, kernel="RBF", noise_fixed=True):
+    """A small fitted surrogate on an anisotropic Gaussian log-posterior."""
+    rng = np.random.default_rng(seed)
+    bounds = np.array([[-4.0, 4.0]] * d)
+    stds = np.geomspace(1.0, 0.4, d)
+
+    def logp(X):
+        X = np.atleast_2d(X)
+        return -0.5 * np.sum((X / stds) ** 2, axis=1)
+
+    # Mirror the defaults Runner would supply; SurrogateModel does not fill them in.
+    sur = SurrogateModel(
+        bounds=bounds,
+        preprocessing_X=NormalizeBounds(bounds),
+        preprocessing_y=NormalizeY(),
+        regressor={
+            "kernel": kernel,
+            "output_scale_prior": [1e-2, 1e3],
+            "length_scale_prior": [1e-3, 1e2],
+            "noise_level": 1e-2,
+            "noise_fixed": noise_fixed,
+            "optimizer": "fmin_l_bfgs_b",
+            "n_restarts_optimizer": 2,
+        },
+        # Configured as Runner does. Also required: with `infinities_classifier=None`
+        # SurrogateModel crashes on an unfitted NormalizeY (the DummyPreprocessor
+        # fallback is nested inside the classifier branch) -- a separate main bug.
+        infinities_classifier={"svm": {"threshold": "20s"}},
+        random_state=rng,
+        verbose=0,
+    )
+    X = rng.uniform(bounds[:, 0], bounds[:, 1], size=(n, d))
+    sur.append(X, logp(X))
+    return sur, bounds
+
+
+def _raw_gp_mean(sur, X):
+    """
+    The GP mean the JAX backends target: raw, in original units, WITHOUT the
+    infinities classifier or the upper clipping (both are non-differentiable and
+    are deliberately excluded from the JAX path).
+    """
+    Xn = sur.preprocessing_X.transform(np.atleast_2d(np.asarray(X, float)))
+    mu_n = np.ravel(sur.gpr.predict(Xn))
+    return np.ravel(sur.preprocessing_y.inverse_transform(mu_n))
+
+
+@pytest.mark.parametrize("d", [2, 4, 8])
+def test_jax_loglike_matches_raw_gp_mean(d):
+    """`build_jax_gp_loglike` works in the ORIGINAL space and keeps the y-offset,
+    so it must reproduce the raw GP mean pointwise."""
+    jax = pytest.importorskip("jax")
+    from gpry.mc_interfaces import build_jax_gp_loglike
+
+    sur, bounds = _fitted_surrogate(d=d, seed=d)
+    loglike = build_jax_gp_loglike(sur)
+
+    rng = np.random.default_rng(123)
+    Xt = rng.uniform(bounds[:, 0], bounds[:, 1], size=(40, d))
+    got = np.array([float(loglike(jax.numpy.asarray(x))) for x in Xt])
+    ref = _raw_gp_mean(sur, Xt)
+    scale = max(np.max(np.abs(ref)), 1.0)
+    assert np.allclose(got, ref, rtol=0, atol=RTOL * scale), (
+        f"JAX loglike drifted from the numpy GP mean at d={d}: "
+        f"max |diff| = {np.max(np.abs(got - ref)):.3e} (scale {scale:.3e})"
+    )
+
+
+@pytest.mark.parametrize("d", [2, 5])
+def test_jax_logdensity_matches_raw_gp_mean_up_to_constant(d):
+    """The NUTS log-density works on the unconstrained space and drops the
+    y-offset, so it must match the raw mean up to a single additive constant
+    once the bijector's log-Jacobian is removed."""
+    jax = pytest.importorskip("jax")
+    from gpry.mc_interfaces import _build_jax_logdensity
+
+    sur, bounds = _fitted_surrogate(d=d, seed=10 + d)
+    lo, hi = sur.preprocessing_X.transform_bounds(bounds).T
+    beta = 1.0
+    logdens, x_of_u, u_of_x = _build_jax_logdensity(sur, lo, hi, beta)
+
+    rng = np.random.default_rng(7)
+    Xt = rng.uniform(bounds[:, 0], bounds[:, 1], size=(30, d))
+    Xn = sur.preprocessing_X.transform(Xt)
+    U = np.array([u_of_x(xn) for xn in Xn])
+
+    vals = np.array([float(logdens(jax.numpy.asarray(u))) for u in U])
+    # strip the bijector log-Jacobian to recover beta * mean
+    width = hi - lo
+    log_jac = np.array([
+        np.sum(np.log(width) - np.logaddexp(0, -u) - np.logaddexp(0, u)) for u in U
+    ])
+    got = vals - log_jac
+    ref = beta * _raw_gp_mean(sur, Xt)
+    diff = got - ref
+    assert np.ptp(diff) < RTOL * max(np.max(np.abs(ref)), 1.0), (
+        f"NUTS log-density is not a constant offset from the GP mean at d={d}: "
+        f"spread of the difference = {np.ptp(diff):.3e}"
+    )
+
+
+def test_x_preprocessor_probe_reproduction():
+    """The JAX backend reproduces the x-preprocessor from two probe points,
+    which is only valid while it is diagonal-affine. Assert that it is."""
+    sur, bounds = _fitted_surrogate(d=6, seed=3)
+    d = 6
+    t0 = np.ravel(sur.preprocessing_X.transform(np.zeros((1, d))))
+    t1 = np.ravel(sur.preprocessing_X.transform(np.ones((1, d))))
+    scale, offset = t1 - t0, t0
+    rng = np.random.default_rng(11)
+    X = rng.uniform(bounds[:, 0], bounds[:, 1], size=(50, d))
+    got = offset + scale * X
+    ref = sur.preprocessing_X.transform(X)
+    assert np.allclose(got, ref, atol=1e-12), (
+        "x-preprocessor is no longer diagonal-affine; the two-point probe in "
+        "build_jax_gp_loglike is invalid."
+    )
+
+
+def test_y_preprocessor_is_affine():
+    """`std_y` is recovered by probing `inverse_transform_scale(ones)`, which
+    assumes an affine y-preprocessor. A nonlinear one (e.g. a soft clip) would
+    silently produce a wrong target rather than failing."""
+    sur, _ = _fitted_surrogate(d=3, seed=4)
+    pre = sur.preprocessing_y
+    scale = float(np.ravel(pre.inverse_transform_scale(np.ones(1)))[0])
+    offset = float(np.ravel(pre.inverse_transform(np.zeros(1)))[0])
+    probe = np.linspace(-3.0, 3.0, 25)
+    got = offset + scale * probe
+    ref = np.ravel(pre.inverse_transform(probe))
+    assert np.allclose(got, ref, atol=1e-10), (
+        "y-preprocessor is not affine; the scale/offset probe used by the JAX "
+        "backends is invalid and would silently mis-scale the target."
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="_extract_stationary_kernel cannot distinguish Sum from Product -- "
+           "both expose k1/k2 -- so a genuine sum of two stationary kernels is "
+           "silently evaluated as a product. Safe today only because GPry's "
+           "default is C*RBF + WhiteKernel, where White contributes nothing.",
+)
+def test_extract_kernel_handles_sums():
+    """A sum of two stationary kernels must not be collapsed into a product."""
+    jax = pytest.importorskip("jax")
+    from gpry.kernels import RBF, ConstantKernel as C
+    from gpry.mc_interfaces import _extract_stationary_kernel
+
+    k = C(2.0) * RBF(np.array([1.0, 1.0])) + C(3.0) * RBF(np.array([5.0, 5.0]))
+    amp, ell, family, nu = _extract_stationary_kernel(k)
+    # A sum cannot be represented by a single (amp, ell) pair at all; the current
+    # code returns amp = 2*3 = 6 and the LAST length scale, with no error.
+    assert not (np.isclose(amp, 6.0) and np.allclose(ell, 5.0)), (
+        f"sum silently collapsed to a product: amp={amp}, ell={ell}"
+    )
+
+
+def test_fixture_still_exercises_the_float32_failure_regime():
+    """
+    Guard against the suite silently losing its teeth.
+
+    A float32 regression is only catastrophic when the output scale is large and
+    ``alpha`` strongly cancels (GPry's characteristic regime: amp ~ 1e6). On a
+    benign fixture (amp ~ 1) float32 agrees to ~1e-16 and the consistency tests
+    above would pass even if precision were dropped. At least one fixture must
+    therefore reach the dangerous regime, or those tests prove nothing.
+    """
+    from gpry.mc_interfaces import _extract_stationary_kernel
+
+    sur, _ = _fitted_surrogate(d=2, seed=2)
+    amp, _ell, _fam, _nu = _extract_stationary_kernel(sur.gpr.kernel_)
+    alpha_max = float(np.max(np.abs(np.ravel(sur.gpr.alpha_))))
+    assert amp > 1e3 and alpha_max > 10.0, (
+        f"the d=2 fixture no longer reaches the large-amplitude/cancelling-alpha "
+        f"regime (amp={amp:.3e}, max|alpha|={alpha_max:.3e}), so the JAX "
+        f"consistency tests can no longer detect a float32 regression."
+    )
