@@ -22,17 +22,48 @@ question is settled; remaining work is a paper, a defensible code structure, and
   some prose; the per-arm table S0:1 S1:1 S2:1 S3:2 S4:0 is correct.) All 5 restart strategies give indistinguishable
   quality at d in {5,8,16,30}; all 25 multimode runs found 4/4 modes.
   `results/restart/`, `notes/RESTART_STUDY.md`.
-- **Final head-to-head, 50 runs** (`results/final/{BASE,PROP}`). **TIMINGS INVALID --
-  see the SLURM warning below. Quality columns stand; absolute times must be re-measured;
-  the speedup RATIOS are plausible but unproven [assumed].**
-  | case | fit speedup | loop speedup | quality BASE->PROP | fails |
+- **Final head-to-head, 50 runs, CLEAN single-rank** (`results/final/{BASE,PROP}`, job 476949;
+  the contaminated 4-rank original is preserved at `results/final_4rank/`):
+
+  | case | fit BASE->PROP | fit speedup | loop speedup | quality BASE->PROP |
   |---|---|---|---|---|
-  | gauss d=30 | 5.07x | 1.48x | 0.0205 -> 0.0192 | 1 -> 0 |
-  | gauss d=16 | 9.41x | 1.20x | 0.0058 -> 0.0054 | 0 -> 0 |
-  | gauss d=8 | 10.91x | 1.11x | 0.0016 -> 0.0021 | 0 -> 0 |
-  | curved d=5 | 8.38x | 1.15x | 0.0019 -> 0.0017 | 0 -> 0 |
-  | multimode d=5 | 10.58x | 1.48x | 0.0623 -> 0.0515 | 0 -> 0 |
-  BASE = current defaults; PROP = S2 (2 restarts) + ceiling 1e3 + `optimizer_ftol=1e-5`.
+  | gauss d=30 | 547 -> 100 s | **5.46x** | 1.39x | 0.0205 -> 0.0192 |
+  | gauss d=16 | 17.4 -> 1.8 s | **9.45x** | 1.08x | 0.0058 -> 0.0054 |
+  | gauss d=8 | 3.4 -> 0.3 s | **10.53x** | 1.13x | 0.0016 -> 0.0021 |
+  | curved d=5 | 4.6 -> 0.6 s | **8.09x** | 1.13x | 0.0019 -> 0.0017 |
+  | multimode d=5 | 69.5 -> 6.7 s | **10.30x** | 1.39x | 0.0623 -> 0.0515 |
+
+- **Contention inflation MEASURED** (clean vs 4-rank, same seeds/config) -- was `[assumed]`, now
+  `[derived]`. Quality and `n_total` are bit-identical between the two; only timings moved. The
+  FIT inflated consistently 1.06-1.26x in all ten cells (BLAS-heavy, memory-bandwidth bound);
+  LOOP times scattered +-25% with no consistent sign, i.e. acquisition run-to-run variance
+  rather than contention. The BASE/PROP ratios survived, since both arms were equally
+  contended. Cross-validation: d=16 PROP clean loop 132.4 s vs the independent h2h campaign's
+  132.1 s for the identical config -- 0.2% agreement between two separate clean campaigns.
+
+- **R1 post-fix sampler head-to-head, 50 runs, CLEAN** (`results/h2h/`, job 476793). NUTS beats
+  UltraNest in every case at indistinguishable quality; both recover 4/4 modes:
+
+  | case | loop NUTS/UN | loop ratio | per-point ratio | note |
+  |---|---|---|---|---|
+  | gauss d=16 | 132 / 3913 s | **29.6x** | 16.9x | headline |
+  | multimode d=5 | 190 / 1448 s | **7.63x** | 7.88x | matched budget n=300, confound-free |
+  | gauss d=8 | 51 / 153 s | 3.02x | 2.69x | |
+  | curved d=5 | 91 / 302 s | 3.31x | **0.83x** | soft: UN hit the n=300 cap unconverged on 3/5 seeds |
+  | gauss d=30 | 748 / 1071 s | 1.43x | **1.02x** | do NOT oversell: same cost per point, NUTS just needs fewer |
+
+  **The d=30 conclusion REVERSED and the mechanism is confirmed**: pre-fix NUTS 12486 s
+  (fit 85.4%) vs UltraNest 1840 s (fit 41.8%) -> UltraNest 6.8x faster; post-fix NUTS 748 s
+  (fit 13.5%) vs UltraNest 1071 s (fit 12.3%) -> NUTS 1.43x. The fix improved NUTS 16.7x and
+  UltraNest 1.7x, exactly the predicted asymmetry. The old "UltraNest wins at d=30" was an
+  artefact of the `length_scale_prior` bug.
+
+- **False convergence is real and UltraNest-only**: `h2h gauss_d30_ultranest_seed3` reports
+  `converged=True, error=None` at **n=180 with KL=158.69** -- GPry's criterion declaring success
+  on a posterior three orders of magnitude wrong. Zero such cases in 200 NUTS runs. Caught only
+  by the aggregator's recovery gate; without it that run would have entered the cost median as
+  a fast UltraNest win.
+
 - **Fit is no longer the bottleneck**: falls from 5-57% of the loop to 0.7-16.7%. Further
   work on it is capped at 1.20x (d=30), ~1.02x elsewhere. Remaining d=30 cost is
   acquisition: 621 s of a 758 s loop.
