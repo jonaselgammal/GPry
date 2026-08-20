@@ -425,8 +425,7 @@ class Runner:
                 surrogate["regressor"][nres] = get_Xnumber(
                     surrogate["regressor"][nres], "d", self.d, int, nres
                 )
-                surrogate["regressor"][nres]
-                mpi.round_MPI(
+                surrogate["regressor"][nres] = mpi.round_MPI(
                     surrogate["regressor"][nres],
                     up=False,
                     warn_rounding=True,
