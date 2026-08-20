@@ -890,6 +890,20 @@ def nuts_acquire(surrogate, bounds, rng=None, return_info=False, **nuts_kwargs):
     tb = np.asarray(surrogate.preprocessing_X.transform_bounds(bounds), dtype=float)
     lo, hi = np.minimum(tb[:, 0], tb[:, 1]), np.maximum(tb[:, 0], tb[:, 1])
     info = nuts_sample_gp_mean(surrogate, lo, hi, rng=rng, **nuts_kwargs)
+    # Report the GP evaluations back to the surrogate's own counter.
+    #
+    # `TimerCounter` (gpry.progress) measures acquisition cost as the change in
+    # `surrogate.n_eval`, which only `predict`/`predict_std` increment. This
+    # backend never calls either -- it evaluates the GP mean natively in JAX --
+    # so without this the NUTS arm reports ~0 acquisition evaluations and the
+    # `evals_acquire` column silently measures only the downstream candidate
+    # ranking. Any eval-count comparison against a nested-sampling arm (which
+    # does go through `predict`) is then wrong by orders of magnitude.
+    #
+    # `info["n_eval"]` is not an estimate: it is the summed leapfrog count from
+    # BlackJAX's own `num_integration_steps`, plus one density evaluation per
+    # trajectory, plus the warmup at the measured mean tree size.
+    surrogate.n_eval = int(getattr(surrogate, "n_eval", 0)) + int(info["n_eval"])
     X_norm = info["X"]
     X = surrogate.preprocessing_X.inverse_transform(X_norm) if len(X_norm) else X_norm
     w = np.ones(X.shape[0]) if len(X) else np.empty((0,))

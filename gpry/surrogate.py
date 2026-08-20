@@ -1071,6 +1071,12 @@ class SurrogateModel:
             input space as ``X``.
         """
         X = np.atleast_2d(X)
+        # Count these as GP evaluations, as `predict`/`predict_std` do. The
+        # gradient-based acquisition samplers reach the GP only through here, so
+        # without this the acquisition's `evals_acquire` column measures nothing
+        # but the downstream candidate ranking. (`hmc_sample_gp_mean` reports its
+        # cost as the CHANGE in this counter, so it read exactly zero.)
+        self.n_eval += len(X)
         X_ = X if transformed else self.preprocessing_X.transform(np.copy(X))
         mean, mean_grad = self.gpr.predict_mean_grad_batch(X_)
         mean = self.preprocessing_y.inverse_transform(mean)
