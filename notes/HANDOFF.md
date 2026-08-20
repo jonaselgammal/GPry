@@ -46,11 +46,11 @@ question is settled; remaining work is a paper, a defensible code structure, and
 
   | case | loop NUTS/UN | loop ratio | per-point ratio | note |
   |---|---|---|---|---|
-  | gauss d=16 | 132 / 3913 s | **29.6x** | 16.9x | headline |
+  | gauss d=16 | 132 / 3913 s | **29.6x** | 14.60x | headline |
   | multimode d=5 | 190 / 1448 s | **7.63x** | 7.88x | matched budget n=300, confound-free |
-  | gauss d=8 | 51 / 153 s | 3.02x | 2.69x | |
-  | curved d=5 | 91 / 302 s | 3.31x | **0.83x** | soft: UN hit the n=300 cap unconverged on 3/5 seeds |
-  | gauss d=30 | 748 / 1071 s | 1.43x | **1.02x** | do NOT oversell: same cost per point, NUTS just needs fewer |
+  | gauss d=8 | 51 / 153 s | 3.02x | 2.90x | |
+  | curved d=5 | 91 / 302 s | 3.31x | **n.q.** | NOT QUOTABLE: 9.8x per-run spread; UN hit the n=300 cap unconverged on 3/5 seeds |
+  | gauss d=30 | 748 / 1071 s | 1.43x | **1.06x** | do NOT oversell: same cost per point, NUTS just needs fewer |
 
   **The d=30 conclusion REVERSED and the mechanism is confirmed**: pre-fix NUTS 12486 s
   (fit 85.4%) vs UltraNest 1840 s (fit 41.8%) -> UltraNest 6.8x faster; post-fix NUTS 748 s
@@ -63,6 +63,10 @@ question is settled; remaining work is a paper, a defensible code structure, and
   on a posterior three orders of magnitude wrong. Zero such cases in 200 NUTS runs. Caught only
   by the aggregator's recovery gate; without it that run would have entered the cost median as
   a fast UltraNest win.
+
+- **Per-point cost is `median(per-run t_acquire/n_total)`**, NOT median-over-median. The
+  latter pairs one run's time with another's point count and yields a value no run has.
+  (The handoff previously carried ratio-of-medians values here; corrected 08-20.)
 
 - **Fit is no longer the bottleneck**: falls from 5-57% of the loop to 0.7-16.7%. Further
   work on it is capped at 1.20x (d=30), ~1.02x elsewhere. Remaining d=30 cost is
@@ -223,10 +227,14 @@ run: co-scheduling swung per-eval cost 45->107 ms at identical n and d.
 |---|---|
 | `GPry/` | the package, branch `nuts-acquisition-v2` (rebased on `origin/main`) |
 | `GPry/gpry/mc_interfaces.py` | NEW, 776 lines — NUTS/HMC backend + JAX GP loglike |
-| `GPry/experiments/cluster/` | harness: `run_restart_study.py`, `compare_samplers.py`, `common.py`, manifests, sbatch |
-| `GPry/experiments/cluster/common.py` | targets + evaluators (`make_curved`, `make_multimode`, exact reference samples) |
-| `results/final/{BASE,PROP}` | the 50-run head-to-head |
-| `results/restart/` | the 125-run restart study |
+| `GPry/experiments/cluster/run/` | scripts that EXECUTE science: `run_restart_study.py`, `compare_samplers.py`, `common.py` |
+| `GPry/experiments/cluster/slurm/` | sbatch + manifests + manifest generators |
+| `GPry/experiments/cluster/analyse/` | read finished products, produce numbers (`aggregate_restart.py`, `replot_corner.py`) |
+| `GPry/experiments/cluster/legacy/` | the superseded 2026-08-10 Tier-B harness, kept whole (it deploys flat via its own `setup_env.sh`) |
+| `GPry/experiments/cluster/run/common.py` | targets + evaluators (`make_curved`, `make_multimode`, exact reference samples) |
+| `results/paper_runs/` | everything the paper cites: `h2h/ final/ final_4rank/ restart/ v3/` + summary CSVs |
+| `results/paper_runs/plot_utils.py` | **single source of truth for every plotting setting**; sizes derive from the MEASURED `\textwidth` = 469.755 pt; `LAYOUT` switches 1- vs 2-column in one line |
+| `results/other_runs/` | superseded campaigns and legacy readers; never cite as current |
 | `notes/RESTART_STUDY.md` | full design, calibration, results, corrections |
 | `paper/main.tex` | scaffolding + 5 figures |
 
