@@ -125,10 +125,14 @@ because they all die at the same point, before the restart budget matters.
 
 ## Layout
 
-- `experiments/cluster/run_restart_study.py` — one run
-- `experiments/cluster/gen_manifest_restart.py` → `manifest_restart.txt` (125 tasks)
-- `experiments/cluster/restart.sbatch` — array job, partition **cpu36**
-- `experiments/cluster/aggregate_restart.py` — cost + quality-vs-control table
+(Paths updated 2026-08-20, when `experiments/cluster/` was filed into
+`run/` + `slurm/` + `analyse/` + `legacy/`. Nothing was removed or renamed.)
+
+- `experiments/cluster/run/run_restart_study.py` — one run
+- `experiments/cluster/slurm/gen_manifest_restart.py` → `slurm/manifest_restart.txt` (125 tasks)
+- `experiments/cluster/slurm/restart.sbatch` — array job, partition **cpu36**
+  (submit from `experiments/cluster/`: `sbatch --array=1-125 slurm/restart.sbatch`)
+- `experiments/cluster/analyse/aggregate_restart.py` — cost + quality-vs-control table
 
 Manifest order is d=30 first (longest, ~3.7 h at S0) to fill the wall-clock tail.
 

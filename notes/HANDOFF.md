@@ -41,22 +41,55 @@ question is settled; remaining work is a paper, a defensible code structure, and
   contended. Cross-validation: d=16 PROP clean loop 132.4 s vs the independent h2h campaign's
   132.1 s for the identical config -- 0.2% agreement between two separate clean campaigns.
 
-- **R1 post-fix sampler head-to-head, 50 runs, CLEAN** (`results/h2h/`, job 476793). NUTS beats
-  UltraNest in every case at indistinguishable quality; both recover 4/4 modes:
+- **R1 post-fix sampler head-to-head** (`results/h2h/`, job 476793). **THE TWO HIGH-d
+  CELLS ARE QUARANTINED — see the sentinel bug below.** Clean cells only:
 
-  | case | loop NUTS/UN | loop ratio | per-point ratio | note |
+  | case | loop ratio | per-point | masked prior vol | status |
   |---|---|---|---|---|
-  | gauss d=16 | 132 / 3913 s | **29.6x** | 14.60x | headline |
-  | multimode d=5 | 190 / 1448 s | **7.63x** | 7.88x | matched budget n=300, confound-free |
-  | gauss d=8 | 51 / 153 s | 3.02x | 2.90x | |
-  | curved d=5 | 91 / 302 s | 3.31x | **n.q.** | NOT QUOTABLE: 9.8x per-run spread; UN hit the n=300 cap unconverged on 3/5 seeds |
-  | gauss d=30 | 748 / 1071 s | 1.43x | **1.06x** | do NOT oversell: same cost per point, NUTS just needs fewer |
+  | multimode d=5 | **7.63x** | 7.88x | 0.000000 | **CLEAN — matched budget n=300, use as headline** |
+  | gauss d=8 | 3.02x | 2.90x | ~0 | clean |
+  | curved d=5 | 3.31x | n.q. | up to 0.19 | CONTAMINATED |
+  | gauss d=16 | 29.6x | 14.60x | ~2e-4 | **QUARANTINED** (understated; ~111x counterfactual) |
+  | gauss d=30 | 1.43x | 1.06x | 0.18-0.50 | **QUARANTINED** (UltraNest never sampled) |
 
-  **The d=30 conclusion REVERSED and the mechanism is confirmed**: pre-fix NUTS 12486 s
-  (fit 85.4%) vs UltraNest 1840 s (fit 41.8%) -> UltraNest 6.8x faster; post-fix NUTS 748 s
-  (fit 13.5%) vs UltraNest 1071 s (fit 12.3%) -> NUTS 1.43x. The fix improved NUTS 16.7x and
-  UltraNest 1.7x, exactly the predicted asymmetry. The old "UltraNest wins at d=30" was an
-  artefact of the `length_scale_prior` bug.
+## THE SENTINEL BUG — invalidates every UltraNest comparison at high d
+
+`GPAcquisition._do_mc_sample_ultranest` set `surrogate.minus_inf_value = -1e-300` to give
+UltraNest a finite stand-in for -inf. **-1e-300 is zero to ~300 digits: the LARGEST
+log-posterior, not the smallest.** Nested sampling maximises into the classifier-masked
+region and stops there (`Explored until L=-1e-300`) after ~2 e-folds instead of ~30.
+
+Reproduced directly on `h2h/gauss_d30_S2_ultranest_seed1_surrogate.pkl`: an all-masked
+batch returns `-1e-300`, the same points in a mixed batch return `-59.23`, and real values
+there span `[-418, -234]`. (Both paths differ because `predict` early-returns on a fully
+masked batch, skipping the clipper.)
+
+Gated by the masked fraction of the prior: **~0 at d=8, ~2e-4 at d=16, 0.18-0.50 at d=30**
+— invisible at low d, total at high d. Hence:
+- **d=30**: UltraNest quits after ~2 e-folds. Its 931 ms/point is the CHEAPEST cell in the
+  campaign, below d=5 — not a scaling regime, an early exit. A direct counterfactual with
+  the sentinel repaired ran **>=223x more evaluations and did not terminate**.
+- **d=16**: finding the trap is a coin flip — 0.4M evals if found, 3.3M if not. **That
+  bimodality IS the 6x UltraNest d=16 spread.** With no iteration escaping, UltraNest's
+  median loop would be ~14669 s against NUTS's 132 s, i.e. **~111x, not 29.6x** [counterfactual].
+
+**FIXED** on this branch (`d612bff`) by anchoring the stand-in to the training-data range,
+with a regression test. The bug is on `origin/main` and needs its own upstream PR.
+
+**Consequences**: do NOT start Group B until the high-d cells are re-run — B1 and B2 would
+both be measured against a broken NS arm. Point counts are contaminated too (roughly half of
+UltraNest's d=30 candidate pool comes from the meaningless plateau), so "NUTS needs 690 vs
+990 points" is not clean either.
+
+- **NUTS itself is fine** (H1 refuted): replaying a production acquisition step on the saved
+  surrogates gives mean tree size 8.8 -> 12.8 from d=8 to d=30, **zero divergences at every
+  d**, acceptance flat at 0.87-0.91, and near-d-independent per-point cost (735/619/877 ms at
+  d=8/16/30). The per-iteration growth is GP size and padding capacity, not sampler decay.
+
+- **`evals_acquire` does not count the NUTS arm's GP evaluations** — `nuts_acquire` uses the
+  JAX path, which bypasses `surrogate.predict`, so the counter reads ~0 for it and the saved
+  numbers reflect only downstream candidate ranking. **Any eval-count comparison between arms
+  in the saved data is invalid.** True NUTS cost is ~44-62k GP evals per acquisition step.
 
 - **False convergence is real and UltraNest-only**: `h2h gauss_d30_ultranest_seed3` reports
   `converged=True, error=None` at **n=180 with KL=158.69** -- GPry's criterion declaring success
@@ -183,8 +216,17 @@ Three parallel tracks:
 
 ## Open questions / risks
 
-- **The 836-nat attractor was measured on 12 restarts, not 68.** 68 is the default budget
-  (10+2d-2) at d=30; only 12 were instrumented. Say "all 12 measured, of the 68 drawn".
+- **The attractor claim is now measured at the FULL budget, and it is not "all"**
+  (`results/paper_runs/attractor/attractor_d30_full68.json`, regenerated 08-20). Of the 68
+  random restarts on that surrogate: **64 land on the degenerate attractor** at LML=-797.44,
+  **2 reach the optimum** at +38.47, and 2 land elsewhere (-93.26, -129.77). Both informed
+  starts reach +38.465. Gap = 835.91 nats.
+  The earlier "all 68 collapse" was an extrapolation from 12 instrumented restarts and is
+  FALSE — random restarts do occasionally work. The argument for dropping them is that they
+  are **redundant given the informed starts** (which find the optimum every time), not that
+  they never work; the direct evidence remains that S2 matched S0's quality across 125 runs.
+  Caveat: 64/68 is one draw sequence on one surrogate, so phrase it as "64 of the 68 restarts
+  of this fit", never as a rate.
 - **~5-16% `GPAcquisitionError` failure rate at d=30**, present in the BASELINE too. We can
   say it is a background rate unrelated to our changes; we cannot say why. A referee will ask.
 - **Surface mismatch**: NUTS acquisition applies the SVM mask but NOT `clip_factor`, so it
