@@ -8,7 +8,7 @@ this module collects and runs in a bare environment.
 import numpy as np
 import pytest
 
-from gpry.preprocessing import NormalizeBounds, NormalizeY
+from gpry.preprocessing import NormalizeBounds, NormalizeY, PipelineX, Whitening
 from gpry.surrogate import SurrogateModel
 
 def regressor():
@@ -108,6 +108,65 @@ def test_surrogate_without_preprocessing_y():
     assert surrogate.preprocessing_y is DummyPreprocessor
     surrogate.append(X, y)
     rng = np.random.default_rng(3)
+    X_test = rng.uniform(bounds[:, 0], bounds[:, 1], size=(10, d))
+    y_pred = surrogate.predict(X_test)
+    assert y_pred.shape == (len(X_test),)
+    assert np.all(np.isfinite(y_pred))
+
+
+def test_whitening_compute_mean_cov_orientation():
+    """
+    ``Whitening.compute_mean_cov`` used to call ``np.cov`` without ``rowvar=False``, i.e.
+    treating rows of ``X`` as variables, while the ``mean`` line on the preceding line
+    treats them as samples. For ``n_samples != n_features`` that raises; for
+    ``n_samples == n_features`` it would silently return a meaningless matrix.
+    """
+    d, n = 8, 20000
+    X = np.random.default_rng(0).normal(size=(n, d))
+    logp = -0.5 * np.sum(X**2, axis=1)
+    mean, cov = Whitening.compute_mean_cov(X, logp)
+    assert mean.shape == (d,)
+    assert cov.shape == (d, d)
+    assert np.allclose(cov, cov.T)
+    # Symmetric positive-definite: Cholesky succeeds.
+    np.linalg.cholesky(cov)
+    # Standard normal samples weighted by exp(-|x|^2/2) are distributed as N(0, I/2).
+    assert np.allclose(np.diag(cov), 0.5, atol=0.1)
+
+
+def test_whitening_compute_mean_cov_square_case():
+    """``n_samples == n_features`` used to silently return an unrelated matrix."""
+    d = 30
+    X = np.random.default_rng(1).normal(size=(d, d))
+    logp = -0.5 * np.sum(X**2, axis=1)
+    _, cov = Whitening.compute_mean_cov(X, logp)
+    assert cov.shape == (d, d)
+    expected = np.cov(X, rowvar=False, aweights=np.exp(logp - np.max(logp)), ddof=0)
+    assert np.allclose(cov, expected)
+
+
+def test_whitening_in_surrogate_pipeline():
+    """
+    End-to-end: exercise ``Whitening`` through a ``PipelineX`` inside a
+    ``SurrogateModel``. ``Whitening`` is opt-in and unreferenced by ``run.py`` and
+    ``surrogate.py``, which is why the covariance-orientation bug survived.
+    """
+    d = 4
+    bounds, X, y = gaussian_training_set(d=d, n=120, seed=4, half_width=3.0)
+    surrogate = SurrogateModel(
+        bounds=bounds,
+        preprocessing_X=PipelineX([NormalizeBounds(bounds), Whitening(bounds, learn=True)]),
+        preprocessing_y=NormalizeY(),
+        regressor=regressor(),
+        infinities_classifier=svm_classifier(),
+        random_state=42,
+    )
+    surrogate.append(X, y)
+    # The whitening step must actually have learnt a covariance.
+    whitening = surrogate.preprocessing_X.preprocessors[-1]
+    assert whitening.cov is not None
+    assert np.asarray(whitening.cov).shape == (d, d)
+    rng = np.random.default_rng(5)
     X_test = rng.uniform(bounds[:, 0], bounds[:, 1], size=(10, d))
     y_pred = surrogate.predict(X_test)
     assert y_pred.shape == (len(X_test),)

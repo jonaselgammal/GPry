@@ -283,7 +283,7 @@ class Whitening:
             try:
                 logp_exp = np.exp(logp - np.max(logp))
                 mean = np.average(X, axis=0, weights=logp_exp)
-                cov = np.cov(X, aweights=logp_exp, ddof=0)
+                cov = np.cov(X, rowvar=False, aweights=logp_exp, ddof=0)
             except (ZeroDivisionError, TypeError, ValueError, RuntimeWarning) as excpt:
                 raise ValueError(
                     f"Could not compute covmat with the given points: {excpt}"
