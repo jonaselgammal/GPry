@@ -60,6 +60,25 @@ from gpry.tools import delta_logp_of_1d_nstd, generic_params_names, get_Xnumber
 from gpry.infinities_classifier import InfinitiesClassifiers
 
 
+#: Finite stand-in for ``-inf`` log-posterior values, for samplers that cannot handle
+#: infinities (UltraNest). It must be *worse* than anything the sampler can reach in the
+#: finite region, or the sampler climbs into the region masked by the infinities
+#: classifier instead of the posterior -- which is what happened while this was
+#: ``-1e-300`` (zero to ~300 digits, i.e. the LARGEST log-posterior, not the smallest;
+#: almost certainly a typo for ``-1e300``).
+#:
+#: ``-1e30`` rather than a more extreme value: it is already ~28 orders of magnitude
+#: below any realistic log-posterior, so nothing is gained by going lower, while the
+#: remaining headroom matters. ``-1e300`` would square to ``inf`` (so any variance over
+#: a chain column containing it is ``inf``) and would cast to ``-inf`` in float32 --
+#: silently restoring the very value the substitute exists to avoid. ``-1e30`` squares
+#: to 1e60 and survives float32 (max ~3.4e38).
+#:
+#: Only clipping from above is applied to the regressor output (see :class:`Clipper`),
+#: so this cannot be raised by it: masked points score the same however batched.
+MINUS_INF_SUBSTITUTE = -1e30
+
+
 class SurrogateModel:
     r"""
     Object holding the Gaussian Process Regressor, and, if applicable, the
@@ -449,6 +468,48 @@ class SurrogateModel:
         return self.y_max - self.preprocessing_y.inverse_transform_scale(
             self.infinities_classifier.get_highest_current_threshold()
         )
+
+    @property
+    def minus_inf_value_substitute(self):
+        """
+        A finite stand-in for ``-inf``, for samplers that cannot handle infinite
+        log-posterior values (e.g. UltraNest). See :data:`MINUS_INF_SUBSTITUTE`.
+
+        Assign it to :attr:`minus_inf_value` around the sampler call, and restore the
+        previous value afterwards.
+
+        Almost always just :data:`MINUS_INF_SUBSTITUTE`. The second term is a guard for
+        a target whose log-posterior reaches down to -1e30 on its own, where the
+        constant would no longer be below the surface: drop below the training minimum
+        by whichever is larger, the training *range* or the scale of the *minimum*
+        itself. Both are needed, and they fail in opposite regimes:
+
+        - an absolute margin is useless, since it vanishes into float64 spacing once
+          ``|y_min|`` exceeds ~1e14 (at 1e30 the spacing is ~1.4e14, so
+          ``y_min - 1000 == y_min`` exactly, and the guard would return ``y_min``);
+        - ``abs(y_min)`` alone (i.e. ``2 * y_min``) is not enough when ``|y_min|`` is
+          small but the range is huge -- an unnormalised likelihood with large positive
+          log-posteriors -- where the GP mean can reach -1e30 while this term cannot;
+        - ``100 * range`` alone degenerates in the mirror case, ``|y_min|`` huge with a
+          narrow range.
+        """
+        y = self._y[self._i_regress]
+        y = y[np.isfinite(y)]
+        if y.size == 0:
+            return MINUS_INF_SUBSTITUTE
+        y_min, y_max = float(np.min(y)), float(np.max(y))
+        value = min(
+            MINUS_INF_SUBSTITUTE,
+            y_min - max(100.0 * (y_max - y_min), abs(y_min)),
+        )
+        if value != MINUS_INF_SUBSTITUTE and self.verbose > 1:
+            warnings.warn(
+                f"Training log-posterior values reach {y_min:.3e}, which is at or "
+                f"below the default stand-in for -inf ({MINUS_INF_SUBSTITUTE:.0e}); "
+                f"using {value:.3e} instead. Magnitudes this large usually mean an "
+                "unnormalised or misbehaving likelihood -- worth checking the target."
+            )
+        return value
 
     def is_finite_y(self, y, validate=True):
         """
@@ -927,6 +988,11 @@ class SurrogateModel:
             )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
+            # NB: clip here too, exactly as in the general path below. Otherwise an
+            # entirely-masked batch and the same points sharing a batch with finite
+            # ones could come back with different values (they did, when
+            # `minus_inf_value` was set above the clipping ceiling).
+            return_dict["mean"] = self._clip_mean(return_dict["mean"])
             if len(return_dict) == 1:
                 return return_dict["mean"]
             return list(return_dict.values())
@@ -954,16 +1020,25 @@ class SurrogateModel:
                 )
             )
         # Upper clipping to avoid overshoots
-        # The 'trivial' check avoids wasting computation in finding the y extremes
-        if not self.clipper.trivial:
-            return_dict["mean"] = self.clipper(
-                return_dict["mean"],
-                self._y[self._i_regress].min(),
-                self._y[self._i_regress].max(),
-            )
+        return_dict["mean"] = self._clip_mean(return_dict["mean"])
         if len(return_dict) == 1:
             return return_dict["mean"]
         return list(return_dict.values())
+
+    def _clip_mean(self, mean):
+        """
+        Applies the upper clipping of the regressor output (see :class:`Clipper`).
+
+        Applied on *every* return path of :meth:`predict`, so that the value returned
+        for a point does not depend on which other points shared its batch.
+        """
+        # The 'trivial' check avoids wasting computation in finding the y extremes
+        if self.clipper.trivial:
+            return mean
+        y = self._y[self._i_regress]
+        if y.size == 0:  # unfitted model: nothing to clip against
+            return mean
+        return self.clipper(mean, y.min(), y.max())
 
     @staticmethod
     def _regressor_output_to_dict(

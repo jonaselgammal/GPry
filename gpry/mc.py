@@ -436,10 +436,14 @@ def mc_sample_from_gp_ns(
     out_dir_raw = (
         tempfile.TemporaryDirectory().name + "/"
     )  # make sure it's read as a dir
-    # If Ultranest, remove chance of -inf
+    # If UltraNest, remove chance of -inf: it cannot handle infinite likelihoods, so
+    # masked points need a finite stand-in. It used to be -1e-300, which is zero to
+    # ~300 digits, i.e. the LARGEST log-posterior rather than the smallest, so nested
+    # sampling maximised into the classifier-masked region instead of the posterior.
+    # `minus_inf_value_substitute` (-1e30) is far below any realistic log-posterior.
     if isinstance(sampler, nsint.InterfaceUltraNest):
         prev_min = surrogate.minus_inf_value
-        surrogate.minus_inf_value = -1e-300
+        surrogate.minus_inf_value = surrogate.minus_inf_value_substitute
     X_mc, y_mc, w_mc, logZ, logZstd = sampler.run(
         logp, param_names=params, out_dir=out_dir_raw
     )

@@ -844,6 +844,9 @@ class NORA(GenericGPAcquisition):
         return X, None, None, None, None, None
 
     def _do_mc_sample_polychord(self, surrogate, bounds=None, rng=None):
+        # NB: unlike UltraNest (below), PolyChord takes -inf directly (it compares
+        # against its own `logzero`), so `surrogate.minus_inf_value` is left at -inf
+        # and there is no finite stand-in here that could be mis-ordered.
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
@@ -867,13 +870,31 @@ class NORA(GenericGPAcquisition):
         return X_mc, y_mc, None, w_mc, logZ, logZstd
 
     def _do_mc_sample_ultranest(self, surrogate, bounds=None, rng=None):
+        # UltraNest cannot handle -inf likelihoods, so points the infinities
+        # classifier masks out need a FINITE stand-in. That stand-in must be
+        # strictly worse than anything the sampler can find in the finite region.
+        #
+        # It used to be -1e-300, which is zero to ~300 digits, i.e. the LARGEST
+        # log-posterior representable rather than the smallest. Nested sampling
+        # then converges onto the masked region instead of the posterior: it
+        # terminates after ~2 e-folds reporting `Explored until L=-1e-300`, having
+        # never sampled the target. The failure scales with the masked fraction of
+        # the prior, so it is invisible in low dimension and total in high.
+        #
+        # `SurrogateModel.minus_inf_value_substitute` (-1e30) is far below any
+        # realistic log-posterior, and an upper clip cannot raise it, so
+        # entirely-masked batches and mixed batches agree (`predict` clips on both
+        # of its return paths). See `gpry.surrogate.MINUS_INF_SUBSTITUTE` for why
+        # -1e30 and not something more extreme.
+        _sentinel = surrogate.minus_inf_value_substitute
+
         def logp(X):
             """
-            Returns the predicted value at a given point (-inf if prior=0).
+            Returns the predicted value at a given point (a finite, very low
+            stand-in where the prior/classifier says -inf).
             """
-            # Ultranest cannot deal with -np.inf
             prev_miv = surrogate.minus_inf_value
-            surrogate.minus_inf_value = -1e-300
+            surrogate.minus_inf_value = _sentinel
             logp = surrogate.predict(np.atleast_2d(X), return_std=False, validate=False)
             surrogate.minus_inf_value = prev_miv
             return logp
@@ -913,6 +934,8 @@ class NORA(GenericGPAcquisition):
             )
 
         # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
+        # NB: as for PolyChord and unlike UltraNest, nessai takes -inf directly, so
+        # `surrogate.minus_inf_value` is left at -inf: no finite stand-in to mis-order.
         def logp(X):
             """
             Returns the predicted value at a given point (-inf if prior=0).
