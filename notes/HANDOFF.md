@@ -73,8 +73,13 @@ Gated by the masked fraction of the prior: **~0 at d=8, ~2e-4 at d=16, 0.18-0.50
   bimodality IS the 6x UltraNest d=16 spread.** With no iteration escaping, UltraNest's
   median loop would be ~14669 s against NUTS's 132 s, i.e. **~111x, not 29.6x** [counterfactual].
 
-**FIXED** on this branch (`d612bff`) by anchoring the stand-in to the training-data range,
-with a regression test. The bug is on `origin/main` and needs its own upstream PR.
+**FIXED UPSTREAM** on `origin/main` (`39a635e`) as `MINUS_INF_SUBSTITUTE = -1e30`, plus a
+fix so `predict` clips on BOTH return paths (the root cause of the batch-composition
+dependence). Our branch is rebased onto it and our own competing fix was dropped: the
+upstream one is better in two ways we had missed -- `-1e300` would square to `inf` and
+cast to `-inf` in float32, silently restoring the very value the substitute exists to
+avoid, and clipping on both paths fixes the inconsistency rather than merely making it
+harmless. Upstream also ships 8 regression tests to our 3.
 
 **Consequences**: do NOT start Group B until the high-d cells are re-run — B1 and B2 would
 both be measured against a broken NS arm. Point counts are contaminated too (roughly half of
@@ -86,10 +91,14 @@ UltraNest's d=30 candidate pool comes from the meaningless plateau), so "NUTS ne
   d**, acceptance flat at 0.87-0.91, and near-d-independent per-point cost (735/619/877 ms at
   d=8/16/30). The per-iteration growth is GP size and padding capacity, not sampler decay.
 
-- **`evals_acquire` does not count the NUTS arm's GP evaluations** — `nuts_acquire` uses the
+- **`evals_acquire` did not count the NUTS arm's GP evaluations** (FIXED on this branch) — `nuts_acquire` uses the
   JAX path, which bypasses `surrogate.predict`, so the counter reads ~0 for it and the saved
-  numbers reflect only downstream candidate ranking. **Any eval-count comparison between arms
-  in the saved data is invalid.** True NUTS cost is ~44-62k GP evals per acquisition step.
+  numbers reflect only downstream candidate ranking. **Any eval-count comparison between arms in
+  the SAVED data is invalid** -- it was understated ~46x at d=8 (9,600 vs 443,181 measured
+  after the fix). Both gradient backends were affected: NUTS bypasses the surrogate
+  entirely, and the numpy HMC path reported its cost as the DELTA of a counter that
+  `predict_mean_grad_batch` never incremented, i.e. zero minus zero. Fixed at source; no
+  compute or behavioural impact, since nothing reads `n_eval` for control flow.
 
 - **False convergence is real and UltraNest-only**: `h2h gauss_d30_ultranest_seed3` reports
   `converged=True, error=None` at **n=180 with KL=158.69** -- GPry's criterion declaring success
