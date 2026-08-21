@@ -253,8 +253,11 @@ class CobayaWrapper(Sampler):
                 fiducial_point.get(p)
                 for p in self.model.parameterization.sampled_params()
             ]
-            logpost = fiducial_point.pop("logpost", None)
-            loglike = fiducial_point.pop("loglike", None)
+            # NB: read, not popped: the dict belongs to the caller. Nothing below
+            # depends on these keys being absent -- X is built from the sampled
+            # parameter names only.
+            logpost = fiducial_point.get("logpost", None)
+            loglike = fiducial_point.get("loglike", None)
             self.gpry_runner.set_fiducial_point(X, logpost=logpost, loglike=loglike)
         except (TypeError, AttributeError, KeyError) as excpt:
             raise LoggedError(
