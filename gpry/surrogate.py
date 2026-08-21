@@ -194,13 +194,16 @@ class SurrogateModel:
                 "length_scale_prior needs to define 1d bounds (common for all dimensions)"
                 "or as many bounds as dimensions"
             )
-        regressor["length_scale_prior"] = length_scale_prior
         # This is the default "noise_level" of the regressor, understood as the common
         # sigma_y of the training samples.
         self._noise_level = float(regressor["noise_level"])
         # For now, the y preprocessor is not fitted
         self._noise_level_ = preprocessing_y.transform_scale(self._noise_level)
+        # NB: work on a copy. ``regressor`` belongs to the caller, and reusing the same
+        # dict for a second surrogate of different dimensionality must keep working.
         kwargs_regressor = deepcopy(regressor)
+        # Copied again, so that a caller-supplied array is not aliased into the GPR.
+        kwargs_regressor["length_scale_prior"] = np.array(length_scale_prior)
         kwargs_regressor["noise_level"] = self._noise_level_
         kwargs_regressor["random_state"] = random_state
         # The regressor (and hence its kernel) lives in the transformed space, so the

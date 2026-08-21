@@ -68,7 +68,9 @@ class InfinitiesClassifiers:
         for k, v in classifiers.items():
             # Process common parameters (min n finite, threshold) before initialising
             k = k.lower()
-            v = v or {}
+            # Copy: the options dict belongs to the caller, and keys are renamed and
+            # added below (``inf_threshold`` -> ``threshold``, ``nstd_calculator``).
+            v = dict(v or {})
             # DEPRECATION BLOCK 26/09/25
             if "inf_threshold" in v:
                 v["threshold"] = v.pop("inf_threshold")
