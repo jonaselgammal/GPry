@@ -13,6 +13,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
+from gpry.convergence import TrainAlignment
 from gpry.surrogate import SurrogateModel
 
 
@@ -96,3 +97,11 @@ def test_surrogate_does_not_alias_a_supplied_length_scale_array():
     # Still the very same object, with the same contents.
     assert spec["length_scale_prior"] is lsp
     assert np.array_equal(lsp, np.array([[1e-3, 1e2]] * 4))
+
+
+def test_train_alignment_does_not_mutate_params():
+    """`TrainAlignment.__init__` used to write its defaults into the caller's dict."""
+    params = {"frac_training": 0.5}
+    expected = deepcopy(params)
+    TrainAlignment(np.array([[-1.0, 1.0]] * 3), params)
+    assert_unchanged(params, expected, "params")
