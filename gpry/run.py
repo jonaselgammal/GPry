@@ -1871,7 +1871,9 @@ class Runner:
         if as_pandas and as_getdist:
             raise ValueError("Set only one of 'as_pandas' or 'as_getdist' to True.")
         if as_pandas:
-            mc_dict = self.last_mc_samples(copy=copy)
+            # Shallow-copied: the dict is restructured below ("X" popped, per-parameter
+            # columns added), which must not touch the stored samples when copy=False.
+            mc_dict = dict(self.last_mc_samples(copy=copy))
             if mc_dict["w"] is None:
                 mc_dict["w"] = np.ones(len(mc_dict[mc._name_logp]))
             X = mc_dict.pop("X")
