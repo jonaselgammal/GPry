@@ -193,5 +193,66 @@ def test_surrogate_without_preprocessing_y_or_classifier():
     assert surrogate.preprocessing_y is DummyPreprocessor
     surrogate.append(X, y)
     assert surrogate.n_total == len(X)
-    # NB: not calling ``predict`` here. With no infinities classifier it dereferences
-    # ``self.infinities_classifier`` unguarded, which is a separate pre-existing gap.
+    y_pred = surrogate.predict(X[:5])
+    assert y_pred.shape == (5,)
+    assert np.all(np.isfinite(y_pred))
+
+
+@pytest.mark.parametrize(
+    "infinities_classifier", [None, {"svm": {"threshold": "20s"}}]
+)
+def test_predict_without_infinities_classifier(infinities_classifier):
+    """
+    `predict` and `predict_std` dereferenced `self.infinities_classifier` without the
+    `is None` guard that `is_finite_X` already had, so every prediction entry point
+    raised `AttributeError` on a surrogate built without a classifier.
+    """
+    d = 4
+    bounds, X, y = gaussian_training_set(d=d, n=120, seed=7, half_width=3.0)
+    surrogate = SurrogateModel(
+        bounds=bounds,
+        preprocessing_X=NormalizeBounds(bounds),
+        preprocessing_y=NormalizeY(),
+        regressor=regressor(),
+        infinities_classifier=infinities_classifier,
+        random_state=42,
+    )
+    surrogate.append(X, y)
+    rng = np.random.default_rng(8)
+    X_test = rng.uniform(-2.0, 2.0, size=(10, d))
+    mean = surrogate.predict(X_test)
+    assert mean.shape == (len(X_test),)
+    assert np.all(np.isfinite(mean))
+    # The other entry points go through the same code path.
+    assert np.array_equal(surrogate.logp(X_test), mean)
+    std = surrogate.predict_std(X_test)
+    assert std.shape == (len(X_test),)
+    assert np.all(std >= 0)
+    mean2, std2 = surrogate.predict(X_test, return_std=True)
+    assert np.array_equal(mean2, mean)
+    assert std2.shape == (len(X_test),)
+
+
+def test_predict_without_classifier_is_accurate():
+    """
+    Not just non-crashing: with no classifier every point is finite, so the prediction
+    must be the plain GP fit. Checked against the true log-posterior it was trained on.
+    """
+    d = 2
+    bounds, X, y = gaussian_training_set(d=d, n=200, seed=9, half_width=3.0)
+    surrogate = SurrogateModel(
+        bounds=bounds,
+        preprocessing_X=NormalizeBounds(bounds),
+        preprocessing_y=NormalizeY(),
+        regressor=regressor(),
+        infinities_classifier=None,
+        random_state=42,
+    )
+    surrogate.append(X, y)
+    rng = np.random.default_rng(10)
+    X_test = rng.uniform(-1.5, 1.5, size=(30, d))
+    y_true = -0.5 * np.sum(X_test**2, axis=1)
+    y_pred = surrogate.predict(X_test)
+    # No point may be silently classified away to -inf.
+    assert np.all(np.isfinite(y_pred))
+    assert np.max(np.abs(y_pred - y_true)) < 0.5

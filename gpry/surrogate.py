@@ -919,9 +919,12 @@ class SurrogateModel:
         #       Could be checked even before calling classifier, if validate=True.
         #       Idem for predict_std
         # First check if either SVM or the trust region say that the value should be -inf
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        if self.infinities_classifier is None:
+            finite = np.ones(n_samples, dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
             if len(return_dict) == 1:
@@ -1060,9 +1063,12 @@ class SurrogateModel:
         X_ = self.preprocessing_X.transform(X)
         std = np.zeros(n_samples)  # std is zero when mu is -inf
         # First check if either SVM or the trust region say that the value should be -inf
-        finite = self.infinities_classifier.is_finite_X(
-            X_, ignore=ignore_classifier, validate=validate
-        )
+        if self.infinities_classifier is None:
+            finite = np.ones(n_samples, dtype=bool)
+        else:
+            finite = self.infinities_classifier.is_finite_X(
+                X_, ignore=ignore_classifier, validate=validate
+            )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
             return std
