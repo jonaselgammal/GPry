@@ -21,7 +21,11 @@ for kind, d in CASES:                      # d=30 first: longest, fills the tail
     for label, arm, ftol, lsmax in ARMS:
         for seed in SEEDS:
             lines.append(f"{kind} {d} {arm} {seed} {ftol} {lsmax}")
-with open("manifest_final.txt", "w") as f:
+import os  # noqa: E402
+# Write the manifest NEXT TO THIS SCRIPT, not into the caller's cwd: the
+# sbatch files read it by a path relative to experiments/cluster/.
+_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifest_final.txt")
+with open(_OUT, "w") as f:
     f.write("\n".join(lines) + "\n")
 print(f"{len(lines)} tasks -> manifest_final.txt")
 for kind, d in CASES:

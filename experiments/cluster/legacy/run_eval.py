@@ -14,6 +14,12 @@ import json
 
 import numpy as np
 
+# `common.py` lives in ../run. `setup_env.sh` copies it next to this script on
+# the cluster, so this only matters when running from the repo checkout.
+# (This file moved into legacy/ on 2026-08-20; behaviour is unchanged.)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "run"))
+
 
 def marginals_plot(bounds, marg, samples, path, d):
     import matplotlib; matplotlib.use("Agg")

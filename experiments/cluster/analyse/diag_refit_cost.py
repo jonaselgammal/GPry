@@ -20,6 +20,9 @@ from copy import deepcopy
 
 import numpy as np
 
+# `common.py` lives in ../run (this script moved into analyse/ on 2026-08-20).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "run"))
 import common as C
 
 from gpry.run import Runner

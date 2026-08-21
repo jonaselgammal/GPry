@@ -23,7 +23,11 @@ for seed in SEEDS:
             for sampler in SAMPLERS:
                 lines.append(f"{d} {sep} {WR:g} {BUDGET[d]} {CKPTS[d]} {sampler} {seed}")
 
-with open("manifest_2mode.txt", "w") as f:
+import os  # noqa: E402
+# Write the manifest NEXT TO THIS SCRIPT, not into the caller's cwd: the
+# sbatch files read it by a path relative to experiments/cluster/.
+_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifest_2mode.txt")
+with open(_OUT, "w") as f:
     f.write("\n".join(lines) + "\n")
 print(f"wrote manifest_2mode.txt with {len(lines)} lines "
       f"({len(SEEDS)} seeds x {len(DS)} dims x {len(SEPS)} seps x {len(SAMPLERS)} samplers)")

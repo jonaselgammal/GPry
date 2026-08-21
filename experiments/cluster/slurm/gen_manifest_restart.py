@@ -14,7 +14,11 @@ for kind, d in sorted(CASES, key=lambda c: -c[1]):
         for seed in SEEDS:
             lines.append(f"{kind} {d} {arm} {seed}")
 
-with open("manifest_restart.txt", "w") as f:
+import os  # noqa: E402
+# Write the manifest NEXT TO THIS SCRIPT, not into the caller's cwd: the
+# sbatch files read it by a path relative to experiments/cluster/.
+_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manifest_restart.txt")
+with open(_OUT, "w") as f:
     f.write("\n".join(lines) + "\n")
 print(f"{len(lines)} tasks -> manifest_restart.txt")
 for kind, d in sorted(CASES, key=lambda c: -c[1]):

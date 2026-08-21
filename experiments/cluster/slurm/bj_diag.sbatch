@@ -16,6 +16,8 @@ conda activate /bhome/$USER/envs/gpry_v2
 export TMPDIR=/bhome/$USER/tmp
 export MPLCONFIGDIR=$TMPDIR/mpl_$SLURM_JOB_ID; mkdir -p "$MPLCONFIGDIR"
 cd /bhome/$USER/gpry_nuts_tests/GPry_v2/experiments/cluster
+# `common` now lives in run/; the inline python -c below imports it.
+export PYTHONPATH="$PWD/run:${PYTHONPATH:-}"
 for CFG in "baseline" "omp1" "nothunk" "omp1_nothunk"; do
   echo "=========== CONFIG: $CFG ==========="
   export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8

@@ -1,3 +1,10 @@
+> **LEGACY (2026-08-10 Tier-B campaign).** This documents the *first*
+> cluster harness — `setup_env.sh`, `acq*.sbatch`, `eval*.sbatch`,
+> `run_acquisition*.py`, `run_eval*.py`. It predates PR #4
+> (`length_scale_prior`) and the matched-final-MC fix, and ran on shared
+> nodes, so its wall-clock numbers are not comparable to anything current.
+> Kept for provenance. For the current harness see `../README.md`.
+
 # Fixed-budget NUTS high-d recovery test (gorina cluster)
 
 **Question:** does GPry with fixed-budget NUTS acquisition build a GP that

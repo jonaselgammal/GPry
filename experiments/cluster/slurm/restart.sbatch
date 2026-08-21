@@ -20,7 +20,7 @@ export JAX_PLATFORMS=cpu
 export XLA_FLAGS="--xla_force_host_platform_device_count=1"
 cd /bhome/$USER/gpry_nuts_tests/GPry_v2/experiments/cluster
 mkdir -p logs
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" manifest_restart.txt)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" slurm/manifest_restart.txt)
 read -r KIND D ARM SEED <<< "$LINE"
 # Target-difficulty knobs for the d=5 non-Gaussian arms, calibrated so that the
 # CONTROL arm actually solves the target (see run_restart_study.py). Exported
@@ -30,5 +30,5 @@ export RST_NTWIST=${RST_NTWIST:-1}  # one bend: chaining all links is unsolvable
 export RST_SEP=${RST_SEP:-4.0}      # 4-mode separation (sep=6 loses a mode)
 export RST_FIXED=${RST_FIXED:-multimode}  # matched budget for multimode only
 echo "task ${SLURM_ARRAY_TASK_ID}: target=$KIND d=$D arm=$ARM seed=$SEED (B=$RST_B NTWIST=$RST_NTWIST SEP=$RST_SEP FIXED=$RST_FIXED)"
-srun python run_restart_study.py "$KIND" "$D" "$ARM" "$SEED" \
+srun python run/run_restart_study.py "$KIND" "$D" "$ARM" "$SEED" \
      /bhome/$USER/gpry_nuts_tests/restart_out

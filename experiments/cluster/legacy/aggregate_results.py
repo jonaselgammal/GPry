@@ -1,17 +1,34 @@
 """
-Aggregate the cluster run outputs (eval.json + meta.json) into tidy tables and
-the paper figures. Reproducible: point RAW at the pulled run dirs.
+LEGACY aggregator: handles ONLY the 2026-08-10 Tier-B layout under
+results/other_runs/raw/, which stores one directory per run containing
+eval.json + meta.json.
 
-Multimodal (Tier B): runs_mm/mm_d<d>_sep<sep>_wr<wr>_<sampler>_seed<seed>/
-Unimodal  (recovery scaling): runs/d<d>_seed<seed>/
+    Multimodal (Tier B): raw/runs_mm/mm_d<d>_sep<sep>_wr<wr>_<sampler>_seed<seed>/
+    Unimodal (recovery scaling): raw/runs/d<d>_seed<seed>/
+
+It does NOT read results/paper_runs/{final,restart,h2h,v3}, which are flat
+directories of one <tag>.json per run. For those use:
+
+    python ../analyse/aggregate_restart.py <dir> [out.csv]
+
+That campaign also predates PR #4 and the matched-final-MC change and ran on
+SHARED nodes, so its wall-clock numbers are not comparable to results/paper_runs/final/.
+Kept so the legacy CSVs and figures can still be rebuilt.
 """
 import json, glob, os, re, csv
 import numpy as np
 from scipy.stats import chi2
 
-RAW = os.path.join(os.path.dirname(__file__), "raw")
-OUT = os.path.dirname(__file__)
-FIG = os.path.join(OUT, "figures"); os.makedirs(FIG, exist_ok=True)
+# Paths. The 2026-08-10 run products live in the project-level results/ tree
+# (results/ was reorganised on 2026-08-20 into paper_runs/ + other_runs/), so
+# anchor on the project root, not on this file's own directory.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# legacy -> cluster -> experiments -> GPry -> <project root>
+REPO = os.path.abspath(os.path.join(_HERE, os.pardir, os.pardir, os.pardir, os.pardir))
+RAW = os.path.join(REPO, "results", "other_runs", "raw")
+OUT = os.path.join(REPO, "results", "other_runs", "legacy_csv")
+FIG = os.path.join(REPO, "results", "figures", "legacy")
+os.makedirs(OUT, exist_ok=True); os.makedirs(FIG, exist_ok=True)
 
 
 def chi_tail(d, thr=5.0):

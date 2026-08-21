@@ -25,6 +25,13 @@ Usage:
     python run_restart_study.py <target> <d> <arm> <seed> [outdir] [max_total]
       <target> = gauss | curved | multimode
       <arm>    = S0 | S1 | S2 | S3 | S4
+
+The ACQUISITION sampler is selected with RST_SAMPLER (default "nuts"); the final
+posterior MC is always matched to it (nuts->nuts, ultranest->ultranest), because
+scoring an UltraNest acquisition with a NUTS read-out would not be a comparison
+of acquisition at all.  RST_MAXWALL sets a soft wall-clock limit in seconds: on
+expiry the run raises, so a result JSON with error="TIMEOUT" is still written
+rather than SLURM killing the task and leaving nothing behind.
 """
 import os
 import sys
@@ -48,6 +55,13 @@ ARMS = {
     "S3": ("local", 8),
     "S4": ("screen", 8),
 }
+
+# Acquisition sampler, and the FINAL MC matched to it.  "nested" is deliberately
+# NOT used: it resolves to "PolyChord if importable, else UltraNest", so an
+# UltraNest arm could silently be scored with a PolyChord read-out.  Naming the
+# interface explicitly makes the arm reproducible.
+GRADIENT_SAMPLERS = ("nuts", "hmc", "blackjax")
+
 
 # Point budget. The d=5 non-Gaussian targets get a larger budget than a
 # unimodal Gaussian of the same dimension would need: four separated basins (or
@@ -134,6 +148,8 @@ def main():
     max_total = int(sys.argv[6]) if len(sys.argv) > 6 else 0
     if arm not in ARMS:
         raise SystemExit(f"unknown arm {arm!r}; expected one of {sorted(ARMS)}")
+    sampler = os.environ.get("RST_SAMPLER", "nuts").lower()
+    final_mc = sampler          # matched, and named explicitly (never "nested")
     strategy, n_restarts = ARMS[arm]
     if n_restarts is None:
         n_restarts = 10 + 2 * d
@@ -142,6 +158,23 @@ def main():
         max_total = MAX_TOTAL.get((kind, d), int(70 * d ** 1.5))
 
     tgt = build_target(kind, d)
+    # The sampler is part of the identity of a run, so it is part of the tag;
+    # otherwise a nuts and an ultranest arm would overwrite each other.
+    tag = (f"{kind}_d{d}_{arm}_seed{seed}" if sampler == "nuts"
+           else f"{kind}_d{d}_{arm}_{sampler}_seed{seed}")
+    # Per-iteration convergence checkpointing. Under DontConverge (used to match
+    # arms on evaluation budget) the run records nothing about where it WOULD
+    # have stopped, so answering that -- or drawing a convergence curve -- would
+    # otherwise mean re-running everything. Saving the surrogate state and the
+    # acquisition chain at each point the criterion would have been evaluated
+    # makes both recoverable a posteriori, for any criterion. Default ON;
+    # RST_NO_CKPT=1 disables.
+    conv_ckpt = None
+    if not os.environ.get("RST_NO_CKPT"):
+        conv_ckpt = C.ConvergenceCheckpointer(
+            outdir, tag,
+            pickle_every=int(os.environ.get("RST_CKPT_PICKLE_EVERY", 0)),
+        )
     n_initial = 3 * d
     opts = {"n_initial": n_initial, "max_initial": min(3 * n_initial, max_total),
             "max_total": max_total}
@@ -167,13 +200,15 @@ def main():
     r = Runner(
         tgt["logLkl"], tgt["bounds"].tolist(), ref_bounds=tgt["ref_bounds"].tolist(),
         surrogate={"regressor": reg},
-        gp_acquisition={"NORA": {"sampler": "nuts", "mc_every": 1}},
-        mc={"nuts": {}},
+        gp_acquisition={"NORA": {"sampler": sampler, "mc_every": 1}},
+        mc={final_mc: {}},
         options=opts,
         convergence_criterion=("DontConverge" if kind in FIXED_BUDGET else None),
+        callback=conv_ckpt,
         seed=seed, verbose=1, checkpoint=None,
     )
-    r.acquisition._nuts_kwargs = {"pad_multiple": 512, "max_num_doublings": 7}
+    if sampler in ("nuts", "hmc"):
+        r.acquisition._nuts_kwargs = {"pad_multiple": 512, "max_num_doublings": 7}
     # Assert the arm actually took effect: a silently-ignored option would make
     # every arm identical and the whole study a null result.
     got_s = r.surrogate.gpr.restart_strategy
@@ -181,8 +216,36 @@ def main():
     if (got_s, got_n) != (strategy, n_restarts):
         raise SystemExit(f"ARM NOT APPLIED: asked ({strategy},{n_restarts}) "
                          f"got ({got_s},{got_n})")
+    # Same for the sampler axis. `Runner` accepts the acquisition dict wholesale,
+    # so a typo or an unsupported name would fall back to the default sampler and
+    # make both arms of the head-to-head identical -- a fabricated null result.
+    got_acq = getattr(r.acquisition, "sampler", None)
+    if str(got_acq).lower() != sampler:
+        raise SystemExit(f"SAMPLER NOT APPLIED: asked {sampler!r} "
+                         f"got {got_acq!r}")
+    # A nested sampler must also have a live interface object; the gradient
+    # samplers legitimately have none (they are not nested samplers).
+    got_iface = type(getattr(r.acquisition, "sampler_interface", None)).__name__
+    if sampler not in GRADIENT_SAMPLERS and got_iface == "NoneType":
+        raise SystemExit(f"SAMPLER NOT APPLIED: {sampler!r} has no ns interface")
     print(f"[ARM] {arm}: strategy={got_s} n_restarts={got_n} "
           f"target={kind} d={d} seed={seed} max_total={max_total}", flush=True)
+    print(f"[SAMPLER] acquisition={got_acq} interface={got_iface} "
+          f"final_mc={final_mc}", flush=True)
+
+    # Soft wall-clock limit, below the SLURM --time cap, so a task that would be
+    # killed instead raises and still writes a JSON. A timeout is a RESULT (the
+    # configuration did not finish in the budget), not a missing data point.
+    max_wall = float(os.environ.get("RST_MAXWALL", 0))
+    if max_wall:
+        import signal
+
+        def _timeout(signum, frame):
+            raise TimeoutError(f"TIMEOUT after {max_wall:.0f}s soft wall limit")
+
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.alarm(int(max_wall))
+        print(f"[LIMIT] soft wall limit {max_wall:.0f}s armed", flush=True)
 
     t0 = time.time()
     converged, err = False, None
@@ -194,8 +257,10 @@ def main():
         err = repr(exc)
         print("run() ended:\n" + traceback.format_exc(), flush=True)
     wall = time.time() - t0
+    if max_wall:
+        import signal
+        signal.alarm(0)          # scoring/plotting must not be interrupted
 
-    tag = f"{kind}_d{d}_{arm}_seed{seed}"
     sur = r.surrogate
     C.save_gp(deepcopy(sur), os.path.join(outdir, f"{tag}_surrogate.pkl"))
     r.progress.data.to_csv(os.path.join(outdir, f"{tag}_iters.csv"), index=False)
@@ -206,7 +271,9 @@ def main():
     df = r.progress.data
     tot = lambda c: float(np.nansum(df[c].values)) if c in df else float("nan")
     res = dict(
-        target=kind, d=d, arm=arm, strategy=strategy, n_restarts=int(n_restarts),
+        target=kind, d=d, arm=arm, sampler=sampler, final_mc=final_mc,
+        timed_out=bool(err and "TIMEOUT" in err),
+        strategy=strategy, n_restarts=int(n_restarts),
         ls_max=ls_max, optimizer_ftol=reg.get("optimizer_ftol"),
         fit_simple_every=opts.get("fit_simple_every", 1),
         fit_full_every=opts.get("fit_full_every"),
@@ -229,6 +296,15 @@ def main():
         **{k: v for k, v in rec.items() if k != "mean"})
     with open(os.path.join(outdir, f"{tag}.json"), "w") as f:
         json.dump(res, f, indent=2)
+
+    # Persist the read-out chain itself. Without this the corner plot can only be
+    # remade by re-running the NUTS read-out on the surrogate, so a plotting tweak
+    # costs a compute job. With it, replot_corner.py regenerates from disk.
+    try:
+        np.savez_compressed(os.path.join(outdir, f"{tag}_readout.npz"),
+                            X=np.asarray(X), w=np.asarray(w, float))
+    except Exception as exc:
+        print(f"  [warn] could not save read-out samples: {exc!r}", flush=True)
 
     try:
         corner_all_dims(kind, tgt, X, w, os.path.join(outdir, f"{tag}_corner.png"), arm)

@@ -24,7 +24,7 @@ export JAX_COMPILATION_CACHE_DIR=$TMPDIR/jaxcache_${SLURM_JOB_ID}_${SLURM_ARRAY_
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 cd /bhome/$USER/gpry_nuts_tests/GPry_v2/experiments/cluster
 mkdir -p logs
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" manifest_cmp.txt)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" slurm/manifest_cmp.txt)
 read -r D SAMPLER SEED <<< "$LINE"
 echo "task ${SLURM_ARRAY_TASK_ID}: d=$D sampler=$SAMPLER seed=$SEED"
-srun python compare_samplers.py "$D" "$SAMPLER" "$SEED" 0 /bhome/$USER/gpry_nuts_tests/cmp_out
+srun python run/compare_samplers.py "$D" "$SAMPLER" "$SEED" 0 /bhome/$USER/gpry_nuts_tests/cmp_out

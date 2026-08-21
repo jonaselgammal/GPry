@@ -20,7 +20,7 @@ export JAX_PLATFORMS=cpu
 export XLA_FLAGS="--xla_force_host_platform_device_count=1"
 cd /bhome/$USER/gpry_nuts_tests/GPry_v2/experiments/cluster
 mkdir -p logs
-LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" manifest_v3.txt)
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" slurm/manifest_v3.txt)
 read -r D SAMPLER SEED <<< "$LINE"
 echo "task ${SLURM_ARRAY_TASK_ID}: d=$D sampler=$SAMPLER seed=$SEED (final MC matched)"
-srun python compare_samplers.py "$D" "$SAMPLER" "$SEED" 0 /bhome/$USER/gpry_nuts_tests/v3_out match
+srun python run/compare_samplers.py "$D" "$SAMPLER" "$SEED" 0 /bhome/$USER/gpry_nuts_tests/v3_out match
