@@ -123,6 +123,12 @@ class SurrogateModel:
         self.preprocessing_y = (
             DummyPreprocessor if preprocessing_y is None else preprocessing_y
         )
+        # Local handle used to transform scales during initialisation: an unfitted
+        # preprocessor has no defined transformation yet, so fall back to the no-op one.
+        # NB: this rebinds the argument, which must not be used raw below.
+        preprocessing_y = (
+            self.preprocessing_y if self.preprocessing_y.fitted else DummyPreprocessor
+        )
         self.n_eval = 0
         self.verbose = verbose if verbose is not None else 3
         self._fitted = False
@@ -164,11 +170,6 @@ class SurrogateModel:
                 )
             # The infinities classifier lives in the transformed space:
             bounds_ = self.preprocessing_X.transform_bounds(self._bounds)
-            # In this first call, if preprocessor not fitted, use dummy one
-            if self.preprocessing_y.fitted:
-                preprocessing_y = self.preprocessing_y
-            else:
-                preprocessing_y = DummyPreprocessor
             nstd_calculator = lambda nsigma: preprocessing_y.transform_scale(
                 delta_logp_of_1d_nstd(nsigma, self.d)
             )

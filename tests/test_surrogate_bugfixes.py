@@ -8,7 +8,13 @@ this module collects and runs in a bare environment.
 import numpy as np
 import pytest
 
-from gpry.preprocessing import NormalizeBounds, NormalizeY, PipelineX, Whitening
+from gpry.preprocessing import (
+    DummyPreprocessor,
+    NormalizeBounds,
+    NormalizeY,
+    PipelineX,
+    Whitening,
+)
 from gpry.surrogate import SurrogateModel
 
 def regressor():
@@ -171,3 +177,21 @@ def test_whitening_in_surrogate_pipeline():
     y_pred = surrogate.predict(X_test)
     assert y_pred.shape == (len(X_test),)
     assert np.all(np.isfinite(y_pred))
+
+
+def test_surrogate_without_preprocessing_y_or_classifier():
+    """
+    With neither a ``preprocessing_y`` nor an infinities classifier, the local
+    y-preprocessor handle used to transform the noise level was never assigned — it was
+    only set inside the infinities-classifier branch — so it stayed at the raw `None`
+    argument and `__init__` raised `AttributeError`.
+    """
+    d = 4
+    bounds, X, y = gaussian_training_set(d=d, n=80, seed=6)
+    surrogate = SurrogateModel(bounds=bounds, regressor=regressor(), random_state=42)
+    assert surrogate.infinities_classifier is None
+    assert surrogate.preprocessing_y is DummyPreprocessor
+    surrogate.append(X, y)
+    assert surrogate.n_total == len(X)
+    # NB: not calling ``predict`` here. With no infinities classifier it dereferences
+    # ``self.infinities_classifier`` unguarded, which is a separate pre-existing gap.
