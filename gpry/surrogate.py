@@ -477,7 +477,7 @@ class SurrogateModel:
         """
         if self.infinities_classifier is None:
             return np.full(shape=(len(X),), fill_value=True)
-        return self.infinities_classifier.predict(
+        return self.infinities_classifier.is_finite_X(
             self.preprocessing_X.transform(X), validate=validate
         )
 
