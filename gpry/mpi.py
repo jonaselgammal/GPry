@@ -235,7 +235,7 @@ def round_MPI(n, up=True, warn_rounding=True, name=None):
     if n < SIZE and up:
         new_n = SIZE
     elif n > SIZE and n % SIZE:
-        new_n = n // SIZE * (SIZE + (1 if up else 0))
+        new_n = (n // SIZE + (1 if up else 0)) * SIZE
     else:
         new_n = n
     if new_n != n and warn_rounding:
