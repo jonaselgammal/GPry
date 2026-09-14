@@ -1,4 +1,4 @@
-# 4.1 – (unreleased)
+# 4.1 – 2026-09-15
 
 - GPR kernel length scales optimization now starts from the standard deviations from the covariance matrix of the training set (faster convergence towards long length scales, if the problem allows for it).
 - Increased default precision for slower but more robust convergence: larger `nlive` and `num_repeats` for nested sampling in NORA and final MC sample (more reliable behaviour of `GaussianKL` convergence criterion), and `CorrectCounter` criterion demoted to necessary (not sufficient).
