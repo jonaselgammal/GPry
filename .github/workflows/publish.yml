@@ -1,0 +1,106 @@
+name: Publish to PyPI
+
+# Publishes when a GitHub Release is published. Draft the release from the tag,
+# hit "Publish release", and this runs. Nothing publishes on a plain tag push,
+# so an accidental tag cannot reach PyPI.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # manual runs go to TestPyPI only (see `publish-testpypi`)
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The version is hand-maintained in gpry/__init__.py and read by
+      # pyproject.toml via `version = { attr = "gpry.__version__" }`. A tag that
+      # disagrees with it would publish the wrong version under the right name,
+      # which cannot be undone on PyPI -- so fail loudly here instead.
+      - name: Check the tag matches gpry.__version__
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python -m pip install --quiet packaging
+          python - <<'PY'
+          import os, pathlib, re, sys
+          from packaging.version import Version
+
+          tag = os.environ["TAG"].lstrip("v")
+          src = pathlib.Path("gpry/__init__.py").read_text()
+          m = re.search(r"""__version__\s*=\s*["']([^"']+)""", src)
+          if not m:
+              sys.exit("::error::no __version__ found in gpry/__init__.py")
+          ver = m.group(1)
+          print(f"tag={tag}  __version__={ver}")
+          if Version(tag) != Version(ver):
+              sys.exit(
+                  f"::error::tag {tag!r} != gpry.__version__ {ver!r}; "
+                  "bump gpry/__init__.py or retag before releasing"
+              )
+          print("OK: they agree")
+          PY
+
+      - name: Build
+        run: |
+          python -m pip install --quiet build
+          python -m build
+
+      - name: Check metadata
+        run: |
+          python -m pip install --quiet twine
+          python -m twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/gpry
+    permissions:
+      id-token: write          # required for Trusted Publishing; no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gpry
+    permissions:
+      id-token: write          # required for Trusted Publishing; no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
