@@ -663,9 +663,9 @@ class NORA(GenericGPAcquisition):
         sampler=None,
         mc_every="2",
         nlive_per_training=3,
-        nlive_max="25d",
+        nlive_max="50d",
         nlive_per_dim_max=None,  # deprecated
-        num_repeats="5d",
+        num_repeats="10d",
         num_repeats_per_dim=None,  # deprecated
         precision_criterion_target=0.01,
         nprior_per_nlive=10,

@@ -540,11 +540,11 @@ class Runner:
             return
         # Defaults:
         if convergence_criterion is None:
-            convergence_criterion = {"CorrectCounter": {"policy": "s"}}
+            convergence_criterion = {"CorrectCounter": {"policy": "n"}}
             acq_has_mc=isinstance(acquisition, gprygpacqs.NORA),
             if acq_has_mc:
                 convergence_criterion["GaussianKL"] = {
-                    "policy": "s",
+                    "policy": "n",
                     "limit_times": getattr(acquisition, "mc_every", self.d)
                 }
                 convergence_criterion["TrainAlignment"] = {"policy": "n"}
@@ -1783,7 +1783,7 @@ class Runner:
             if "nlive" not in sampler_options:
                 sampler_options["nlive"] = 50 * self.d
             if "num_repeats" not in sampler_options:
-                sampler_options["num_repeats"] = 5 * self.d
+                sampler_options["num_repeats"] = 10 * self.d
             self._last_mc_sampler_type = "nested"
             X_mc, y_mc, w_mc, logZ, logZstd = mc.mc_sample_from_gp_ns(
                 self.surrogate,

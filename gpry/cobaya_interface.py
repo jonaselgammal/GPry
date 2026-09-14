@@ -100,8 +100,8 @@ gp_acquisition:
     sampler:  # undefined: in order, of available: polychord > ultranest > nessai
     mc_every: 2  # number of iterations between full NS runs
     nlive_per_training: 3  # number of live points per training sample
-    nlive_max: 25d  # cap for the number of live points
-    num_repeats: 5d  # number of steps of slice chains (polychord only)
+    nlive_max: 50d  # cap for the number of live points
+    num_repeats: 10d  # number of steps of slice chains (polychord only)
     precision_criterion_target: 0.01  # precision criterion for the NS
     nprior_per_nlive: 10  # number of prior points in the initial sample, times nlive
     max_ncalls:  # maximum number of calls to the GPR model during NS (none: infinite)
@@ -120,7 +120,7 @@ initial_proposer: reference
 # (add or replace by DontConverge to run until evaluation budget exhausted)
 # `policy` can be [n]ecessary (default), [s]ufficient, both ([ns]), or [m]onitoring
 convergence_criterion:
-  CorrectCounter: {policy: s}
+  CorrectCounter: {policy: n}
   GaussianKL: {policy: n, limit: 5e-02}  # ignored if NORA not used
   TrainAlignment: {policy: n}  # ignored if NORA not used
 
