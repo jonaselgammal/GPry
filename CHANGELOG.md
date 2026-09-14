@@ -2,6 +2,28 @@
 
 - GPR hyperparameters uses as a guess for the length scales the standard deviations from the covariance matrix of the training set (faster convergence towards long length scales, if the problem allows for it).
 
+- Changed defaults (**runs will behave differently without any change to user code**):
+  - NORA: `nlive_max` `25d` → `50d`, `num_repeats` `5d` → `10d`; the final and diagnosis NS runs also use `num_repeats = 10d`. More accurate nested sampling per acquisition step, at a higher cost per iteration.
+  - `CorrectCounter` convergence policy changed from sufficient (`s`) to necessary (`n`), as were the NORA-only criteria. Convergence is now declared only when all necessary criteria agree, rather than `CorrectCounter` alone being able to declare it; expect more iterations before stopping.
+
+- Bugfixes:
+  - **`length_scale_prior` was silently ignored since 4.0**: it reached the kernel under the wrong keyword, so `length_scale_bounds` kept its sklearn default `(1e-5, 1e5)` and every fit optimised the length scales over 10 decades instead of the intended 4, with `"dynamic"` bounds unusable for the same reason. Fixed by renaming the argument and attribute to `length_scale_prior` in the four length-correlation kernels (`RBF`, `Matern`, `RationalQuadratic`, `ExpSineSquared`), still accepting `length_scale_bounds` as a legacy keyword, and raising the default to `[1e-3, 1e2]` — with the plumbing fixed, the previously documented `[1e-3, 1e1]` clamped the length scales of smooth log-posteriors at a large cost in log-marginal-likelihood.
+  - **The finite stand-in for `-inf` on the UltraNest paths was the largest representable log-posterior, not the smallest** (`-1e-300`, apparently a typo for `-1e300`). Nested sampling maximised into the region masked by the infinities classifier instead of the posterior, terminating after ~2 e-folds without ever sampling the target. The failure is gated by the masked fraction of the prior, so it is invisible in low dimension and severe in high. Affected both the NORA acquisition sampler and `mc.mc_sample_from_gp_ns`.
+  - `SurrogateModel.predict` skipped the upper clipping when a batch was entirely masked, so the value returned for a point could depend on which other points shared its batch.
+  - A `SurrogateModel` could not be built without an infinities classifier, and `predict` crashed in that case.
+  - Building a `SurrogateModel`, instantiating `TrainAlignment`, and calling `set_fiducial_point` no longer mutate the dicts passed by the caller.
+  - `Runner.last_mc_samples(as_pandas=True)` consumed the stored MC samples, so a second call returned nothing.
+  - `Whitening.compute_mean_cov` used the wrong covariance axis.
+  - `DummyPreprocessor` was missing the `fitted` attribute.
+  - `mpi.round_MPI(..., up=True)` computed the wrong multiple, and its result was discarded when rounding `n_restarts_optimizer`.
+  - `infinities_classifier.is_finite_X` called a non-existent classifier method.
+  - `NORA._do_mc_sample_uniform` returned the wrong number of values on non-root MPI processes.
+  - The `n_points_per_acq` rounding warning is no longer printed once per MPI rank.
+  - `no_more_candidates` is now reset when the optimisation loop is re-entered.
+  - Corrected `ExpSineSquared` error messages that referred to the RQ kernel.
+
+- Added regression tests for the above (`tests/test_surrogate_bugfixes.py`, `test_no_input_mutation.py`, `test_mpi_round.py`, `test_runner_last_mc_samples.py`, `test_ultranest_sentinel.py`).
+
 # 4.0.1 – 2026-07-20
 
 - Bugfixes: compatibility with numpy v2.4, sklearn v1.11, and handling non-existent `latex` shell command for plots.
