@@ -327,6 +327,18 @@ class GaussianKL(ConvergenceCriterion):
                                         (default 10).
         * ``"max_reused"``: number of times a sample can be reweighted and reused (may
                             miss new high-value regions) (default 4).
+        * ``"paired"``: if True (default), estimate both surrogate posteriors on the
+                        SAME MC sample, reweighting the previous one by
+                        ``exp(mu_prev - mu_new)``. The sampling noise is then common to
+                        both moment estimates and cancels. The naive estimator (False,
+                        the pre-existing behaviour) compares two independent samples and
+                        so has a floor of about ``d(d+3)/2N``: 0.21 at d=27, N=1920,
+                        against a default limit of 0.02, i.e. unreachable at high d.
+        * ``"min_ess_frac"``: minimum effective sample size of the importance weights, as
+                              a fraction of the sample size, for the paired estimate to
+                              be trusted (default 0.25). Below it the surrogates differ
+                              too much for reweighting to work, which itself means "not
+                              converged", so the criterion value is set to infinity.
     """
 
     @property
@@ -359,6 +371,18 @@ class GaussianKL(ConvergenceCriterion):
         # Max times a sample can be reweighted and reused (we may miss new high regions)
         self.max_reused = params.get("max_reused", 4)
         self.n_reused = 0
+        # Paired ("common-sample") estimator: evaluate BOTH the current and the previous
+        # surrogate on the CURRENT MC sample, so that the sampling noise is common to the
+        # two moment estimates and cancels in the difference. The naive estimator, which
+        # compares moments of two INDEPENDENT samples, has a floor of ~d(d+3)/2N: at
+        # d=27, N=1920 that is 0.21, ten times the default limit of 0.02, so it can never
+        # converge. See ``_paired_kl``.
+        self.paired = bool(params.get("paired", True))
+        # Below this effective sample size (as a fraction of N) the importance weights
+        # have collapsed, which itself means the two surrogates differ a lot: report
+        # "not converged" rather than a meaningless number.
+        self.min_ess_frac = float(params.get("min_ess_frac", 0.25))
+        self._prev_surrogate = None
         # We'll some hight MCMC temperature, to get the tails right
         self.temperature = 2
         # Prepare Cobaya's input
@@ -367,6 +391,100 @@ class GaussianKL(ConvergenceCriterion):
         # Save last sample
         self._last_info = {}
         self._last_collection = None
+
+    @staticmethod
+    def _moments(X, w):
+        """Weighted mean and covariance, with the same ddof convention as np.cov."""
+        w = np.asarray(w, dtype=float)
+        w = w / np.sum(w)
+        mean = w @ X
+        Xc = X - mean
+        cov = (Xc * w[:, None]).T @ Xc
+        return mean, np.atleast_2d(cov / (1.0 - np.sum(w**2)))
+
+    def _get_new_sample(self, acquisition):
+        """Raw MC sample ``(X, w)`` from the acquisition, or None if unavailable.
+
+        Only the paired estimator needs the sample itself; the naive path keeps using
+        :meth:`_get_new_mean_and_cov`, so ``TrainAlignment`` is unaffected.
+        """
+        out = None
+        if mpi.is_main_process:
+            try:
+                X, _, _, w = acquisition.last_mc_sample(warn_reweight=False)
+                X = np.asarray(X, dtype=float)
+                w = np.ones(len(X)) if w is None else np.asarray(w, dtype=float)
+                out = (X, w) if len(X) else None
+            except (AttributeError, TypeError, ValueError):
+                out = None
+        return mpi.bcast(out if mpi.is_main_process else None)
+
+    @staticmethod
+    def _snapshot(surr):
+        """Frozen copy of the surrogate, cheap enough to keep between iterations.
+
+        Deliberately NOT a plain ``deepcopy(surr)``: that would copy the n x n Cholesky
+        factor (200 MB at n=5000). The predictive *mean* needs only ``X_train_``,
+        ``alpha_``, the fitted kernel and the y de-normalisation, so ``L_``/``V_`` are
+        dropped for the duration of the copy and restored afterwards. Copying through
+        the real object (rather than re-deriving the mean by hand) guarantees the frozen
+        predictor has exactly the same semantics as ``surr.predict``.
+        """
+        gpr = getattr(surr, "gpr", None)
+        if gpr is None:
+            return None
+        saved = {k: getattr(gpr, k, None) for k in ("L_", "V_")}
+        try:
+            for k in saved:
+                if hasattr(gpr, k):
+                    setattr(gpr, k, None)
+            return deepcopy(surr)
+        except Exception:  # never let the criterion break the run
+            return None
+        finally:
+            for k, v in saved.items():
+                if hasattr(gpr, k):
+                    setattr(gpr, k, v)
+
+    def _maybe_snapshot(self, surr):
+        """Freeze the surrogate, but only if the paired estimator will use it.
+
+        With ``paired=False`` the snapshot would be pure cost: it is deep-copied every
+        iteration and pickled into the checkpoint, where it dominates ``con.pkl``.
+        """
+        return self._snapshot(surr) if self.paired else None
+
+    def _paired_kl(self, X, w, surr):
+        """KL between the previous and current surrogate posteriors, both estimated on
+        the SAME sample ``X`` (drawn under the current surrogate).
+
+        The previous surrogate's moments are obtained by importance-reweighting the same
+        points, ``w_old ~ w * exp(mu_prev - mu_new)``. If the two surrogates are equal the
+        weights are uniform, the two moment sets are identical, and the KL is exactly
+        zero irrespective of N -- which is what removes the sampling-noise floor.
+
+        Returns ``(kl, ess_frac)``; ``kl`` is ``inf`` when the weights have collapsed.
+        """
+        mu_new = np.asarray(surr.predict(X, validate=False), dtype=float)
+        mu_old = np.asarray(self._prev_surrogate.predict(X, validate=False), dtype=float)
+        logr = mu_old - mu_new
+        good = np.isfinite(logr) & np.isfinite(w) & (w > 0)
+        if np.count_nonzero(good) < len(X) // 2:
+            return np.inf, 0.0
+        Xg, wg, logr = X[good], w[good], logr[good]
+        w_old = wg * np.exp(logr - np.max(logr))
+        tot = np.sum(w_old)
+        if not np.isfinite(tot) or tot <= 0:
+            return np.inf, 0.0
+        p = w_old / tot
+        ess_frac = 1.0 / np.sum(p**2) / len(X)
+        if ess_frac < self.min_ess_frac:
+            return np.inf, ess_frac
+        try:
+            kl = kl_norm(*self._moments(Xg, wg), *self._moments(Xg, w_old))
+        except np.linalg.LinAlgError:
+            return np.inf, ess_frac
+        return kl, ess_frac
 
     def _get_new_mean_and_cov(self, surr, acquisition=None):
         try:
@@ -512,6 +630,9 @@ class GaussianKL(ConvergenceCriterion):
         return updated_info, samples
 
     def criterion_value(self, surr, surr_2=None, acquisition=None):
+        # Paired estimator needs the sample itself, not just its moments. Fetched before
+        # the moments so that a failure here simply falls back to the naive path.
+        sample = self._get_new_sample(acquisition) if self.paired else None
         try:
             mean_new, cov_new = self._get_new_mean_and_cov(
                 surr, acquisition=acquisition
@@ -526,9 +647,13 @@ class GaussianKL(ConvergenceCriterion):
         if surr_2 is not None:
             # TODO: Nothing yet to do with surr_2
             pass
-        if self.mean is None or self.cov is None:
+        use_paired = (
+            self.paired and sample is not None and self._prev_surrogate is not None
+        )
+        if (self.mean is None or self.cov is None) and not use_paired:
             # Nothing to compare to! But save mean, cov for next call
             self.mean, self.cov = mean_new, cov_new
+            self._prev_surrogate = self._maybe_snapshot(surr)
             self.values.append(np.nan)
             self.n_posterior_evals.append(surr.n_total)
             self.n_accepted_evals.append(surr.n_regress)
@@ -536,14 +661,22 @@ class GaussianKL(ConvergenceCriterion):
                 "No previous call: cannot compute criterion yet."
             )
         else:
-            mean_old, cov_old = np.copy(self.mean), np.copy(self.cov)
+            mean_old, cov_old = (
+                (np.copy(self.mean), np.copy(self.cov))
+                if self.mean is not None
+                else (None, None)
+            )
         # Compute the KL divergence (gaussian approx) with the previous iteration
         try:
-            kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
+            if use_paired:
+                kl, _ess = self._paired_kl(sample[0], sample[1], surr)
+            else:
+                kl = kl_norm(mean_new, cov_new, mean_old, cov_old)
             if kl < 0:
                 raise ValueError("Negative KL -> undefined")
             self.mean = mean_new
             self.cov = cov_new
+            self._prev_surrogate = self._maybe_snapshot(surr)
             self.values.append(kl)
             self.n_posterior_evals.append(surr.n_total)
             self.n_accepted_evals.append(surr.n_regress)
@@ -551,6 +684,7 @@ class GaussianKL(ConvergenceCriterion):
             kl = np.nan
             self.mean = mean_new
             self.cov = cov_new
+            self._prev_surrogate = self._maybe_snapshot(surr)
             self.values.append(kl)
             self.n_posterior_evals.append(surr.n_total)
             self.n_accepted_evals.append(surr.n_regress)
