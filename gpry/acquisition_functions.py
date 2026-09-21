@@ -82,6 +82,12 @@ from sklearn.base import clone  # type: ignore
 
 
 # UNUSED
+#: Floor on the predictive std before taking its log, so that an exactly-zero std
+#: (a repeated training point under a noiseless kernel) yields a very negative but
+#: finite acquisition rather than -inf.
+_TINY_STD = 1e-300
+
+
 def _safe_log_expm1(x):
     """
     Numerically safer ``log(exp(x) - 1)``.
@@ -938,9 +944,10 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         in the GP.
 
     sigma_n : float, default=None
-        The (constant) noise level of the data. If set to ``None`` the
-        square-root of alpha of the training data (or the square root of the
-        mean of alpha if alpha is an array) will be used.
+        The (constant) noise level of the data. Retained for backwards compatibility
+        and for the hyperparameter interface; it no longer enters the acquisition
+        value or its gradient, because ``std`` is already the latent std. Scheduled
+        for removal.
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
@@ -1041,8 +1048,10 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
         else:
             noise_var = self.sigma_n
         zeta = self.zeta
-        var = std**2 - noise_var**2.0
-        mask = (var > 0) & np.isfinite(mu)
+        # NOTE: no noise subtraction here. `gp.predict(return_std=True)` returns the
+        # std of the LATENT function, which already excludes the observation noise;
+        # subtracting sigma_n again double-counts it. See the class docstring.
+        mask = (std > 0) & np.isfinite(mu)
         values = np.zeros_like(std)
         baseline = gp.y_max
         # Alternative option, but found not to work extremely well
@@ -1056,15 +1065,15 @@ class BaseLogExp(AcquisitionFunction, metaclass=ABCMeta):
                 grad = np.zeros_like(std_grad)
                 if np.any(mask):
                     grad[mask] = (
-                        np.array(std_grad)[mask] / (std[mask] - sigma_n)
+                        np.array(std_grad)[mask] / std[mask]
                         + 2 * zeta * np.array(mu_grad)[mask]
                     )
                 if np.any(~mask):
                     grad[~mask] = np.ones_like(std_grad[~mask]) * np.inf
             else:
                 std = std[0]
-                if std > sigma_n:
-                    grad = std_grad / (std - sigma_n) + 2 * zeta * mu_grad
+                if std > 0:
+                    grad = std_grad / std + 2 * zeta * mu_grad
                 else:
                     grad = np.ones_like(std_grad) * np.inf
             return values, grad
@@ -1084,13 +1093,24 @@ class LogExp(BaseLogExp):
 
     .. math::
 
-        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot (\sigma(X)-\sigma_n)
+        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot \sigma(X)
 
     For numerical convenience we take the log of this expression which yields:
 
     .. math::
 
-        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X)-\sigma_n)
+        \log(A_{\mathrm{LE}})(X) = 2\zeta\cdot\mu(X) + \log(\sigma(X))
+
+    .. note::
+        :math:`\sigma(X)` is **not** reduced by the noise level. It is the std of the
+        latent function, which already excludes the observation noise; subtracting
+        :math:`\sigma_n` from it double-counts the noise and drives the acquisition to
+        :math:`-\infty` across the whole explored region. At a training point the latent
+        std tends to :math:`\sigma_n` from above, so :math:`\sigma^2-\sigma_n^2` is
+        ~0 there and negative under rounding. With ``noise_level = 1`` on a Planck
+        surrogate this left 1 of 1920 candidates with a finite score; the ranked pool
+        came back empty and the run raised ``GPAcquisitionError`` -- not because it had
+        converged, but because the acquisition could not express a preference.
 
     .. note::
         :math:`\mu(x)` and :math:`\sigma(X)` are the mean and sigma of the
@@ -1114,9 +1134,10 @@ class LogExp(BaseLogExp):
         in the GP.
 
     sigma_n : float, default=None
-        The (constant) noise level of the data. If set to ``None`` the
-        square-root of alpha of the training data (or the square root of the
-        mean of alpha if alpha is an array) will be used.
+        The (constant) noise level of the data. Retained for backwards compatibility
+        and for the hyperparameter interface; it no longer enters the acquisition
+        value or its gradient, because ``std`` is already the latent std. Scheduled
+        for removal.
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
@@ -1131,10 +1152,12 @@ class LogExp(BaseLogExp):
 
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
-        """Linearized exponentiated log-error bar."""
-        return 2 * zeta * (mu - baseline) + np.log(
-            np.sqrt(np.clip(std**2.0 - noise_level**2.0, 0.0, None))
-        )
+        """Linearized exponentiated log-error bar.
+
+        ``noise_level`` is accepted for backwards compatibility and deliberately
+        unused: ``std`` is already the latent std. See the class docstring.
+        """
+        return 2 * zeta * (mu - baseline) + np.log(np.clip(std, _TINY_STD, None))
 
 
 # UNUSED
@@ -1149,9 +1172,10 @@ class NonlinearLogExp(BaseLogExp):
 
     .. math::
 
-        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot \exp(\sigma(X)-\sigma_n)
+        A_{\mathrm{LE}}(X) = \exp(2\zeta\cdot\mu(X))\cdot \exp(\sigma(X))
 
-    Again we take the log of this.
+    Again we take the log of this. As in :class:`LogExp`, :math:`\sigma(X)` is the
+    latent std and is not reduced by the noise level.
 
     Parameters
     ----------
@@ -1171,9 +1195,10 @@ class NonlinearLogExp(BaseLogExp):
         in the GP.
 
     sigma_n : float, default=None
-        The (constant) noise level of the data. If set to ``None`` the
-        square-root of alpha of the training data (or the square root of the
-        mean of alpha if alpha is an array) will be used.
+        The (constant) noise level of the data. Retained for backwards compatibility
+        and for the hyperparameter interface; it no longer enters the acquisition
+        value or its gradient, because ``std`` is already the latent std. Scheduled
+        for removal.
 
     fixed: bool, default=False,
         whether zeta and sigma_n shall be fixed or not.
@@ -1188,9 +1213,13 @@ class NonlinearLogExp(BaseLogExp):
 
     @staticmethod
     def f(mu, std, baseline, noise_level, zeta):
-        """Exponentiated log-error bar"""
+        """Exponentiated log-error bar.
+
+        ``noise_level`` is accepted for backwards compatibility and deliberately
+        unused: ``std`` is already the latent std. See :class:`LogExp`.
+        """
         return 2 * zeta * (mu - baseline) + _safe_log_expm1(
-            np.sqrt(np.clip(std**2.0 - noise_level**2.0, 0.0, None))
+            np.clip(std, _TINY_STD, None)
         )
 
 
