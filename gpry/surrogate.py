@@ -142,12 +142,15 @@ class SurrogateModel:
         self.preprocessing_y = (
             DummyPreprocessor if preprocessing_y is None else preprocessing_y
         )
-        # Local handle used to transform scales during initialisation: an unfitted
+        # Local handles used to transform scales during initialisation: an unfitted
         # preprocessor has no defined transformation yet, so fall back to the no-op one.
-        # NB: this rebinds the argument, which must not be used raw below.
-        preprocessing_y = (
+        init_preprocessing_X = (
+            self.preprocessing_X if self.preprocessing_X.fitted else DummyPreprocessor
+        )
+        init_preprocessing_y = (
             self.preprocessing_y if self.preprocessing_y.fitted else DummyPreprocessor
         )
+        bounds_ = init_preprocessing_X.transform_bounds(self._bounds)
         self.n_eval = 0
         self.verbose = verbose if verbose is not None else 3
         self._fitted = False
@@ -188,8 +191,7 @@ class SurrogateModel:
                     "'infinities_classifier': must be dict of '{classifier: {options}'."
                 )
             # The infinities classifier lives in the transformed space:
-            bounds_ = self.preprocessing_X.transform_bounds(self._bounds)
-            nstd_calculator = lambda nsigma: preprocessing_y.transform_scale(
+            nstd_calculator = lambda nsigma: init_preprocessing_y.transform_scale(
                 delta_logp_of_1d_nstd(nsigma, self.d)
             )
             try:
@@ -202,10 +204,12 @@ class SurrogateModel:
             except Exception as excpt:
                 raise TypeError(f"Error initialising infinities classifier: {excpt}")
         # Initialising the GP Regressor
+        kwargs_regressor = deepcopy(regressor)
+        kwargs_regressor["random_state"] = random_state
         # NB: hyperparameter priors and noise level are understood in transformed space
         # Make sure the length scale prior is unfolded per-dimensionality, since the GPR
-        # will read the dimensionality from there.
-        length_scale_prior = np.atleast_2d(regressor["length_scale_prior"])
+        # will read the dimensionality from there. Work wit a copy.
+        length_scale_prior = np.atleast_2d(regressor["length_scale_prior"]).copy()
         if len(length_scale_prior) == 1:
             length_scale_prior = np.array(list([length_scale_prior[0]]) * self.d)
         elif len(length_scale_prior) != self.d:
@@ -213,26 +217,13 @@ class SurrogateModel:
                 "length_scale_prior needs to define 1d bounds (common for all dimensions)"
                 "or as many bounds as dimensions"
             )
+        kwargs_regressor["length_scale_prior"] = length_scale_prior
+        kwargs_regressor["prior_bounds"] = bounds_
         # This is the default "noise_level" of the regressor, understood as the common
         # sigma_y of the training samples.
         self._noise_level = float(regressor["noise_level"])
-        # For now, the y preprocessor is not fitted
-        self._noise_level_ = preprocessing_y.transform_scale(self._noise_level)
-        # NB: work on a copy. ``regressor`` belongs to the caller, and reusing the same
-        # dict for a second surrogate of different dimensionality must keep working.
-        kwargs_regressor = deepcopy(regressor)
-        # Copied again, so that a caller-supplied array is not aliased into the GPR.
-        kwargs_regressor["length_scale_prior"] = np.array(length_scale_prior)
+        self._noise_level_ = init_preprocessing_y.transform_scale(self._noise_level)
         kwargs_regressor["noise_level"] = self._noise_level_
-        kwargs_regressor["random_state"] = random_state
-        # The regressor (and hence its kernel) lives in the transformed space, so the
-        # parameter-space bounds must be transformed too. Only used if a length
-        # correlation kernel is requested with ``length_scale_prior="dynamic"``, but
-        # passed always: it is cheap, and its absence is what silently disabled that
-        # option when the bounds moved out of the GPR.
-        kwargs_regressor["prior_bounds"] = self.preprocessing_X.transform_bounds(
-            self._bounds
-        )
         self.gpr = GaussianProcessRegressor(**kwargs_regressor)
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)

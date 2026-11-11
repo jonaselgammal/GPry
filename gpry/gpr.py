@@ -123,11 +123,9 @@ class GaussianProcessRegressor(sk_GPR):
         run is performed.
 
     prior_bounds : array-like, shape = (n_dims, 2), optional
-        Bounds of the parameter space, **in the GPR's own (transformed) input space**,
-        i.e. ``preprocessing_X.transform_bounds(bounds)``. Only needed when a length
-        correlation kernel is created with ``length_scale_prior="dynamic"``, in which
-        case the length-scale bounds are derived from the prior size. Supplied by
-        :class:`gpry.surrogate.SurrogateModel`.
+        Bounds of the parameter space. Only needed when a length correlation kernel is
+        created with ``length_scale_prior="dynamic"``, in which case the length-scale
+        bounds are derived from the prior size.
 
     random_state : int or numpy.random.Generator, optional
         The generator used to perform random operations of the GPR. If an integer is
@@ -200,7 +198,6 @@ class GaussianProcessRegressor(sk_GPR):
                 ) from excpt
             # Build kernel
             output_scale_init = np.sqrt(output_scale_prior[0] * output_scale_prior[1])
-            # Guaranteed to be n-dimensional, if initialised from SurrogateModel.
             # When "dynamic", derive an initial scale from the prior widths.
             if isinstance(length_scale_prior, str) and length_scale_prior == "dynamic":
                 if prior_bounds is None:
@@ -211,6 +208,7 @@ class GaussianProcessRegressor(sk_GPR):
                 _widths = _pb[:, 1] - _pb[:, 0]
                 length_scale_init = 0.1 * _widths
             else:
+                # Expected to be n-dimensional, defining the dimensionality of the GPR
                 length_scale_prior = np.asarray(length_scale_prior)
                 length_scale_init = np.sqrt(
                     length_scale_prior[:, 0] * length_scale_prior[:, 1]
@@ -465,7 +463,7 @@ class GaussianProcessRegressor(sk_GPR):
 
         start_from_cov : bool, default: False
             Starts the first optimization (or the second one if
-            ``start_from_current=True``) from the lenghts computed with the square root
+            ``start_from_current=True``) from the lengths computed with the square root
             of the diagonal of the covariance of the training set.
 
         n_restarts : int, default None

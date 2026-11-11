@@ -24,7 +24,7 @@ action not specified, in order to avoid losing previous work).
 
 import os
 import warnings
-from copy import deepcopy
+from copy import copy as copy_buitin, deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 import numpy as np
@@ -1873,7 +1873,7 @@ class Runner:
         if as_pandas:
             # Shallow-copied: the dict is restructured below ("X" popped, per-parameter
             # columns added), which must not touch the stored samples when copy=False.
-            mc_dict = dict(self.last_mc_samples(copy=copy))
+            mc_dict = copy_builtin(self.last_mc_samples(copy=copy))
             if mc_dict["w"] is None:
                 mc_dict["w"] = np.ones(len(mc_dict[mc._name_logp]))
             X = mc_dict.pop("X")

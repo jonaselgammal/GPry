@@ -18,6 +18,7 @@ hyper-rectangular constraint fitted to a fraction of the highest log-p samples.
 """
 
 from warnings import warn
+from copy import copy
 
 import numpy as np
 from sklearn.svm import SVC  # type: ignore
@@ -68,9 +69,7 @@ class InfinitiesClassifiers:
         for k, v in classifiers.items():
             # Process common parameters (min n finite, threshold) before initialising
             k = k.lower()
-            # Copy: the options dict belongs to the caller, and keys are renamed and
-            # added below (``inf_threshold`` -> ``threshold``, ``nstd_calculator``).
-            v = dict(v or {})
+            v = copy(v) or {}
             # DEPRECATION BLOCK 26/09/25
             if "inf_threshold" in v:
                 v["threshold"] = v.pop("inf_threshold")

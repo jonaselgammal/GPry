@@ -29,10 +29,6 @@ from gpry.tools import delta_logp_of_1d_nstd
 
 class DummyPreprocessor:
     is_linear = True
-    # A no-op transform is always ready to be used, and never needs fitting. This also
-    # makes ``SurrogateModel.__init__`` correctly pick the dummy preprocessor itself
-    # when no ``preprocessing_y`` was given. Note that this class is used
-    # un-instantiated, so this has to be readable on the class.
     fitted = True
 
     @classmethod
