@@ -1808,14 +1808,16 @@ class Runner:
                 # Correct for finite prior fraction
                 log_frac_finite_prev = -np.inf
                 n_prior = 100 * self.d
-                for _ in range(5):
-                    log_frac_finite = np.log(
-                        self.surrogate.fraction_prior_finite(n_prior)
-                    )
-                    if abs(log_frac_finite - log_frac_finite_prev) < 0.01:
-                        break
-                    log_frac_finite_prev = log_frac_finite
-                    n_prior *= 10
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    for _ in range(5):
+                        log_frac_finite = np.log(
+                            self.surrogate.fraction_prior_finite(n_prior)
+                        )
+                        if abs(log_frac_finite - log_frac_finite_prev) < 0.01:
+                            break
+                        log_frac_finite_prev = log_frac_finite
+                        n_prior *= 10
                 logZ += log_frac_finite
                 self._last_mc_logZ = logZ, logZstd
         else:  # assume Cobaya sampler
