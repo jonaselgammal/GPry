@@ -1520,8 +1520,8 @@ class Runner:
         if mpi.is_main_process:
             msg = (
                 f"Fitted log(p) surrogate model with {self.surrogate.n_last_appended} new"
-                f" points, of which {self.surrogate.n_last_appended} were added to the GP"
-                f" regressor. Hyperparameters were "
+                f" points, of which {self.surrogate.n_last_appended_finite} were added to"
+                " the GP regressor. Hyperparameters were "
                 + (
                     f"fit with {n_restarts_total} restart(s)."
                     if will_fit_hyperparams
