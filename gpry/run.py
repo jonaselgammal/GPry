@@ -24,7 +24,7 @@ action not specified, in order to avoid losing previous work).
 
 import os
 import warnings
-from copy import copy as copy_buitin, deepcopy
+from copy import copy as copy_builtin, deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 import numpy as np
@@ -346,7 +346,8 @@ class Runner:
             self._construct_initial_proposer(initial_proposer)
             if mpi.is_main_process:
                 self._construct_convergence_criterion(
-                    convergence_criterion, acquisition=self.acquisition,
+                    convergence_criterion,
+                    acquisition=self.acquisition,
                 )
             self._share_convergence_from_main()
             self._construct_mc_options(mc)
@@ -541,11 +542,11 @@ class Runner:
         # Defaults:
         if convergence_criterion is None:
             convergence_criterion = {"CorrectCounter": {"policy": "n"}}
-            acq_has_mc=isinstance(acquisition, gprygpacqs.NORA),
+            acq_has_mc = (isinstance(acquisition, gprygpacqs.NORA),)
             if acq_has_mc:
                 convergence_criterion["GaussianKL"] = {
                     "policy": "n",
-                    "limit_times": getattr(acquisition, "mc_every", self.d)
+                    "limit_times": getattr(acquisition, "mc_every", self.d),
                 }
                 convergence_criterion["TrainAlignment"] = {"policy": "n"}
         if isinstance(convergence_criterion, Mapping):
@@ -1198,7 +1199,7 @@ class Runner:
                         )
                     self.plot_progress(
                         close=True,
-                        **(self.plots if isinstance(self.plots, Mapping) else {})
+                        **(self.plots if isinstance(self.plots, Mapping) else {}),
                     )
                 except Exception as excpt:
                     self.log(f"Failed to plot progress: {excpt}", level=2)
@@ -1394,9 +1395,7 @@ class Runner:
                 f"{self.surrogate.gpr.n_restarts_optimizer} restart(s).",
                 level=3,
             )
-            self.log(
-                f"Current GP regressor kernel: {self.surrogate.gpr}", level=3
-            )
+            self.log(f"Current GP regressor kernel: {self.surrogate.gpr}", level=3)
         # Broadcast results
         self._share_surrogate()
         self.progress.mpi_sync()
@@ -1773,10 +1772,9 @@ class Runner:
         frac_trust_bounds = 1
         if self.surrogate.trust_bounds is not None:
             self._last_mc_bounds = self.surrogate.trust_bounds
-            frac_trust_bounds = (
-                np.prod(self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]) /
-                np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
-            )
+            frac_trust_bounds = np.prod(
+                self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]
+            ) / np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
         if sampler_name.lower() in ["nested"] + list(_ns_interfaces):
             if resume:
                 warnings.warn(

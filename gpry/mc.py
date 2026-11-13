@@ -436,11 +436,7 @@ def mc_sample_from_gp_ns(
     out_dir_raw = (
         tempfile.TemporaryDirectory().name + "/"
     )  # make sure it's read as a dir
-    # If UltraNest, remove chance of -inf: it cannot handle infinite likelihoods, so
-    # masked points need a finite stand-in. It used to be -1e-300, which is zero to
-    # ~300 digits, i.e. the LARGEST log-posterior rather than the smallest, so nested
-    # sampling maximised into the classifier-masked region instead of the posterior.
-    # `minus_inf_value_substitute` (-1e30) is far below any realistic log-posterior.
+    # UltraNest needs a finite stand-in for -inf.
     if isinstance(sampler, nsint.InterfaceUltraNest):
         prev_min = surrogate.minus_inf_value
         surrogate.minus_inf_value = surrogate.minus_inf_value_substitute
@@ -507,8 +503,8 @@ def process_gdsamples(gdsamples_dict):
 
 def samples_dict_to_getdist(samples_dict, params=None, bounds=None, sampler_type=None):
     """
-    Expects ``samples_dict`` with keys ``w``, ``X``, ``logpost``, ``logprior`` (optional),
-    ``loglike`` (optional).
+    Expects ``samples_dict`` with keys ``w``, ``X``, ``logpost`` (optional), ``logprior``
+    (optional), ``loglike`` (optional).
 
     ``params`` should be a list of strings, or of tuples ``(name, latex_label)`` where the
     ``latex_label`` should **not** include the ``$`` delimiters.

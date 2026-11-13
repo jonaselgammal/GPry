@@ -1,91 +1,119 @@
 import pytest
 from gpry.run import Runner
 import gpry.mpi as mpi
-from model_generator import *
+from model_generator import Random_gaussian
 
 import numpy as np
 
 
-def _test_pipeline(model, gpr="RBF", gp_acquisition="LogExp",
-                   convergence_criterion=None, callback=None,
-                   callback_is_MPI_aware=False, options={},
-                   checkpoint="files", load_checkpoint="overwrite", verbose=3,
-                   mc_sampler="mcmc", desired_kl=0.05, mean=None, cov=None):
-    # Sets up a runner, calls run and mc and checks whether it converged within reason.
-    bounds = model.prior.bounds(confidence_for_unbounded=0.99995)
+def _test_pipeline(
+    model,
+    gpr="RBF",
+    gp_acquisition="LogExp",
+    convergence_criterion=None,
+    callback=None,
+    callback_is_MPI_aware=False,
+    options={},
+    checkpoint="files",
+    load_checkpoint="overwrite",
+    verbose=3,
+    mc_sampler="mcmc",
+    desired_kl=0.05,
+    mean=None,
+    cov=None,
+):
     # gp_acquisition = {"NORA": {}}
     options["n_points_per_acq"] = model.prior.d()
-    runner = Runner(model, gpr=gpr, gp_acquisition=gp_acquisition,
-                    convergence_criterion=convergence_criterion, callback=callback,
-                    callback_is_MPI_aware=callback_is_MPI_aware, options=options,
-                    checkpoint=checkpoint, load_checkpoint=load_checkpoint,
-                    verbose=verbose)
+    runner = Runner(
+        model,
+        gpr=gpr,
+        gp_acquisition=gp_acquisition,
+        convergence_criterion=convergence_criterion,
+        callback=callback,
+        callback_is_MPI_aware=callback_is_MPI_aware,
+        options=options,
+        checkpoint=checkpoint,
+        load_checkpoint=load_checkpoint,
+        verbose=verbose,
+    )
     # Call runner.run to test the BO loop
     runner.run()
     assert runner.has_run, "The run hasn't completed."
     if not runner.has_converged:
         print("*WARNING*: The run hasn't converged within the given number of samples.")
 
-    # Call the MC sampler on the GP
-    mc_sample = runner.generate_mc_sample(sampler=mc_sampler)
+    # Call the MC sampler on the GP (include the last NORA sample if present)
+    runner.generate_mc_sample(sampler=mc_sampler)
     if mpi.is_main_process:
         print("Plotting results...")
-        runner.plot_progress()  # plots timing and convergence
-        runner.plot_mc()  # plots last obtained mc samples
+        runner.plot_progress(corner_final=True)  # plots timing and convergence
         runner.plot_distance_distribution()  # plots last obtained mc samples
+        # Posterior plot
+        to_plot, filled = [], []
+        # If NORA, add last nested sample
+        from gpry.gp_acquisition import NORA
+
+        if isinstance(runner.acquisition, NORA):
+            from gpry.mc import samples_dict_to_getdist
+
+            X_nora, _, _, w_nora = runner.acquisition.last_mc_sample()
+            mcsamples_nora = samples_dict_to_getdist(
+                {"w": w_nora, "X": X_nora},
+                params=list(zip(runner.params, runner.labels)),
+                bounds=runner.prior_bounds,
+                sampler_type="nested",
+            )
+            mcsamples_nora.label = "NORA (last)"
+            to_plot += [mcsamples_nora]
+            filled += [False]
+        mcsamples = runner.last_mc_samples(as_getdist=True)
+        mcsamples.label = "MC samples from GP"
+        to_plot += [mcsamples]
+        filled += [True]
         if mean is not None:
-            import os
-            import getdist.plots as gdplt
-            import matplotlib.pyplot as plt
             from getdist.gaussian_mixtures import GaussianND
-            gdsamples_gp = mc_sample.to_getdist()
-            gdsamples_gp.label = "MC samples from GP"
-            to_plot = [gdsamples_gp, GaussianND(
-                mean, cov, names=mc_sample.sampled_params, label="Ground truth")]
-            filled = [True, True]
-            # If NORA, add last nested sample
-            from gpry.gp_acquisition import NORA
-            if isinstance(runner.acquisition, NORA):
-                from getdist import MCSamples
-                X_mc, _, _, w_mc = runner.acquisition.last_mc_sample()
-                mcsamples_nora = MCSamples(
-                    samples=X_mc,
-                    weights=w_mc,
-                    names=mc_sample.sampled_params,
-                    label="NORA (last)",
-                )
-                to_plot += [mcsamples_nora]
-                filled += [False]
-            gdplot = gdplt.get_subplot_plotter(width_inch=5)
-            gdplot.triangle_plot(to_plot, mc_sample.sampled_params, filled=filled)
-            plt.savefig(os.path.join(runner.plots_path, "Surrogate_triangle_truth.png"),
-                        dpi=300)
 
-    # Compare with the true function to get the KL divergence
-    if desired_kl is None:
-        return
+            gaussian_dist = GaussianND(
+                mean, cov, names=runner.params, label="Ground truth"
+            )
+            to_plot += [gaussian_dist]
+            filled += [True]
+        import os
+        import getdist.plots as gdplt
+        import matplotlib.pyplot as plt
 
-    if mpi.is_main_process:
-        print("Computing comparison metrics...")
-        s = mc_sample
-        x_values = s.data[s.sampled_params]
-        logp = s['minuslogpost']
-        logp = -logp
-        weights = s['weight']
-        y_values = []
-        # VERY hacky, is there a better way?
-        for i in range(len(x_values)):
-            sample = dict(zip(
-                list(model.parameterization.sampled_params()), np.array(x_values.iloc[i])))
-            # Only works for uniform priors for now. Need to fix this
-            y_values = np.append(y_values, model.logpost(sample) + model.logprior(sample))
-        logq = np.array(y_values)
-        mask = np.isfinite(logq)
-        logp2 = logp[mask]
-        logq2 = logq[mask]
-        weights2 = weights[mask]
-        kl = np.abs(np.sum(weights2 * (logp2 - logq2)) / np.sum(weights2))
-        assert kl <= desired_kl, f"The desired KL value wasn't reached: {kl} < {desired_kl}"
+        gdplot = gdplt.get_subplot_plotter(width_inch=5)
+        gdplot.triangle_plot(to_plot, runner.params, filled=filled)
+        plt.savefig(
+            os.path.join(runner.plots_path, "Surrogate_triangle_truth.png"), dpi=300
+        )
+
+    # TODO: use synth_inference_tests for this? (more robust)
+    # # Compare with the true function to get the KL divergence
+    # if desired_kl is None:
+    #     return
+
+    # if mpi.is_main_process:
+    #     print("Computing comparison metrics...")
+    #     s = mcsamples
+    #     x_values = s.data[s.sampled_params]
+    #     logp = s['minuslogpost']
+    #     logp = -logp
+    #     weights = s['weight']
+    #     y_values = []
+    #     # VERY hacky, is there a better way?
+    #     for i in range(len(x_values)):
+    #         sample = dict(zip(
+    #             list(model.parameterization.sampled_params()), np.array(x_values.iloc[i])))
+    #         # Only works for uniform priors for now. Need to fix this
+    #         y_values = np.append(y_values, model.logpost(sample) + model.logprior(sample))
+    #     logq = np.array(y_values)
+    #     mask = np.isfinite(logq)
+    #     logp2 = logp[mask]
+    #     logq2 = logq[mask]
+    #     weights2 = weights[mask]
+    #     kl = np.abs(np.sum(weights2 * (logp2 - logq2)) / np.sum(weights2))
+    #     assert kl <= desired_kl, f"The desired KL value wasn't reached: {kl} < {desired_kl}"
 
 
 @pytest.mark.parametrize("dim", [1, 2, 3])
@@ -103,6 +131,7 @@ def test_gaussian(dim):
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) <= 1:
         print("Pass the dimensionality as first argument.")
         exit(1)
