@@ -1144,15 +1144,17 @@ class Runner:
                     )
                     for cc in self.convergence:
                         n_log10s = 4
-                        if not np.isfinite(np.log10(cc.limit)):
-                            value = 0
-                            value_range = [0, 1]
-                        else:
-                            value = np.log10(cc.last_value)
-                            value_range = (
-                                np.log10(cc.limit) + n_log10s,
-                                np.log10(cc.limit),
-                            )
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            if not np.isfinite(np.log10(cc.limit)):
+                                value = 0
+                                value_range = [0, 1]
+                            else:
+                                value = np.log10(cc.last_value)
+                                value_range = (
+                                    np.log10(cc.limit) + n_log10s,
+                                    np.log10(cc.limit),
+                                )
                         bar = simple_progress(value, value_range, length=25)
                         self.log(
                             f"[CONVERGENCE] {bar} {cc.__class__.__name__} "
