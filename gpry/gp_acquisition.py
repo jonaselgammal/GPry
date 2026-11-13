@@ -844,9 +844,6 @@ class NORA(GenericGPAcquisition):
         return X, None, None, None, None, None
 
     def _do_mc_sample_polychord(self, surrogate, bounds=None, rng=None):
-        # NB: unlike UltraNest (below), PolyChord takes -inf directly (it compares
-        # against its own `logzero`), so `surrogate.minus_inf_value` is left at -inf
-        # and there is no finite stand-in here that could be mis-ordered.
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update PolyChord precision settings
@@ -870,35 +867,6 @@ class NORA(GenericGPAcquisition):
         return X_mc, y_mc, None, w_mc, logZ, logZstd
 
     def _do_mc_sample_ultranest(self, surrogate, bounds=None, rng=None):
-        # UltraNest cannot handle -inf likelihoods, so points the infinities
-        # classifier masks out need a FINITE stand-in. That stand-in must be
-        # strictly worse than anything the sampler can find in the finite region.
-        #
-        # It used to be -1e-300, which is zero to ~300 digits, i.e. the LARGEST
-        # log-posterior representable rather than the smallest. Nested sampling
-        # then converges onto the masked region instead of the posterior: it
-        # terminates after ~2 e-folds reporting `Explored until L=-1e-300`, having
-        # never sampled the target. The failure scales with the masked fraction of
-        # the prior, so it is invisible in low dimension and total in high.
-        #
-        # `SurrogateModel.minus_inf_value_substitute` (-1e30) is far below any
-        # realistic log-posterior, and an upper clip cannot raise it, so
-        # entirely-masked batches and mixed batches agree (`predict` clips on both
-        # of its return paths). See `gpry.surrogate.MINUS_INF_SUBSTITUTE` for why
-        # -1e30 and not something more extreme.
-        _sentinel = surrogate.minus_inf_value_substitute
-
-        def logp(X):
-            """
-            Returns the predicted value at a given point (a finite, very low
-            stand-in where the prior/classifier says -inf).
-            """
-            prev_miv = surrogate.minus_inf_value
-            surrogate.minus_inf_value = _sentinel
-            logp = surrogate.predict(np.atleast_2d(X), return_std=False, validate=False)
-            surrogate.minus_inf_value = prev_miv
-            return logp
-
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
@@ -914,11 +882,19 @@ class NORA(GenericGPAcquisition):
         if rng is not None:
             if mpi.is_main_process:
                 warnings.warn("Seeded runs are not supported for UltraNest.")
+        # Temporarily use the -inf stand-in, since UltraNest cannot handle -np.inf
+        prev_miv = surrogate.minus_inf_value
+        surrogate.minus_inf_value = surrogate.minus_inf_value_substitute
         # Run and get products
         X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
-            logp, out_dir=self._get_output_folder()
+            lambda X: surrogate.predict(
+                np.atleast_2d(X), return_std=False, validate=False
+            ),
+            out_dir=self._get_output_folder(),
         )
         self.sampler_interface.delete_output()
+        # Restore the previous -inf value
+        surrogate.minus_inf_value = prev_miv
         # We will recompute y values, because quantities in PolyChord have to go through
         # text i/o, and some precision may be lost -- so we do not return them.
         y_mc = None
@@ -932,16 +908,6 @@ class NORA(GenericGPAcquisition):
                 "Support for Nessai is experimental at the moment, and not MPI-compatible"
                 " (running in rank-0 process only)."
             )
-
-        # Initialise "likelihood" -- returns surrogate value and deals with pooling/ranking
-        # NB: as for PolyChord and unlike UltraNest, nessai takes -inf directly, so
-        # `surrogate.minus_inf_value` is left at -inf: no finite stand-in to mis-order.
-        def logp(X):
-            """
-            Returns the predicted value at a given point (-inf if prior=0).
-            """
-            return surrogate.predict(X, return_std=False, validate=False)
-
         # Update prior bounds
         self.sampler_interface.set_prior(self.bounds_ if bounds is None else bounds)
         # Update precision settings
@@ -955,7 +921,7 @@ class NORA(GenericGPAcquisition):
         seed = rng.integers(2**31 - 1) if rng is not None else None
         # Run and get products
         X_mc, y_mc, w_mc, logZ, logZstd = self.sampler_interface.run(
-            logp,
+            lambda X: surrogate.predict(X, return_std=False, validate=False),
             out_dir=self._get_output_folder(),
             seed=seed,
         )

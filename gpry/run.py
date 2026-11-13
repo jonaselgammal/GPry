@@ -24,7 +24,7 @@ action not specified, in order to avoid losing previous work).
 
 import os
 import warnings
-from copy import deepcopy
+from copy import copy as copy_builtin, deepcopy
 from typing import Mapping, Sequence
 from numbers import Number
 import numpy as np
@@ -346,7 +346,8 @@ class Runner:
             self._construct_initial_proposer(initial_proposer)
             if mpi.is_main_process:
                 self._construct_convergence_criterion(
-                    convergence_criterion, acquisition=self.acquisition,
+                    convergence_criterion,
+                    acquisition=self.acquisition,
                 )
             self._share_convergence_from_main()
             self._construct_mc_options(mc)
@@ -541,11 +542,11 @@ class Runner:
         # Defaults:
         if convergence_criterion is None:
             convergence_criterion = {"CorrectCounter": {"policy": "n"}}
-            acq_has_mc=isinstance(acquisition, gprygpacqs.NORA),
+            acq_has_mc = (isinstance(acquisition, gprygpacqs.NORA),)
             if acq_has_mc:
                 convergence_criterion["GaussianKL"] = {
                     "policy": "n",
-                    "limit_times": getattr(acquisition, "mc_every", self.d)
+                    "limit_times": getattr(acquisition, "mc_every", self.d),
                 }
                 convergence_criterion["TrainAlignment"] = {"policy": "n"}
         if isinstance(convergence_criterion, Mapping):
@@ -1144,15 +1145,17 @@ class Runner:
                     )
                     for cc in self.convergence:
                         n_log10s = 4
-                        if not np.isfinite(np.log10(cc.limit)):
-                            value = 0
-                            value_range = [0, 1]
-                        else:
-                            value = np.log10(cc.last_value)
-                            value_range = (
-                                np.log10(cc.limit) + n_log10s,
-                                np.log10(cc.limit),
-                            )
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            if not np.isfinite(np.log10(cc.limit)):
+                                value = 0
+                                value_range = [0, 1]
+                            else:
+                                value = np.log10(cc.last_value)
+                                value_range = (
+                                    np.log10(cc.limit) + n_log10s,
+                                    np.log10(cc.limit),
+                                )
                         bar = simple_progress(value, value_range, length=25)
                         self.log(
                             f"[CONVERGENCE] {bar} {cc.__class__.__name__} "
@@ -1196,7 +1199,7 @@ class Runner:
                         )
                     self.plot_progress(
                         close=True,
-                        **(self.plots if isinstance(self.plots, Mapping) else {})
+                        **(self.plots if isinstance(self.plots, Mapping) else {}),
                     )
                 except Exception as excpt:
                     self.log(f"Failed to plot progress: {excpt}", level=2)
@@ -1392,9 +1395,7 @@ class Runner:
                 f"{self.surrogate.gpr.n_restarts_optimizer} restart(s).",
                 level=3,
             )
-            self.log(
-                f"Current GP regressor kernel: {self.surrogate.gpr}", level=3
-            )
+            self.log(f"Current GP regressor kernel: {self.surrogate.gpr}", level=3)
         # Broadcast results
         self._share_surrogate()
         self.progress.mpi_sync()
@@ -1519,8 +1520,8 @@ class Runner:
         if mpi.is_main_process:
             msg = (
                 f"Fitted log(p) surrogate model with {self.surrogate.n_last_appended} new"
-                f" points, of which {self.surrogate.n_last_appended} were added to the GP"
-                f" regressor. Hyperparameters were "
+                f" points, of which {self.surrogate.n_last_appended_finite} were added to"
+                " the GP regressor. Hyperparameters were "
                 + (
                     f"fit with {n_restarts_total} restart(s)."
                     if will_fit_hyperparams
@@ -1771,10 +1772,9 @@ class Runner:
         frac_trust_bounds = 1
         if self.surrogate.trust_bounds is not None:
             self._last_mc_bounds = self.surrogate.trust_bounds
-            frac_trust_bounds = (
-                np.prod(self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]) /
-                np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
-            )
+            frac_trust_bounds = np.prod(
+                self._last_mc_bounds[:, 0] - self._last_mc_bounds[:, 1]
+            ) / np.prod(self.truth.prior_bounds[:, 0] - self.truth.prior_bounds[:, 1])
         if sampler_name.lower() in ["nested"] + list(_ns_interfaces):
             if resume:
                 warnings.warn(
@@ -1808,14 +1808,16 @@ class Runner:
                 # Correct for finite prior fraction
                 log_frac_finite_prev = -np.inf
                 n_prior = 100 * self.d
-                for _ in range(5):
-                    log_frac_finite = np.log(
-                        self.surrogate.fraction_prior_finite(n_prior)
-                    )
-                    if abs(log_frac_finite - log_frac_finite_prev) < 0.01:
-                        break
-                    log_frac_finite_prev = log_frac_finite
-                    n_prior *= 10
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    for _ in range(5):
+                        log_frac_finite = np.log(
+                            self.surrogate.fraction_prior_finite(n_prior)
+                        )
+                        if abs(log_frac_finite - log_frac_finite_prev) < 0.01:
+                            break
+                        log_frac_finite_prev = log_frac_finite
+                        n_prior *= 10
                 logZ += log_frac_finite
                 self._last_mc_logZ = logZ, logZstd
         else:  # assume Cobaya sampler
@@ -1873,7 +1875,7 @@ class Runner:
         if as_pandas:
             # Shallow-copied: the dict is restructured below ("X" popped, per-parameter
             # columns added), which must not touch the stored samples when copy=False.
-            mc_dict = dict(self.last_mc_samples(copy=copy))
+            mc_dict = copy_builtin(self.last_mc_samples(copy=copy))
             if mc_dict["w"] is None:
                 mc_dict["w"] = np.ones(len(mc_dict[mc._name_logp]))
             X = mc_dict.pop("X")

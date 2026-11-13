@@ -28,7 +28,7 @@ from sklearn.gaussian_process.kernels import (  # type: ignore
     WhiteKernel as sk_WhiteKernel,
 )
 
-_LSP_DEFAULT = object()  # sentinel for length_scale_prior default
+_LSP_DEFAULT = (1e-3, 1e2)
 
 
 class Hyperparameter(
@@ -92,10 +92,9 @@ class Hyperparameter(
     max_length : float or array-like, shape = (n_dimensions,)
         Size of the parameter-space prior (*not* of the hyperparameter space)
         per dimension, i.e. ``upper - lower`` of the bounds in the kernel's own
-        (transformed) input space. Only used for length-scale (correlation
-        length) hyperparameters whose bounds are set to "dynamic", to scale
-        their allowed range to the prior size. Derived from the ``prior_bounds``
-        passed to the kernel. Note: :class:`RationalQuadratic` and
+        input space. Only used for length-scale (correlation length)
+        hyperparameters whose bounds are set to "dynamic", to scale
+        their allowed range to the prior size. Note: :class:`RationalQuadratic` and
         :class:`ExpSineSquared` set ``max_length`` to *twice* the prior width
         (``2 * (upper - lower)``) to accommodate their broader correlation
         structure, producing dynamic bounds of
@@ -133,7 +132,6 @@ class Hyperparameter(
                         "%d dimensions. Given are %d"
                         % (name, n_elements, bounds.shape[0])
                     )
-
         if fixed is None:
             fixed = isinstance(bounds, str) and bounds == "fixed"
         if dynamic is None:
@@ -141,7 +139,6 @@ class Hyperparameter(
         return super(Hyperparameter, cls).__new__(
             cls, name, value_type, bounds, max_length, n_elements, fixed, dynamic
         )
-
     # This is mainly a testing utility to check that two hyperparameters
     # are equal.
     def __eq__(self, other):
@@ -165,6 +162,7 @@ class Kernel(sk_Kernel):
         This kernel class is taken entirely from the Scikit-optimize package.
     """
 
+    # DEPRECATION NOTICE: this can be deprecated when we drop sklearn compatibility
     @property
     def length_scale_bounds(self):
         """
@@ -177,6 +175,7 @@ class Kernel(sk_Kernel):
         """
         return self.length_scale_prior
 
+    # DEPRECATION NOTICE: turn into an error at v5, then deprecate
     def __setstate__(self, state):
         """
         Restore a pickled kernel.
@@ -293,18 +292,6 @@ class RBF(Kernel, sk_RBF):
         prior_bounds=None,
         **kwargs,
     ):
-        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
-        if length_scale_bounds is not _LSP_DEFAULT:
-            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
-                raise ValueError(
-                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
-                    "with different values."
-                )
-            length_scale_prior = length_scale_bounds
-        if length_scale_prior is _LSP_DEFAULT:
-            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.length_scale_prior = length_scale_prior
         self.prior_bounds = prior_bounds
@@ -383,18 +370,6 @@ class Matern(Kernel, sk_Matern):
         prior_bounds=None,
         **kwargs,
     ):
-        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
-        if length_scale_bounds is not _LSP_DEFAULT:
-            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
-                raise ValueError(
-                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
-                    "with different values."
-                )
-            length_scale_prior = length_scale_bounds
-        if length_scale_prior is _LSP_DEFAULT:
-            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.length_scale_prior = length_scale_prior
         self.nu = nu
@@ -560,18 +535,6 @@ class RationalQuadratic(Kernel, sk_RationalQuadratic):
         prior_bounds=None,
         **kwargs,
     ):
-        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
-        if length_scale_bounds is not _LSP_DEFAULT:
-            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
-                raise ValueError(
-                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
-                    "with different values."
-                )
-            length_scale_prior = length_scale_bounds
-        if length_scale_prior is _LSP_DEFAULT:
-            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.alpha = alpha
         self.length_scale_prior = length_scale_prior
@@ -661,18 +624,6 @@ class ExpSineSquared(Kernel, sk_ExpSineSquared):
         prior_bounds=None,
         **kwargs,
     ):
-        length_scale_bounds = kwargs.pop("length_scale_bounds", _LSP_DEFAULT)
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
-        if length_scale_bounds is not _LSP_DEFAULT:
-            if length_scale_prior is not _LSP_DEFAULT and length_scale_prior != length_scale_bounds:
-                raise ValueError(
-                    "Cannot specify both 'length_scale_prior' and 'length_scale_bounds' "
-                    "with different values."
-                )
-            length_scale_prior = length_scale_bounds
-        if length_scale_prior is _LSP_DEFAULT:
-            length_scale_prior = (1e-3, 1e2)
         self.length_scale = length_scale
         self.periodicity = periodicity
         self.length_scale_prior = length_scale_prior

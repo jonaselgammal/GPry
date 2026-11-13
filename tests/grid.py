@@ -99,9 +99,10 @@ def callback(runner):
     true_mean = likelihood_generator.mean
     true_cov = likelihood_generator.cov
     paramnames = list(runner.model.parameterization.sampled_params())
-    mc_sample = runner.generate_mc_sample(
+    runner.generate_mc_sample(
         sampler={"mcmc": {"covmat": true_cov, "covmat_params": paramnames}},
         output=False)
+    mc_sample = runner.last_mc_samples()
     mc_mean = mc_sample.mean()
     mc_cov = mc_sample.cov()
     # Compute KL_truth and save it to progress table (hacky!)

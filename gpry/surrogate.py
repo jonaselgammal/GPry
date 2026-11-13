@@ -60,25 +60,6 @@ from gpry.tools import delta_logp_of_1d_nstd, generic_params_names, get_Xnumber
 from gpry.infinities_classifier import InfinitiesClassifiers
 
 
-#: Finite stand-in for ``-inf`` log-posterior values, for samplers that cannot handle
-#: infinities (UltraNest). It must be *worse* than anything the sampler can reach in the
-#: finite region, or the sampler climbs into the region masked by the infinities
-#: classifier instead of the posterior -- which is what happened while this was
-#: ``-1e-300`` (zero to ~300 digits, i.e. the LARGEST log-posterior, not the smallest;
-#: almost certainly a typo for ``-1e300``).
-#:
-#: ``-1e30`` rather than a more extreme value: it is already ~28 orders of magnitude
-#: below any realistic log-posterior, so nothing is gained by going lower, while the
-#: remaining headroom matters. ``-1e300`` would square to ``inf`` (so any variance over
-#: a chain column containing it is ``inf``) and would cast to ``-inf`` in float32 --
-#: silently restoring the very value the substitute exists to avoid. ``-1e30`` squares
-#: to 1e60 and survives float32 (max ~3.4e38).
-#:
-#: Only clipping from above is applied to the regressor output (see :class:`Clipper`),
-#: so this cannot be raised by it: masked points score the same however batched.
-MINUS_INF_SUBSTITUTE = -1e30
-
-
 class SurrogateModel:
     r"""
     Object holding the Gaussian Process Regressor, and, if applicable, the
@@ -124,6 +105,10 @@ class SurrogateModel:
         problems arise.
     """
 
+    # Finite -inf value for samplers that cannot handle -np.inf as null posterior value.
+    # -1e30 rather than a more extreme value, so that it survived float32 (max ~3.4e38).
+    minus_inf_value_substitute = -1e30
+
     def __init__(
         self,
         bounds=None,
@@ -142,12 +127,15 @@ class SurrogateModel:
         self.preprocessing_y = (
             DummyPreprocessor if preprocessing_y is None else preprocessing_y
         )
-        # Local handle used to transform scales during initialisation: an unfitted
+        # Local handles used to transform scales during initialisation: an unfitted
         # preprocessor has no defined transformation yet, so fall back to the no-op one.
-        # NB: this rebinds the argument, which must not be used raw below.
-        preprocessing_y = (
+        init_preprocessing_X = (
+            self.preprocessing_X if self.preprocessing_X.fitted else DummyPreprocessor
+        )
+        init_preprocessing_y = (
             self.preprocessing_y if self.preprocessing_y.fitted else DummyPreprocessor
         )
+        bounds_ = init_preprocessing_X.transform_bounds(self._bounds)
         self.n_eval = 0
         self.verbose = verbose if verbose is not None else 3
         self._fitted = False
@@ -188,8 +176,7 @@ class SurrogateModel:
                     "'infinities_classifier': must be dict of '{classifier: {options}'."
                 )
             # The infinities classifier lives in the transformed space:
-            bounds_ = self.preprocessing_X.transform_bounds(self._bounds)
-            nstd_calculator = lambda nsigma: preprocessing_y.transform_scale(
+            nstd_calculator = lambda nsigma: init_preprocessing_y.transform_scale(
                 delta_logp_of_1d_nstd(nsigma, self.d)
             )
             try:
@@ -202,10 +189,12 @@ class SurrogateModel:
             except Exception as excpt:
                 raise TypeError(f"Error initialising infinities classifier: {excpt}")
         # Initialising the GP Regressor
+        kwargs_regressor = deepcopy(regressor)
+        kwargs_regressor["random_state"] = random_state
         # NB: hyperparameter priors and noise level are understood in transformed space
         # Make sure the length scale prior is unfolded per-dimensionality, since the GPR
-        # will read the dimensionality from there.
-        length_scale_prior = np.atleast_2d(regressor["length_scale_prior"])
+        # will read the dimensionality from there. Work wit a copy.
+        length_scale_prior = np.atleast_2d(regressor["length_scale_prior"]).copy()
         if len(length_scale_prior) == 1:
             length_scale_prior = np.array(list([length_scale_prior[0]]) * self.d)
         elif len(length_scale_prior) != self.d:
@@ -213,26 +202,13 @@ class SurrogateModel:
                 "length_scale_prior needs to define 1d bounds (common for all dimensions)"
                 "or as many bounds as dimensions"
             )
+        kwargs_regressor["length_scale_prior"] = length_scale_prior
+        kwargs_regressor["prior_bounds"] = bounds_
         # This is the default "noise_level" of the regressor, understood as the common
         # sigma_y of the training samples.
         self._noise_level = float(regressor["noise_level"])
-        # For now, the y preprocessor is not fitted
-        self._noise_level_ = preprocessing_y.transform_scale(self._noise_level)
-        # NB: work on a copy. ``regressor`` belongs to the caller, and reusing the same
-        # dict for a second surrogate of different dimensionality must keep working.
-        kwargs_regressor = deepcopy(regressor)
-        # Copied again, so that a caller-supplied array is not aliased into the GPR.
-        kwargs_regressor["length_scale_prior"] = np.array(length_scale_prior)
+        self._noise_level_ = init_preprocessing_y.transform_scale(self._noise_level)
         kwargs_regressor["noise_level"] = self._noise_level_
-        kwargs_regressor["random_state"] = random_state
-        # The regressor (and hence its kernel) lives in the transformed space, so the
-        # parameter-space bounds must be transformed too. Only used if a length
-        # correlation kernel is requested with ``length_scale_prior="dynamic"``, but
-        # passed always: it is cheap, and its absence is what silently disabled that
-        # option when the bounds moved out of the GPR.
-        kwargs_regressor["prior_bounds"] = self.preprocessing_X.transform_bounds(
-            self._bounds
-        )
         self.gpr = GaussianProcessRegressor(**kwargs_regressor)
         # Regressor post-processing: clip too high values
         self.clipper = Clipper(clip_factor)
@@ -468,48 +444,6 @@ class SurrogateModel:
         return self.y_max - self.preprocessing_y.inverse_transform_scale(
             self.infinities_classifier.get_highest_current_threshold()
         )
-
-    @property
-    def minus_inf_value_substitute(self):
-        """
-        A finite stand-in for ``-inf``, for samplers that cannot handle infinite
-        log-posterior values (e.g. UltraNest). See :data:`MINUS_INF_SUBSTITUTE`.
-
-        Assign it to :attr:`minus_inf_value` around the sampler call, and restore the
-        previous value afterwards.
-
-        Almost always just :data:`MINUS_INF_SUBSTITUTE`. The second term is a guard for
-        a target whose log-posterior reaches down to -1e30 on its own, where the
-        constant would no longer be below the surface: drop below the training minimum
-        by whichever is larger, the training *range* or the scale of the *minimum*
-        itself. Both are needed, and they fail in opposite regimes:
-
-        - an absolute margin is useless, since it vanishes into float64 spacing once
-          ``|y_min|`` exceeds ~1e14 (at 1e30 the spacing is ~1.4e14, so
-          ``y_min - 1000 == y_min`` exactly, and the guard would return ``y_min``);
-        - ``abs(y_min)`` alone (i.e. ``2 * y_min``) is not enough when ``|y_min|`` is
-          small but the range is huge -- an unnormalised likelihood with large positive
-          log-posteriors -- where the GP mean can reach -1e30 while this term cannot;
-        - ``100 * range`` alone degenerates in the mirror case, ``|y_min|`` huge with a
-          narrow range.
-        """
-        y = self._y[self._i_regress]
-        y = y[np.isfinite(y)]
-        if y.size == 0:
-            return MINUS_INF_SUBSTITUTE
-        y_min, y_max = float(np.min(y)), float(np.max(y))
-        value = min(
-            MINUS_INF_SUBSTITUTE,
-            y_min - max(100.0 * (y_max - y_min), abs(y_min)),
-        )
-        if value != MINUS_INF_SUBSTITUTE and self.verbose > 1:
-            warnings.warn(
-                f"Training log-posterior values reach {y_min:.3e}, which is at or "
-                f"below the default stand-in for -inf ({MINUS_INF_SUBSTITUTE:.0e}); "
-                f"using {value:.3e} instead. Magnitudes this large usually mean an "
-                "unnormalised or misbehaving likelihood -- worth checking the target."
-            )
-        return value
 
     def is_finite_y(self, y, validate=True):
         """
@@ -988,11 +922,6 @@ class SurrogateModel:
             )
         # If all values are infinite no need to run the prediction through the GP
         if np.all(~finite):
-            # NB: clip here too, exactly as in the general path below. Otherwise an
-            # entirely-masked batch and the same points sharing a batch with finite
-            # ones could come back with different values (they did, when
-            # `minus_inf_value` was set above the clipping ceiling).
-            return_dict["mean"] = self._clip_mean(return_dict["mean"])
             if len(return_dict) == 1:
                 return return_dict["mean"]
             return list(return_dict.values())
@@ -1020,25 +949,12 @@ class SurrogateModel:
                 )
             )
         # Upper clipping to avoid overshoots
-        return_dict["mean"] = self._clip_mean(return_dict["mean"])
+        if not self.clipper.trivial and len(self._i_regress) > 0:
+            y = self._y[self._i_regress]
+            return_dict["mean"] = self.clipper(return_dict["mean"], y.min(), y.max())
         if len(return_dict) == 1:
             return return_dict["mean"]
         return list(return_dict.values())
-
-    def _clip_mean(self, mean):
-        """
-        Applies the upper clipping of the regressor output (see :class:`Clipper`).
-
-        Applied on *every* return path of :meth:`predict`, so that the value returned
-        for a point does not depend on which other points shared its batch.
-        """
-        # The 'trivial' check avoids wasting computation in finding the y extremes
-        if self.clipper.trivial:
-            return mean
-        y = self._y[self._i_regress]
-        if y.size == 0:  # unfitted model: nothing to clip against
-            return mean
-        return self.clipper(mean, y.min(), y.max())
 
     @staticmethod
     def _regressor_output_to_dict(

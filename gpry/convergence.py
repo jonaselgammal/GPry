@@ -43,7 +43,7 @@ exhaustion).
 
 import sys
 import inspect
-from copy import deepcopy
+from copy import copy, deepcopy
 from warnings import warn
 from abc import ABCMeta, abstractmethod
 
@@ -635,8 +635,7 @@ class TrainAlignment(GaussianKL):
     """
 
     def __init__(self, prior_bounds, params):
-        # Copy: defaults are written into it below, and it belongs to the caller.
-        params = dict(params or {})
+        params = copy(params) or {}
         self.frac_training = params.get("frac_training", 1)
         if params.get("limit") is None:
             params["limit"] = 0.5
